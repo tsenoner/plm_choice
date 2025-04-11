@@ -1,0 +1,27 @@
+batch_size: 1024
+data_dir: data/swissprot/training
+early_stopping_patience: 5
+embedding_size: !!python/object/apply:numpy._core.multiarray.scalar
+- !!python/object/apply:numpy.dtype
+  args:
+  - i8
+  - false
+  - true
+  state: !!python/tuple
+  - 3
+  - <
+  - null
+  - null
+  - null
+  - -1
+  - -1
+  - 0
+- !!binary |
+  AAQAAAAAAAA=
+hdf_file: data/swissprot/embeddings/prott5.h5
+hidden_size: 64
+learning_rate: 0.001
+max_epochs: 100
+output_dir: models/runs
+param_name: lddt
+seed: 42
