@@ -14,3 +14,9 @@ wheels/
 
 # Data directory
 data/
+
+# Output directory
+out/
+
+# Models directory
+models/
