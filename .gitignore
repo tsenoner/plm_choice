@@ -13,10 +13,10 @@ wheels/
 .DS_Store
 
 # Data directory
-data/
+/data/
 
 # Output directory
-out/
+/out/
 
 # Models directory
-models/
+/models/
