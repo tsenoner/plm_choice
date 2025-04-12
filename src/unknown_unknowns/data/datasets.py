@@ -17,18 +17,16 @@ class H5PyDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.file is None:
+            # Ensure file is opened in worker process if using num_workers > 0
             self.file = h5py.File(self.file_path, "r", swmr=True)
 
         row = self.data.iloc[idx]
-        query_emb = torch.tensor(
-            self.file[row["query"]][:].flatten(), dtype=torch.float32
-        )
-        target_emb = torch.tensor(
-            self.file[row["target"]][:].flatten(), dtype=torch.float32
-        )
-        param_value = torch.tensor(row[self.param_name], dtype=torch.float32)
+        # Return numpy arrays again - this was better for aten::copy_
+        query_emb_np = self.file[row["query"]][:].flatten().astype(np.float32)
+        target_emb_np = self.file[row["target"]][:].flatten().astype(np.float32)
+        param_value_np = np.float32(row[self.param_name])
 
-        return query_emb, target_emb, param_value
+        return query_emb_np, target_emb_np, param_value_np
 
     def close(self):
         if self.file is not None:
@@ -100,7 +98,6 @@ def create_single_loader(
     data = _load_and_filter_data(csv_file, hdf_file, param_name)
     dataset = H5PyDataset(data, hdf_file, param_name)
 
-    # Determine if persistent_workers is feasible
     persistent_workers = num_workers > 0
     if persistent_workers:
         print(f"Using {num_workers} persistent workers for DataLoader.")
@@ -113,6 +110,8 @@ def create_single_loader(
         shuffle=shuffle,
         num_workers=num_workers,
         persistent_workers=persistent_workers,
-        pin_memory=torch.cuda.is_available(),  # Pin memory if CUDA is available
+        pin_memory=True,  # Explicitly set pin_memory=True
+        # pin_memory_device="mps" # Usually not needed, PyTorch handles default device
     )
+    print(f"DataLoader initialized with pin_memory=True.")  # Add log
     return loader

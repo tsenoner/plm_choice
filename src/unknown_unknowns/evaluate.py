@@ -1,28 +1,32 @@
 import argparse
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-import yaml  # To potentially load hparams.yaml
+import yaml
+import pytorch_lightning as pl
 
 # Project specific imports
-from configs.config import ProjectConfig, load_config
 from data.datasets import create_single_loader
 from evaluation.metrics import calculate_regression_metrics
-from models.predictor import ModelPredictor
+from models.predictor import FNNPredictor, LinearRegressionPredictor
 from visualization.plot import plot_true_vs_predicted
-from utils.helpers import get_device  # If needed for device placement
+from utils.helpers import get_device
 
 
-def load_model_from_checkpoint(checkpoint_path: Path) -> ModelPredictor:
-    """Load the ModelPredictor model from a checkpoint file."""
+def load_model_from_checkpoint(
+    checkpoint_path: Path, model_class: type
+) -> pl.LightningModule:
+    """Load the LightningModule model from a checkpoint file using the correct class."""
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-    print(f"Loading model from checkpoint: {checkpoint_path}")
-    # load_from_checkpoint handles moving the model to the correct device (usually CPU by default)
-    model = ModelPredictor.load_from_checkpoint(str(checkpoint_path))
+    print(
+        f"Loading model from checkpoint: {checkpoint_path} using {model_class.__name__}"
+    )
+    # Load using the specific class determined from hparams
+    model = model_class.load_from_checkpoint(str(checkpoint_path))
     model.eval()  # Set to evaluation mode
     return model
 
@@ -34,7 +38,6 @@ def find_best_checkpoint(run_dir: Path) -> Optional[Path]:
         print(f"Error: Checkpoint directory not found: {checkpoint_dir}")
         return None
 
-    # Look for any .ckpt file (expecting only one due to save_top_k=1)
     ckpt_files = list(checkpoint_dir.glob("*.ckpt"))
 
     if not ckpt_files:
@@ -51,98 +54,79 @@ def find_best_checkpoint(run_dir: Path) -> Optional[Path]:
     return ckpt_files[0]
 
 
-def get_config_and_paths_from_run(
-    run_dir: Path,
-) -> Tuple[ProjectConfig, Path]:
-    """Try to load config from hparams.yaml in the run directory's tensorboard folder."""
-    # run_dir is now passed directly
+def load_hparams(run_dir: Path) -> Dict[str, Any]:
+    """Load hyperparameters from hparams.yaml in the run directory's tensorboard folder."""
     hparams_file = run_dir / "tensorboard" / "hparams.yaml"
 
     if not hparams_file.is_file():
-        print(
-            f"Warning: hparams.yaml not found at {hparams_file}. Using default config."
+        raise FileNotFoundError(
+            f"hparams.yaml not found at {hparams_file}. Cannot proceed."
         )
-        return load_config(), run_dir
 
     print(f"Loading hyperparameters from: {hparams_file}")
     with open(hparams_file, "r") as f:
         hparams = yaml.safe_load(f)
 
-    # Create a default config and override with hparams
-    # Note: This is basic, might need more robust handling for type conversions (Path)
-    cfg = load_config()
+    # Basic validation for required keys
+    required_keys = [
+        "model_type",
+        "param_name",
+        "embedding_file",
+        "csv_dir",
+        "batch_size",
+    ]
+    missing_keys = [key for key in required_keys if key not in hparams]
+    if missing_keys:
+        raise KeyError(f"Missing required keys in hparams.yaml: {missing_keys}")
+
+    # Convert path strings to Path objects where necessary
     try:
-        # Paths need careful handling - hparams saves them as strings
-        cfg.paths.data_dir = Path(hparams.get("data_dir", cfg.paths.data_dir))
-        cfg.paths.embeddings_file = Path(
-            hparams.get("embeddings_file", cfg.paths.embeddings_file)
-        )
-        cfg.paths.csv_subdir = hparams.get("csv_subdir", cfg.paths.csv_subdir)
-        # Output dir isn't strictly needed for eval config but good for consistency
-        cfg.paths.output_dir = Path(hparams.get("output_dir", cfg.paths.output_dir))
-
-        # Training params
-        cfg.training.param_name = hparams.get("param_name", cfg.training.param_name)
-        cfg.training.batch_size = int(
-            hparams.get("batch_size", cfg.training.batch_size)
-        )
-        # Other training params usually not needed for eval, but load if desired
-        cfg.training.hidden_size = int(
-            hparams.get("hidden_size", cfg.training.hidden_size)
-        )
-
+        hparams["embedding_file"] = Path(hparams["embedding_file"])
+        hparams["csv_dir"] = Path(hparams["csv_dir"])
+        # Convert batch_size to int if it was saved as string somehow
+        hparams["batch_size"] = int(hparams["batch_size"])
     except Exception as e:
-        print(
-            f"Warning: Error parsing hparams.yaml ({e}). Using default config values."
-        )
-        cfg = load_config()  # Fallback to default
+        raise ValueError(f"Error converting hparams values: {e}") from e
 
-    # This assumes data_dir is relative to project root in the stored hparams
-    # Attempt to reconstruct project_root based on where data_dir is assumed to be relative to.
-    # This might be fragile if the hparam path format changes.
-    try:
-        project_root = (
-            (run_dir.parent.parent.parent / hparams.get("data_dir", "."))
-            .resolve()
-            .parent.parent
-        )
-    except Exception:
-        print(
-            "Warning: Could not reliably determine project root from hparams. Using current directory."
-        )
-        project_root = Path.cwd()
-
-    return cfg, project_root
+    print("Hyperparameters loaded successfully.")
+    return hparams
 
 
 def prepare_evaluation_data(
-    cfg: ProjectConfig, project_root: Path, test_csv_override: Optional[Path] = None
+    hparams: Dict[str, Any],  # Use loaded hparams
+    test_csv_override: Optional[Path] = None,
 ) -> Tuple[DataLoader, Path]:
-    """Prepare the DataLoader for the test set and return the path used."""
-    data_dir = (project_root / cfg.paths.data_dir).resolve()
-    embeddings_file = (data_dir / cfg.paths.embeddings_file).resolve()
+    """Prepare the DataLoader for the test set using parameters from hparams."""
+
+    embeddings_file = hparams["embedding_file"]
+    param_name = hparams["param_name"]
+    batch_size = hparams["batch_size"]
+    # The original CSV dir used for training
+    original_csv_dir = hparams["csv_dir"]
 
     if test_csv_override:
         test_csv_path = test_csv_override.resolve()
         print(f"Using overridden test CSV: {test_csv_path}")
     else:
-        csv_dir = (data_dir / cfg.paths.csv_subdir).resolve()
-        test_csv_path = (csv_dir / "test.csv").resolve()
-        print(f"Using test CSV from config: {test_csv_path}")
+        # Default to using the test.csv from the original training csv_dir
+        test_csv_path = (original_csv_dir / "test.csv").resolve()
+        print(
+            f"Using default test CSV from original training directory: {test_csv_path}"
+        )
 
     if not embeddings_file.is_file():
-        raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
+        raise FileNotFoundError(
+            f"Embeddings file not found (from hparams): {embeddings_file}"
+        )
     if not test_csv_path.is_file():
         raise FileNotFoundError(f"Test CSV file not found: {test_csv_path}")
 
-    # Use the new single loader function
     test_loader = create_single_loader(
         csv_file=str(test_csv_path),
         hdf_file=str(embeddings_file),
-        param_name=cfg.training.param_name,
-        batch_size=cfg.training.batch_size,
-        shuffle=False,  # No need to shuffle test data
-        # num_workers can be added here if desired, defaults to 4
+        param_name=param_name,
+        batch_size=batch_size,
+        shuffle=False,
     )
 
     print(f"Prepared test data loader with {len(test_loader)} batches.")
@@ -150,18 +134,25 @@ def prepare_evaluation_data(
 
 
 def run_inference(
-    model: ModelPredictor, test_loader: DataLoader
+    model: pl.LightningModule, test_loader: DataLoader
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Run inference on the test set."""
     print("Running inference on test data...")
-    device = get_device()  # Get the appropriate device
+    device = get_device()
     model.to(device)
 
     predictions_list = []
     targets_list = []
     with torch.no_grad():
         for batch in test_loader:
+            # Assuming batch structure: (query_emb, target_emb, target_val)
+            # Adjust if your dataset yields different batch structures
+            if len(batch) != 3:
+                raise ValueError(
+                    f"Unexpected batch structure: expected 3 elements, got {len(batch)}"
+                )
             query_emb, target_emb, target_val = batch
+
             query_emb = query_emb.to(device)
             target_emb = target_emb.to(device)
 
@@ -187,27 +178,22 @@ def generate_evaluation_results(
     eval_dir = run_dir / "evaluation_results"
     eval_dir.mkdir(exist_ok=True)
 
-    # Calculate metrics
     metrics = calculate_regression_metrics(targets, predictions)
 
-    # Create filenames incorporating test set name
     base_filename = f"test_{test_set_name}_{checkpoint_name}"
     results_png = eval_dir / f"{base_filename}_results.png"
     metrics_file = eval_dir / f"{base_filename}_metrics.txt"
 
-    # Save plot - Add test set name to title
     plot_title = f"Evaluation on '{test_set_name}' ({checkpoint_name})"
     plot_true_vs_predicted(
         targets, predictions, results_png, metrics=metrics, title=plot_title
     )
     print(f"Saved evaluation plot to: {results_png}")
 
-    # Print metrics
     print(f"\nMetrics for Test Set '{test_set_name}':")
     for metric, value in metrics.items():
         print(f"{metric}: {value:.4f}")
 
-    # Save metrics to file - Add test set name to header
     with open(metrics_file, "w") as f:
         f.write(f"# Evaluation metrics for checkpoint: {checkpoint_name}\n")
         f.write(f"# Test Set: {test_set_name}\n")
@@ -222,59 +208,101 @@ def main(args):
     if not run_dir.is_dir():
         raise NotADirectoryError(f"Specified run directory not found: {run_dir}")
 
-    # Find the best checkpoint within the run directory
+    try:
+        hparams = load_hparams(run_dir)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        print(f"Error loading hyperparameters: {e}")
+        return
+
     best_checkpoint_path = find_best_checkpoint(run_dir)
     if not best_checkpoint_path:
         print("Evaluation aborted: Could not find a suitable checkpoint file.")
         return
 
-    model = load_model_from_checkpoint(best_checkpoint_path)
-    cfg, project_root = get_config_and_paths_from_run(run_dir)
-
-    # Use param_name directly from the loaded config
-    if "param_name" not in cfg.training.__dict__:
+    # Determine which model class to load based on hparams
+    model_type = hparams.get("model_type")
+    if model_type == "fnn":
+        model_class = FNNPredictor
+    elif model_type == "linear":
+        model_class = LinearRegressionPredictor
+    elif model_type and "FNNPredictor" in model_type:  # Handle old hparams naming
         print(
-            "Warning: 'param_name' not found in loaded hparams. Using default from config."
+            "Warning: Found old model type 'FNNPredictor' in hparams, using FNNPredictor class."
         )
-        param_name = load_config().training.param_name  # Fallback to default
+        model_class = FNNPredictor
+    elif (
+        model_type and "LinearRegressionPredictor" in model_type
+    ):  # Handle old hparams naming
+        print(
+            "Warning: Found old model type 'LinearRegressionPredictor' in hparams, using LinearRegressionPredictor class."
+        )
+        model_class = LinearRegressionPredictor
     else:
-        param_name = cfg.training.param_name
-        print(f"Using param_name from loaded config: {param_name}")
-    # Update the config object used for data loading (in case it wasn't loaded from hparams)
-    cfg.training.param_name = param_name
+        # Attempt to guess based on predictor name if model_type is missing/unknown (fallback)
+        if "fnn_runs" in str(run_dir):
+            print(
+                f"Warning: Unknown or missing model_type '{model_type}' in hparams. Guessing FNNPredictor based on run directory name."
+            )
+            model_class = FNNPredictor
+        elif "linear_runs" in str(run_dir):
+            print(
+                f"Warning: Unknown or missing model_type '{model_type}' in hparams. Guessing LinearRegressionPredictor based on run directory name."
+            )
+            model_class = LinearRegressionPredictor
+        else:
+            print(
+                f"Error: Cannot determine model class from hparams (model_type='{model_type}') or run directory path."
+            )
+            return
 
-    # Prepare data and get the actual test_csv path used
-    test_loader, test_csv_path = prepare_evaluation_data(
-        cfg, project_root, args.test_csv
-    )
-    # Use the stem of the test csv file as the identifier
+    try:
+        model = load_model_from_checkpoint(best_checkpoint_path, model_class)
+    except Exception as e:
+        print(f"Error loading model from checkpoint {best_checkpoint_path}: {e}")
+        return
+
+    try:
+        # Pass loaded hparams directly to prepare data
+        test_loader, test_csv_path = prepare_evaluation_data(hparams, args.test_csv)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        print(f"Error preparing evaluation data: {e}")
+        return
+
     test_set_name = test_csv_path.stem
 
-    predictions, targets = run_inference(model, test_loader)
-    generate_evaluation_results(
-        predictions, targets, run_dir, best_checkpoint_path.stem, test_set_name
-    )
+    try:
+        predictions, targets = run_inference(model, test_loader)
+    except Exception as e:
+        print(f"Error during model inference: {e}")
+        return
+
+    try:
+        generate_evaluation_results(
+            predictions, targets, run_dir, best_checkpoint_path.stem, test_set_name
+        )
+    except Exception as e:
+        print(f"Error generating evaluation results: {e}")
+        return
 
     print(f"\nEvaluation complete. Results saved in: {run_dir / 'evaluation_results'}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained model checkpoint from a run directory."
+        description="Evaluate a trained model checkpoint from a run directory, using parameters from hparams.yaml."
     )
     parser.add_argument(
         "--run_dir",
         type=Path,
         required=True,
-        help="Path to the training run directory (e.g., models/runs/TIMESTAMP).",
+        help="Path to the training run directory containing checkpoints and tensorboard/hparams.yaml.",
     )
     parser.add_argument(
         "--test_csv",
         type=Path,
         default=None,
-        help="Optional: Path to a specific test CSV file to use, overriding the one from training config.",
+        help="Optional: Path to a specific test CSV file to use. If not provided, uses test.csv from the original training csv_dir specified in hparams.yaml.",
     )
-    # Add other arguments here if needed to override config (e.g., batch_size)
 
     args = parser.parse_args()
     main(args)

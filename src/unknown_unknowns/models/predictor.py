@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 
-class ModelPredictor(pl.LightningModule):
+
+class FNNPredictor(pl.LightningModule):
     def __init__(
         self,
         embedding_size: int,
@@ -37,12 +38,51 @@ class ModelPredictor(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss, preds, targets = self._common_step(batch, batch_idx)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, preds, targets = self._common_step(batch, batch_idx)
-        self.log("val_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        query_emb, target_emb, _ = batch
+        return self(query_emb, target_emb)
+
+    def _common_step(self, batch, batch_idx):
+        query_emb, target_emb, param_value = batch
+        predictions = self(query_emb, target_emb)
+        loss = self.criterion(predictions, param_value)
+        return loss, predictions, param_value
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+
+
+class LinearRegressionPredictor(pl.LightningModule):
+    def __init__(self, embedding_size: int, learning_rate: float = 0.001):
+        super().__init__()
+        self.save_hyperparameters()
+        self.learning_rate = learning_rate
+
+        # Simple linear layer operating on the concatenated embeddings
+        self.linear = nn.Linear(embedding_size * 2, 1)
+
+        self.criterion = nn.MSELoss()
+
+    def forward(self, emb1, emb2):
+        combined = torch.cat([emb1, emb2], dim=1)
+        return self.linear(combined).squeeze()
+
+    def training_step(self, batch, batch_idx):
+        loss, preds, targets = self._common_step(batch, batch_idx)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, preds, targets = self._common_step(batch, batch_idx)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
