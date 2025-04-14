@@ -166,6 +166,37 @@ def run_inference(
     return predictions, targets
 
 
+# --- NEW FUNCTION for Euclidean Baseline ---
+def run_euclidean_distance(test_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate Euclidean distance for batches in the test loader."""
+    print("Calculating Euclidean distances for baseline...")
+    all_distances = []
+    all_targets = []
+    with torch.no_grad():  # Still good practice even if not using model
+        for batch in test_loader:
+            # Assuming batch structure: (query_emb, target_emb, target_val)
+            # DataLoader currently returns numpy arrays
+            if len(batch) != 3:
+                raise ValueError(
+                    f"Unexpected batch structure: expected 3 elements, got {len(batch)}"
+                )
+            query_emb_np, target_emb_np, target_val_np = batch
+
+            # Calculate Euclidean distance using numpy
+            distances = np.linalg.norm(query_emb_np - target_emb_np, axis=1)
+
+            all_distances.append(distances)
+            all_targets.append(target_val_np)
+
+    predictions = np.concatenate(all_distances)
+    targets = np.concatenate(all_targets)
+    print("Euclidean distance calculation complete.")
+    return predictions, targets
+
+
+# -----------------------------------------
+
+
 def generate_evaluation_results(
     predictions: np.ndarray,
     targets: np.ndarray,
@@ -214,77 +245,86 @@ def main(args):
         print(f"Error loading hyperparameters: {e}")
         return
 
-    best_checkpoint_path = find_best_checkpoint(run_dir)
-    if not best_checkpoint_path:
-        print("Evaluation aborted: Could not find a suitable checkpoint file.")
-        return
-
-    # Determine which model class to load based on hparams
     model_type = hparams.get("model_type")
-    if model_type == "fnn":
-        model_class = FNNPredictor
-    elif model_type == "linear":
-        model_class = LinearRegressionPredictor
-    elif model_type and "FNNPredictor" in model_type:  # Handle old hparams naming
-        print(
-            "Warning: Found old model type 'FNNPredictor' in hparams, using FNNPredictor class."
-        )
-        model_class = FNNPredictor
-    elif (
-        model_type and "LinearRegressionPredictor" in model_type
-    ):  # Handle old hparams naming
-        print(
-            "Warning: Found old model type 'LinearRegressionPredictor' in hparams, using LinearRegressionPredictor class."
-        )
-        model_class = LinearRegressionPredictor
-    else:
-        # Attempt to guess based on predictor name if model_type is missing/unknown (fallback)
-        if "fnn_runs" in str(run_dir):
-            print(
-                f"Warning: Unknown or missing model_type '{model_type}' in hparams. Guessing FNNPredictor based on run directory name."
-            )
-            model_class = FNNPredictor
-        elif "linear_runs" in str(run_dir):
-            print(
-                f"Warning: Unknown or missing model_type '{model_type}' in hparams. Guessing LinearRegressionPredictor based on run directory name."
-            )
-            model_class = LinearRegressionPredictor
-        else:
-            print(
-                f"Error: Cannot determine model class from hparams (model_type='{model_type}') or run directory path."
-            )
-            return
+    predictions = None
+    targets = None
+    eval_identifier = ""
 
     try:
-        model = load_model_from_checkpoint(best_checkpoint_path, model_class)
-    except Exception as e:
-        print(f"Error loading model from checkpoint {best_checkpoint_path}: {e}")
-        return
-
-    try:
-        # Pass loaded hparams directly to prepare data
+        # Load test data using hparams
         test_loader, test_csv_path = prepare_evaluation_data(hparams, args.test_csv)
+        test_set_name = test_csv_path.stem
     except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"Error preparing evaluation data: {e}")
         return
 
-    test_set_name = test_csv_path.stem
+    # --- Handle Euclidean Baseline ---
+    if model_type == "euclidean":
+        print("\nEvaluating Euclidean Distance Baseline...")
+        try:
+            predictions, targets = run_euclidean_distance(test_loader)
+            eval_identifier = (
+                "euclidean_baseline"  # Use as placeholder for checkpoint name
+            )
+        except Exception as e:
+            print(f"Error during Euclidean distance calculation: {e}")
+            return
 
-    try:
-        predictions, targets = run_inference(model, test_loader)
-    except Exception as e:
-        print(f"Error during model inference: {e}")
-        return
+    # --- Handle Trained Models (FNN, Linear) ---
+    else:
+        print(f"\nEvaluating Trained Model (type: {model_type})...")
+        best_checkpoint_path = find_best_checkpoint(run_dir)
+        if not best_checkpoint_path:
+            print("Evaluation aborted: Could not find a suitable checkpoint file.")
+            return
+        eval_identifier = best_checkpoint_path.stem  # Use checkpoint stem
 
-    try:
-        generate_evaluation_results(
-            predictions, targets, run_dir, best_checkpoint_path.stem, test_set_name
-        )
-    except Exception as e:
-        print(f"Error generating evaluation results: {e}")
-        return
+        # Determine model class
+        if model_type == "fnn":
+            model_class = FNNPredictor
+        elif model_type == "linear":
+            model_class = LinearRegressionPredictor
+        elif "FNNPredictor" in str(model_type):  # Handle old naming
+            print(
+                "Warning: Found old model type 'FNNPredictor' in hparams, using FNNPredictor class."
+            )
+            model_class = FNNPredictor
+        elif "LinearRegressionPredictor" in str(model_type):  # Handle old naming
+            print(
+                "Warning: Found old model type 'LinearRegressionPredictor' in hparams, using LinearRegressionPredictor class."
+            )
+            model_class = LinearRegressionPredictor
+        else:
+            print(
+                f"Error: Unsupported or unknown model_type '{model_type}' for loading checkpoint."
+            )
+            return
 
-    print(f"\nEvaluation complete. Results saved in: {run_dir / 'evaluation_results'}")
+        # Load model and run inference
+        try:
+            model = load_model_from_checkpoint(best_checkpoint_path, model_class)
+        except Exception as e:
+            print(f"Error loading model from checkpoint {best_checkpoint_path}: {e}")
+            return
+        try:
+            predictions, targets = run_inference(model, test_loader)
+        except Exception as e:
+            print(f"Error during model inference: {e}")
+            return
+
+    # --- Generate Results (Common for both paths if successful) ---
+    if predictions is not None and targets is not None:
+        try:
+            generate_evaluation_results(
+                predictions, targets, run_dir, eval_identifier, test_set_name
+            )
+            print(
+                f"\nEvaluation complete. Results saved in: {run_dir / 'evaluation_results'}"
+            )
+        except Exception as e:
+            print(f"Error generating evaluation results: {e}")
+    else:
+        print("\nEvaluation could not be completed (predictions or targets missing).")
 
 
 if __name__ == "__main__":

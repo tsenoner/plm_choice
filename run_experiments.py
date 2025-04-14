@@ -1,9 +1,17 @@
 #!/usr/bin/env python
+"""
+This script runs training experiments for different models, embeddings, and parameters.
+It also optionally evaluates the results after each training run.
+
+Usage:
+python run_experiments.py --csv_dir data/processed/sprot_train --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp
+"""
+
 import argparse
 import subprocess
 from pathlib import Path
-import os  # Import os for stat
-import re  # Import re for regular expressions
+import os
+import re
 from typing import Optional
 
 
@@ -31,26 +39,32 @@ def find_latest_run_dir(base_dir: Path) -> Optional[Path]:
 
 def main(args):
     project_root = Path(__file__).parent.resolve()
-    embeddings_dir = project_root / "data" / "swissprot" / "embeddings"
+    # Use the provided embeddings directory path
+    embeddings_dir = args.embeddings_dir.resolve()
+    if not embeddings_dir.is_dir():
+        print(f"Error: Provided embeddings directory not found at {embeddings_dir}")
+        return
+
     models_base_dir = project_root / "models"
 
-    # Resolve the absolute path for the CSV directory based on the subdir argument
-    csv_dir_abs = (project_root / "data" / "swissprot" / args.csv_subdir).resolve()
+    # Use the provided CSV directory path directly and resolve it
+    csv_dir_abs = args.csv_dir.resolve()
     if not csv_dir_abs.is_dir():
-        print(f"Error: CSV directory not found at {csv_dir_abs}")
+        print(f"Error: Provided CSV directory not found at {csv_dir_abs}")
         return
 
     # --- Experiment Definitions ---
-    model_types = args.model_types  # Use arg
-    target_params = args.target_params  # Use arg
+    model_types = args.model_types
+    target_params = args.target_params
     # ---------------------------
 
-    # Find all .h5 embedding files
+    # Find all .h5 embedding files in the specified directory
     embedding_files = list(embeddings_dir.glob("*.h5"))
     if not embedding_files:
         print(f"Error: No HDF5 (.h5) embedding files found in {embeddings_dir}")
         return
 
+    print(f"Using embeddings directory: {embeddings_dir}")  # Log the used path
     print(f"Found {len(embedding_files)} embedding files:")
     for f in embedding_files:
         print(f" - {f.name}")
@@ -117,9 +131,9 @@ def main(args):
                     "--csv_dir",
                     str(csv_dir_abs),
                     "--num_workers",
-                    "14",
+                    "10",
                     "--batch_size",
-                    "2048",
+                    "4096",
                     "--learning_rate",
                     "0.0001",
                     "--max_epochs",
@@ -127,8 +141,6 @@ def main(args):
                     "--early_stopping_patience",
                     "5",
                 ]
-
-                # Add other hyperparameter overrides here if needed
 
                 print(f"Executing: {' '.join(train_command)}")
                 training_successful = False
@@ -232,23 +244,28 @@ if __name__ == "__main__":
         description="Run training experiments for different models, embeddings, and parameters, optionally evaluating after each run."
     )
     parser.add_argument(
-        "--csv_subdir",
-        type=str,
-        default="training",
-        help="Subdirectory name within data/swissprot containing train/val/test CSVs (default: training)",
-        choices=["training", "train_sub", "train_sub1"],
+        "--embeddings_dir",
+        type=Path,
+        default=Path("data/processed/sprot_embs"),  # Set the default path
+        help="Path to the directory containing HDF5 embedding files (default: data/processed/sprot_embs)",
+    )
+    parser.add_argument(
+        "--csv_dir",
+        type=Path,
+        required=True,
+        help="Full path to the directory containing train.csv, val.csv, and test.csv.",
     )
     parser.add_argument(
         "--evaluate_after_train",
-        action="store_true",  # Make it a flag
+        action="store_true",
         help="Run evaluate.py automatically after each successful training run.",
     )
     parser.add_argument(
         "--model_types",
         nargs="+",
-        default=["fnn", "linear"],
-        choices=["fnn", "linear"],
-        help="List of model types to run.",
+        default=["fnn", "linear", "euclidean"],
+        choices=["fnn", "linear", "euclidean"],
+        help="List of model types to run (fnn, linear, euclidean).",
     )
     parser.add_argument(
         "--target_params",

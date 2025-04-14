@@ -1,3 +1,11 @@
+"""
+This script preprocesses the CSV files by setting values below thresholds to NaN.
+It applies the thresholds to the specified columns and saves the processed files to the output directory.
+
+Usage:
+python preprocess_fident.py --input_dir data/raw/training --output_dir data/processed/training --files train.csv val.csv test.csv
+"""
+
 import pandas as pd
 import numpy as np
 from pathlib import Path

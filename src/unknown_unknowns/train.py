@@ -1,8 +1,16 @@
+"""
+This script trains a specified model or calculates the Euclidean baseline.
+
+Usage:
+python train.py --model_type fnn --embedding_file path/to/embeddings.h5 --csv_dir path/to/csv_dir --param_name param_name
+"""
+
 import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Type
+import yaml
 
 import pytorch_lightning as pl
 import torch
@@ -171,14 +179,6 @@ def train_model(
     # Log hyperparameters manually
     logger.log_hyperparams(hparams_log)
 
-    # --- Profiler Setup ---
-    # Remove profiler setup
-    # pytorch_profiler = pl.profilers.PyTorchProfiler(
-    #     dirpath=paths.run_dir,
-    #     filename="pytorch_profile",
-    #     export_to_chrome=True # Generate chrome://tracing file
-    # )
-
     # --- Trainer Setup ---
     logging_steps = max(1, len(train_loader) // 4)
     trainer = pl.Trainer(
@@ -188,7 +188,6 @@ def train_model(
         enable_checkpointing=True,
         enable_progress_bar=True,
         enable_model_summary=True,
-        # profiler=pytorch_profiler, # Remove profiler argument
         **trainer_kwargs,
     )
 
@@ -203,7 +202,7 @@ def train_model(
 
 
 def main(args):
-    """Main workflow orchestrator for training."""
+    """Main workflow orchestrator for training or Euclidean baseline setup."""
     setup_environment(args.seed)
 
     project_root = Path(__file__).parent.parent.parent
@@ -216,80 +215,119 @@ def main(args):
         project_root=project_root,
     )
 
-    embedding_size, train_loader, val_loader = prepare_data(
-        param_name=args.param_name,
-        batch_size=args.batch_size,
-        embeddings_file=paths.embeddings_file,
-        train_csv=paths.train_csv,
-        val_csv=paths.val_csv,
-        num_workers=args.num_workers,
-    )
+    # --- Euclidean Baseline Setup Only ---
+    if args.model_type == "euclidean":
+        print("Setting up run directory for Euclidean Distance Baseline...")
 
-    # Prepare model arguments
-    model_kwargs = {
-        "embedding_size": embedding_size,
-        "learning_rate": args.learning_rate,
-    }
-    if args.model_type == "fnn":
-        model_class = FNNPredictor
-        model_kwargs["hidden_size"] = args.hidden_size
-    elif args.model_type == "linear":
-        model_class = LinearRegressionPredictor
-        # No extra args for linear model needed in model_kwargs
+        # Need embedding size for hparams
+        try:
+            embedding_size = get_embedding_size(str(paths.embeddings_file))
+        except Exception as e:
+            print(f"Error getting embedding size for hparams: {e}")
+            embedding_size = -1  # Indicate error or unknown
+
+        # Save hparams for evaluation script consistency
+        hparams_to_log = {
+            "model_type": args.model_type,
+            "param_name": args.param_name,
+            "embedding_file": str(paths.embeddings_file),
+            "csv_dir": str(paths.csv_dir),
+            "embedding_size": embedding_size,
+            "batch_size": args.batch_size,  # Log batch size potentially used by eval
+            "seed": args.seed,
+        }
+        hparams_path = paths.run_dir / "tensorboard" / "hparams.yaml"
+        try:
+            hparams_path.parent.mkdir(
+                parents=True, exist_ok=True
+            )  # Ensure tensorboard dir exists
+            with open(hparams_path, "w") as f:
+                yaml.dump(hparams_to_log, f)
+            print(f"Saved hyperparameters to {hparams_path}")
+        except Exception as e:
+            print(f"Error saving hyperparameters: {e}")
+
+        print("\nEuclidean baseline setup complete.")
+        print(f"Run directory created: {paths.run_dir}")
+        # Print the run dir path for the runner script
+        print(str(paths.run_dir.resolve()))
+
+    # --- Standard Model Training ---
     else:
-        raise ValueError(f"Unknown model_type: {args.model_type}")
+        embedding_size, train_loader, val_loader = prepare_data(
+            param_name=args.param_name,
+            batch_size=args.batch_size,
+            embeddings_file=paths.embeddings_file,
+            train_csv=paths.train_csv,
+            val_csv=paths.val_csv,
+            num_workers=args.num_workers,
+        )
 
-    # Prepare trainer arguments
-    trainer_kwargs = {
-        "max_epochs": args.max_epochs,
-        "accelerator": "auto",
-        "devices": "auto",
-    }
+        # Prepare model arguments
+        model_kwargs = {
+            "embedding_size": embedding_size,
+            "learning_rate": args.learning_rate,
+        }
+        if args.model_type == "fnn":
+            model_class = FNNPredictor
+            model_kwargs["hidden_size"] = args.hidden_size
+        elif args.model_type == "linear":
+            model_class = LinearRegressionPredictor
+        else:
+            raise ValueError(f"Unknown model_type: {args.model_type}")
 
-    # Prepare hyperparameters to log (subset of args + derived)
-    hparams_to_log = {
-        "model_type": args.model_type,
-        "param_name": args.param_name,
-        "embedding_file": str(paths.embeddings_file),
-        "csv_dir": str(paths.csv_dir),
-        "embedding_size": embedding_size,
-        "learning_rate": args.learning_rate,
-        "batch_size": args.batch_size,
-        "max_epochs": args.max_epochs,
-        "early_stopping_patience": args.early_stopping_patience,
-        "seed": args.seed,
-    }
-    if args.model_type == "fnn":
-        hparams_to_log["hidden_size"] = args.hidden_size
+        # Prepare trainer arguments
+        trainer_kwargs = {
+            "max_epochs": args.max_epochs,
+            "accelerator": "auto",
+            "devices": "auto",
+        }
 
-    # Train model
-    best_model_path, _ = train_model(
-        model_class=model_class,
-        model_kwargs=model_kwargs,
-        trainer_kwargs=trainer_kwargs,
-        paths=paths,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        early_stopping_patience=args.early_stopping_patience,
-        hparams_log=hparams_to_log,
-    )
+        # Prepare hyperparameters to log (subset of args + derived)
+        hparams_to_log = {
+            "model_type": args.model_type,
+            "param_name": args.param_name,
+            "embedding_file": str(paths.embeddings_file),
+            "csv_dir": str(paths.csv_dir),
+            "embedding_size": embedding_size,
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "max_epochs": args.max_epochs,
+            "early_stopping_patience": args.early_stopping_patience,
+            "seed": args.seed,
+        }
+        if args.model_type == "fnn":
+            hparams_to_log["hidden_size"] = args.hidden_size
 
-    # --- Final Output ---
-    # Print only the run directory path as the final output for capture
-    print(f"Best checkpoint saved to: {best_model_path}")  # Keep this for user info
-    # print(f"\nRun completed successfully. Best checkpoint saved to: {best_model_path}")
-    # print("To view TensorBoard logs for this run, use:")
-    # print(f"tensorboard --logdir {paths.run_dir / 'tensorboard'}")
-    # print("\nTo evaluate the best model, run evaluate.py using the run directory:")
-    # print(f'uv run python src/unknown_unknowns/evaluate.py --run_dir "{paths.run_dir}"')
-    print(
-        str(paths.run_dir.resolve())
-    )  # Print the absolute run_dir path as the last line
+        # Train model
+        best_model_path, _ = train_model(
+            model_class=model_class,
+            model_kwargs=model_kwargs,
+            trainer_kwargs=trainer_kwargs,
+            paths=paths,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            early_stopping_patience=args.early_stopping_patience,
+            hparams_log=hparams_to_log,
+        )
+
+        # --- Final Output for Training ---
+        print(
+            f"\nRun completed successfully. Best checkpoint saved to: {best_model_path}"
+        )
+        print("To view TensorBoard logs for this run, use:")
+        print(f"tensorboard --logdir {paths.run_dir / 'tensorboard'}")
+        print("\nTo evaluate the best model, run evaluate.py using the run directory:")
+        print(
+            f'uv run python src/unknown_unknowns/evaluate.py --run_dir "{paths.run_dir}"'
+        )
+        # Print the run dir path for the runner script
+        print(str(paths.run_dir.resolve()))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train a specified model (FNN or Linear Regression) with given parameters."
+        description="Train a specified model or calculate Euclidean baseline."
     )
 
     # --- Model Selection ---
@@ -297,8 +335,8 @@ if __name__ == "__main__":
         "--model_type",
         type=str,
         required=True,
-        choices=["fnn", "linear"],
-        help="Type of model to train.",
+        choices=["fnn", "linear", "euclidean"],
+        help="Type of model to train, or 'euclidean' for baseline calculation.",
     )
 
     # --- Input Data Paths ---
