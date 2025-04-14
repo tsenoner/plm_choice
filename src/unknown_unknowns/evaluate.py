@@ -11,7 +11,11 @@ import pytorch_lightning as pl
 # Project specific imports
 from data.datasets import create_single_loader
 from evaluation.metrics import calculate_regression_metrics
-from models.predictor import FNNPredictor, LinearRegressionPredictor
+from models.predictor import (
+    FNNPredictor,
+    LinearRegressionPredictor,
+    LinearDistancePredictor,
+)
 from visualization.plot import plot_true_vs_predicted
 from utils.helpers import get_device
 
@@ -270,7 +274,7 @@ def main(args):
             print(f"Error during Euclidean distance calculation: {e}")
             return
 
-    # --- Handle Trained Models (FNN, Linear) ---
+    # --- Handle Trained Models (FNN, Linear, LinearDistance) ---
     else:
         print(f"\nEvaluating Trained Model (type: {model_type})...")
         best_checkpoint_path = find_best_checkpoint(run_dir)
@@ -280,21 +284,27 @@ def main(args):
         eval_identifier = best_checkpoint_path.stem  # Use checkpoint stem
 
         # Determine model class
+        model_class = None  # Initialize
         if model_type == "fnn":
             model_class = FNNPredictor
         elif model_type == "linear":
             model_class = LinearRegressionPredictor
-        elif "FNNPredictor" in str(model_type):  # Handle old naming
+        elif model_type == "linear_distance":  # Add case for the new model
+            model_class = LinearDistancePredictor
+        # Handle potential old naming conventions if needed
+        elif "FNNPredictor" in str(model_type):
             print(
                 "Warning: Found old model type 'FNNPredictor' in hparams, using FNNPredictor class."
             )
             model_class = FNNPredictor
-        elif "LinearRegressionPredictor" in str(model_type):  # Handle old naming
+        elif "LinearRegressionPredictor" in str(model_type):
             print(
                 "Warning: Found old model type 'LinearRegressionPredictor' in hparams, using LinearRegressionPredictor class."
             )
             model_class = LinearRegressionPredictor
-        else:
+
+        # Check if a model class was successfully determined
+        if model_class is None:
             print(
                 f"Error: Unsupported or unknown model_type '{model_type}' for loading checkpoint."
             )

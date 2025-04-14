@@ -263,9 +263,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_types",
         nargs="+",
-        default=["fnn", "linear", "euclidean"],
-        choices=["fnn", "linear", "euclidean"],
-        help="List of model types to run (fnn, linear, euclidean).",
+        default=["fnn", "linear", "euclidean", "linear_distance"],
+        choices=["fnn", "linear", "euclidean", "linear_distance"],
+        help="List of model types to run (e.g., fnn linear euclidean linear_distance).",
     )
     parser.add_argument(
         "--target_params",

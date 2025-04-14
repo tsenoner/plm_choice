@@ -19,7 +19,11 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from data.datasets import create_single_loader, get_embedding_size
-from models.predictor import FNNPredictor, LinearRegressionPredictor
+from models.predictor import (
+    FNNPredictor,
+    LinearRegressionPredictor,
+    LinearDistancePredictor,
+)
 
 
 # Define a simple structure to hold paths
@@ -273,8 +277,10 @@ def main(args):
             model_kwargs["hidden_size"] = args.hidden_size
         elif args.model_type == "linear":
             model_class = LinearRegressionPredictor
+        elif args.model_type == "linear_distance":
+            model_class = LinearDistancePredictor
         else:
-            raise ValueError(f"Unknown model_type: {args.model_type}")
+            raise ValueError(f"Unknown trainable model_type: {args.model_type}")
 
         # Prepare trainer arguments
         trainer_kwargs = {
@@ -335,8 +341,8 @@ if __name__ == "__main__":
         "--model_type",
         type=str,
         required=True,
-        choices=["fnn", "linear", "euclidean"],
-        help="Type of model to train, or 'euclidean' for baseline calculation.",
+        choices=["fnn", "linear", "euclidean", "linear_distance"],
+        help="Type of model to train or baseline to set up.",
     )
 
     # --- Input Data Paths ---
