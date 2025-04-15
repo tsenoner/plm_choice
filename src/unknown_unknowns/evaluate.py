@@ -207,13 +207,17 @@ def generate_evaluation_results(
     run_dir: Path,
     checkpoint_name: str,
     test_set_name: str,
+    n_bootstrap: int = 1000,
 ):
-    """Calculate metrics, save plot, and save metrics file in the run directory."""
-    print(f"Calculating metrics and saving results for test set '{test_set_name}'...")
+    """Calculate metrics, save plot, and save raw metrics file."""
+    print(f"Calculating metrics for test set '{test_set_name}'...")
     eval_dir = run_dir / "evaluation_results"
     eval_dir.mkdir(exist_ok=True)
 
-    metrics = calculate_regression_metrics(targets, predictions)
+    # Calculate raw metrics
+    metrics = calculate_regression_metrics(
+        targets, predictions, n_bootstrap=n_bootstrap
+    )
 
     base_filename = f"test_{test_set_name}_{checkpoint_name}"
     results_png = eval_dir / f"{base_filename}_results.png"
@@ -227,13 +231,18 @@ def generate_evaluation_results(
 
     print(f"\nMetrics for Test Set '{test_set_name}':")
     for metric, value in metrics.items():
-        print(f"{metric}: {value:.4f}")
+        if isinstance(value, (float, np.floating)) and np.isnan(value):
+            print(f"{metric}: NaN")
+        elif value < 1e-4:
+            print(f"{metric}: {value:.4e}")
+        else:
+            print(f"{metric}: {value:.4f}")
 
     with open(metrics_file, "w") as f:
         f.write(f"# Evaluation metrics for checkpoint: {checkpoint_name}\n")
         f.write(f"# Test Set: {test_set_name}\n")
         for metric, value in metrics.items():
-            f.write(f"{metric}: {value:.4f}\n")
+            f.write(f"{metric}: {value}\n")
     print(f"Saved metrics to: {metrics_file}")
 
 
@@ -326,7 +335,12 @@ def main(args):
     if predictions is not None and targets is not None:
         try:
             generate_evaluation_results(
-                predictions, targets, run_dir, eval_identifier, test_set_name
+                predictions,
+                targets,
+                run_dir,
+                eval_identifier,
+                test_set_name,
+                n_bootstrap=args.n_bootstrap,
             )
             print(
                 f"\nEvaluation complete. Results saved in: {run_dir / 'evaluation_results'}"
@@ -339,19 +353,25 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained model checkpoint from a run directory, using parameters from hparams.yaml."
+        description="Evaluate a trained model checkpoint or baseline from a run directory."
     )
     parser.add_argument(
         "--run_dir",
         type=Path,
         required=True,
-        help="Path to the training run directory containing checkpoints and tensorboard/hparams.yaml.",
+        help="Path to the run directory containing checkpoints/hparams.yaml.",
     )
     parser.add_argument(
         "--test_csv",
         type=Path,
         default=None,
-        help="Optional: Path to a specific test CSV file to use. If not provided, uses test.csv from the original training csv_dir specified in hparams.yaml.",
+        help="Optional: Path to specific test CSV. Uses test.csv from hparams if not set.",
+    )
+    parser.add_argument(
+        "--n_bootstrap",
+        type=int,
+        default=1000,
+        help="Number of bootstrap samples for Pearson R^2 SE/CI. Set 0 to disable.",
     )
 
     args = parser.parse_args()
