@@ -190,7 +190,7 @@ def train_model(
         logger=logger,
         log_every_n_steps=logging_steps,
         enable_checkpointing=True,
-        enable_progress_bar=True,
+        enable_progress_bar=False,
         enable_model_summary=True,
         **trainer_kwargs,
     )
