@@ -137,7 +137,7 @@ def main(args):
                     "--learning_rate",
                     "0.0001",
                     "--max_epochs",
-                    "100",
+                    "200",
                     "--early_stopping_patience",
                     "5",
                 ]

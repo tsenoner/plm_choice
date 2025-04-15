@@ -37,16 +37,19 @@ This project aims to train and evaluate machine learning models to predict speci
     -   **If model type is `euclidean`:** Creates the standard run directory structure and saves an `hparams.yaml` file marking the model type. No training occurs; evaluation is handled directly by `evaluate.py`.
     -   Hyperparameter defaults for trainable models are defined directly within its `argparse` setup.
 -   **`src/unknown_unknowns/evaluate.py`:** Evaluates a trained model checkpoint (`fnn`, `linear`, `linear_distance`) or the Euclidean baseline from a specific run directory.
-    -   Takes the run directory (`--run_dir`) as input.
+    -   Takes the run directory (`--run_dir`) and optionally the number of bootstrap samples (`--n_bootstrap`, default 1000) as input.
     -   Loads necessary hyperparameters from `hparams.yaml`.
-    -   **If model type is `fnn`, `linear`, or `linear_distance`:** Loads the correct model checkpoint (trained on either PLM or random embeddings) using the appropriate class (`FNNPredictor`, `LinearRegressionPredictor`, or `LinearDistancePredictor`) and runs inference on the test set.
-    -   **If model type is `euclidean`:** Skips model loading and directly calculates the Euclidean distance between the specified PLM embeddings for the test set pairs using the `run_euclidean_distance` function.
+    -   **If model type is `fnn`, `linear`, or `linear_distance`:** Loads the correct model checkpoint using the appropriate class and runs inference on the test set.
+    -   **If model type is `euclidean`:** Skips model loading and directly calculates the Euclidean distance.
     -   Runs inference/calculation on the test set (`test.csv` from the training data directory specified in `hparams.yaml` by default, can be overridden with `--test_csv`).
-    -   Calculates and saves metrics (including Spearman, Pearson, R^2) and plots to an `evaluation_results` subdirectory.
+    -   Calls `evaluation.metrics.calculate_regression_metrics` to compute standard regression metrics.
+    -   If `n_bootstrap > 1`, metrics calculation includes bootstrapping to estimate Standard Error (SE) and Confidence Intervals (CI) for Pearson R^2 and Spearman Rho.
+    -   Saves raw numerical metrics (including SE/CI if calculated) to a `.txt` file in an `evaluation_results` subdirectory.
+    -   Generates and saves plots (e.g., true vs. predicted) to the same subdirectory.
 -   **`src/unknown_unknowns/models/predictor.py`:** Contains the PyTorch Lightning model definitions. Includes a `BasePredictor` class with common logic (training/validation/prediction steps, optimizer configuration) and specific model classes inheriting from it: `FNNPredictor`, `LinearRegressionPredictor` (operates on concatenated embeddings), and `LinearDistancePredictor` (operates on squared embedding difference).
 -   **`src/unknown_unknowns/data/preprocessing.py`:** Contains scriptable logic to preprocess raw CSV data (e.g., applying NaN thresholds). Run via `uv run python src/unknown_unknowns/data/preprocessing.py --input_dir ... --output_dir ...`.
 -   **`src/unknown_unknowns/data/datasets.py`:** Contains data loading logic (`create_single_loader`, `H5PyDataset`) for handling HDF5 embedding files and CSV data files.
--   **`src/unknown_unknowns/evaluation/metrics.py`:** Calculates evaluation metrics (MSE, RMSE, MAE, R2, Pearson, Pearson_r2, Spearman). Assumes inputs are NaN-free.
+-   **`src/unknown_unknowns/evaluation/metrics.py`:** Calculates standard regression metrics (MSE, RMSE, MAE, R2, Pearson, Spearman, and associated p-values). Includes optional bootstrapping (`_bootstrap_stat` helper) for Pearson R^2 and Spearman correlation coefficients to estimate standard error and confidence intervals. Returns raw numerical results.
 -   **`src/unknown_unknowns/visualization/plot.py`:** Generates plots (e.g., true vs. predicted).
 -   **`src/unknown_unknowns/utils/helpers.py`:** Utility functions.
 
@@ -64,9 +67,9 @@ This project aims to train and evaluate machine learning models to predict speci
     -   `<model_type>`: `fnn`, `linear`, `euclidean`, or `linear_distance`.
     -   `<embedding_name>`: The stem of the HDF5 file used (e.g., `prott5`, `ankh_base`, `random_512`, `random_1024`).
 -   Inside the `<timestamp>` directory:
-    -   `checkpoints/`: Contains the saved model checkpoint (`.ckpt`) for trainable models (`fnn`, `linear`, `linear_distance` - trained on either PLM or random embeddings). Empty for Euclidean.
+    -   `checkpoints/`: Contains the saved model checkpoint (`.ckpt`) for trainable models. Empty for Euclidean.
     -   `tensorboard/`: Contains TensorBoard logs (if applicable) and the `hparams.yaml` file.
-    -   `evaluation_results/`: Contains evaluation metrics and plots if evaluation is run.
+    -   `evaluation_results/`: Contains plots and the raw evaluation metrics (`_metrics.txt`), potentially including SE and CI values for correlation coefficients if bootstrapping was enabled during evaluation.
 
 ## 6. Key Design Decisions & Rationale
 
@@ -82,6 +85,8 @@ This project aims to train and evaluate machine learning models to predict speci
 -   **Output Organization:** Nested output directory structure clearly separates results.
 -   **Progress Visibility:** Training progress bars are streamed live.
 -   **Euclidean Baseline Integration:** Treated as a distinct non-trainable `model_type`.
+-   **Metrics Calculation:** Separated metric calculation logic into `evaluation/metrics.py`. Includes robust calculation of standard regression metrics and optional bootstrapping via `_bootstrap_stat` helper to estimate standard errors and confidence intervals for Pearson R^2 and Spearman Rho, providing insight into the stability of these correlation measures.
+-   **Output Format:** Evaluation results (metrics) are saved as raw numerical values in the `.txt` file for easier machine parsing and downstream analysis, while console output provides basic formatting.
 
 ## 7. Environment
 
