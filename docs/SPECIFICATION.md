@@ -11,7 +11,7 @@ This project aims to train and evaluate machine learning models to predict speci
     -   Model types (`--model_types`, e.g., `fnn`, `linear`, `euclidean`, `linear_distance`)
     -   Target parameters (`--target_params`, e.g., `fident`, `alntmscore`, `hfsp`)
     -   Embedding files (found automatically as `.h5` files in `data/processed/sprot_embs/` - this includes both PLM and generated random embeddings).
--   **Redundancy Check:** Before launching a run, `run_experiments.py` checks if a corresponding output directory (`models/<model_type>_runs/<param_name>/<embedding_name>/`) already contains timestamped results. If so, it skips the combination to avoid redundant computations.
+-   **Redundancy Check:** Before launching a run, `run_experiments.py` checks if a corresponding output directory (`models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`) already contains timestamped results. If so, it skips the combination to avoid redundant computations. `<train_data_sub_dir>` is the base name of the directory specified by `--csv_dir`.
 -   **Optional Evaluation:** The `--evaluate_after_train` flag can be passed to `run_experiments.py` to automatically trigger the evaluation script (`evaluate.py`) for each successfully completed run (including the Euclidean baseline setup).
 -   **Usage Example:**
     ```bash
@@ -29,12 +29,13 @@ This project aims to train and evaluate machine learning models to predict speci
 
 ## 3. Key Scripts & Components
 
--   **`run_experiments.py`:** (Project Root) Orchestrates the entire experimental workflow. Iterates through specified model types (`fnn`, `linear`, `linear_distance`, `euclidean`), target parameters, and all `.h5` embedding files found in the embedding directory. Performs redundancy checks, calls `train.py`, and optionally calls `evaluate.py`.
+-   **`run_experiments.py`:** (Project Root) Orchestrates the entire experimental workflow. Iterates through specified model types (`fnn`, `linear`, `linear_distance`, `euclidean`), target parameters, and all `.h5` embedding files found in the embedding directory. Extracts the base name of the `--csv_dir` directory (`<train_data_sub_dir>`). Performs redundancy checks based on the expected output path (`models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`), constructs this base path, and calls `train.py`, passing the base path via the `--output_base_dir` argument. Optionally calls `evaluate.py`.
 -   **`scripts/generate_random_embeddings.py`:** (Scripts Directory) Generates HDF5 files (`random_<dim>.h5`) containing random embeddings (standard normal distribution) for protein IDs found in a template HDF5 file (e.g., `prott5.h5`). These files are saved to the standard embedding directory (`data/processed/sprot_embs/`) and are intended to be used as input embeddings for the standard training workflow (`fnn`, `linear`, `linear_distance`) to establish a baseline.
--   **`src/unknown_unknowns/train.py`:** Handles the training of a single model instance (`fnn`, `linear`, `linear_distance`) *or* sets up the run directory for the non-trainable Euclidean baseline.
-    -   Takes parameters via command-line arguments (model type, data paths, hyperparameters).
-    -   **If model type is `fnn`, `linear`, or `linear_distance`:** Selects the appropriate model class (`FNNPredictor`, `LinearRegressionPredictor`, or `LinearDistancePredictor`), uses PyTorch Lightning for training using the specified input embedding file (which could be a PLM embedding or a generated random embedding), saves checkpoints and TensorBoard logs.
-    -   **If model type is `euclidean`:** Creates the standard run directory structure and saves an `hparams.yaml` file marking the model type. No training occurs; evaluation is handled directly by `evaluate.py`.
+-   **`src/unknown_unknowns/train.py`:** Handles the training of a single model instance (`fnn`, `linear`, `linear_distance`) *or* sets up the run directory for the non-trainable Euclidean baseline within a specified output directory.
+    -   Takes parameters via command-line arguments, including the base output directory (`--output_base_dir`) provided by `run_experiments.py`.
+    -   Creates a timestamped subdirectory within the `--output_base_dir` for the specific run.
+    -   **If model type is `fnn`, `linear`, or `linear_distance`:** Selects the appropriate model class (`FNNPredictor`, `LinearRegressionPredictor`, or `LinearDistancePredictor`), uses PyTorch Lightning for training using the specified input embedding file (which could be a PLM embedding or a generated random embedding), saves checkpoints and TensorBoard logs within the timestamped run directory.
+    -   **If model type is `euclidean`:** Creates the necessary structure (`tensorboard/hparams.yaml`) within the timestamped run directory. No training occurs; evaluation is handled directly by `evaluate.py`.
     -   Hyperparameter defaults for trainable models are defined directly within its `argparse` setup.
 -   **`src/unknown_unknowns/evaluate.py`:** Evaluates a trained model checkpoint (`fnn`, `linear`, `linear_distance`) or the Euclidean baseline from a specific run directory.
     -   Takes the run directory (`--run_dir`) and optionally the number of bootstrap samples (`--n_bootstrap`, default 1000) as input.
@@ -63,7 +64,8 @@ This project aims to train and evaluate machine learning models to predict speci
 ## 5. Output Structure
 
 -   Runs are saved under `models/`.
--   Structure: `models/<model_type>_runs/<param_name>/<embedding_name>/<timestamp>/`
+-   Structure: `models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/<timestamp>/`
+    -   `<train_data_sub_dir>`: The base name of the directory provided via `--csv_dir` (e.g., `sprot_train`).
     -   `<model_type>`: `fnn`, `linear`, `euclidean`, or `linear_distance`.
     -   `<embedding_name>`: The stem of the HDF5 file used (e.g., `prott5`, `ankh_base`, `random_512`, `random_1024`).
 -   Inside the `<timestamp>` directory:

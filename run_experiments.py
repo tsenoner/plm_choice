@@ -54,6 +54,8 @@ def main(args):
     if not csv_dir_abs.is_dir():
         print(f"Error: Provided CSV directory not found at {csv_dir_abs}")
         return
+    # Extract the last part of the csv_dir path
+    train_data_sub_dir = csv_dir_abs.name
 
     # --- Experiment Definitions ---
     model_types = args.model_types
@@ -102,7 +104,11 @@ def main(args):
                 )
 
                 experiment_output_dir = (
-                    models_base_dir / f"{model_type}_runs" / param_name / embedding_name
+                    models_base_dir
+                    / train_data_sub_dir  # Add the training data subdir
+                    / model_type  # Use model_type directly
+                    / param_name
+                    / embedding_name
                 )
 
                 # --- Redundancy Check ---
@@ -149,6 +155,8 @@ def main(args):
                     embedding_file_abs,
                     "--csv_dir",
                     str(csv_dir_abs),
+                    "--output_base_dir",
+                    str(experiment_output_dir),
                     "--num_workers",
                     "10",
                     "--batch_size",

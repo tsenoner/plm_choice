@@ -50,8 +50,7 @@ def setup_environment(seed: int):
 
 
 def prepare_paths(
-    model_type: str,
-    param_name: str,
+    output_base_dir: Path,
     embeddings_file: Path,
     csv_dir: Path,
     project_root: Path,
@@ -64,18 +63,9 @@ def prepare_paths(
     if not csv_dir.is_dir():
         raise NotADirectoryError(f"CSV directory not found: {csv_dir}")
 
-    # Derive embedding name from the absolute file path
-    embedding_name = embeddings_file.stem
-
-    # Construct base output dir including model type
-    # e.g., models/fnn_runs/fident/prott5 or models/linear_runs/fident/prott5
-    base_experiment_dir = (
-        project_root / "models" / f"{model_type}_runs" / param_name / embedding_name
-    ).resolve()
-
-    # Create timestamped run directory within the base experiment dir
+    # Create timestamped run directory within the provided base experiment dir
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = base_experiment_dir / timestamp
+    run_dir = output_base_dir.resolve() / timestamp
     print(f"Creating run directory: {run_dir}")
 
     # Create run structure
@@ -103,7 +93,7 @@ def prepare_paths(
         train_csv=train_csv,
         val_csv=val_csv,
         test_csv=test_csv,
-        output_dir=base_experiment_dir,
+        output_dir=output_base_dir.resolve(),
         run_dir=run_dir,
     )
 
@@ -212,8 +202,7 @@ def main(args):
     project_root = Path(__file__).parent.parent.parent
 
     paths = prepare_paths(
-        model_type=args.model_type,
-        param_name=args.param_name,
+        output_base_dir=args.output_base_dir,
         embeddings_file=args.embedding_file,
         csv_dir=args.csv_dir,
         project_root=project_root,
@@ -364,6 +353,14 @@ if __name__ == "__main__":
         required=True,
         choices=["fident", "alntmscore", "hfsp"],
         help="Target parameter name to train the model for.",
+    )
+
+    # --- Output Location ---
+    parser.add_argument(
+        "--output_base_dir",
+        type=Path,
+        required=True,
+        help="Absolute path to the base directory where the timestamped run folder should be created.",
     )
 
     # --- Core Training Hyperparameters (with defaults set here) ---
