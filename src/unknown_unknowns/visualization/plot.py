@@ -80,7 +80,7 @@ def plot_true_vs_predicted(
     ax.set_ylabel("Predicted Values")
 
     plot_title = title
-    print(metrics)
+
     if metrics:
         pearson_r_squared_val = metrics.get("Pearson_r2", float("nan"))
         pearson_r_squared_se = metrics.get("Pearson_r2_SE", float("nan"))

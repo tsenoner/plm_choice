@@ -41,13 +41,21 @@ This project aims to train and evaluate machine learning models to predict speci
 -   **`src/unknown_unknowns/evaluate.py`:** Evaluates a trained model checkpoint (`fnn`, `linear`, `linear_distance`) or the Euclidean baseline from a specific run directory.
     -   Takes the run directory (`--run_dir`) and optionally the number of bootstrap samples (`--n_bootstrap`, default 1000) as input.
     -   Loads necessary hyperparameters from `hparams.yaml`.
-    -   **If model type is `fnn`, `linear`, or `linear_distance`:** Loads the correct model checkpoint using the appropriate class and runs inference on the test set.
-    -   **If model type is `euclidean`:** Skips model loading and directly calculates the Euclidean distance.
-    -   Runs inference/calculation on the test set (`test.csv` from the training data directory specified in `hparams.yaml` by default, can be overridden with `--test_csv`).
-    -   Calls `evaluation.metrics.calculate_regression_metrics` to compute standard regression metrics.
-    -   If `n_bootstrap > 1`, metrics calculation includes bootstrapping to estimate Standard Error (SE) and Confidence Intervals (CI) for Pearson R^2 and Spearman Rho.
-    -   Saves raw numerical metrics (including SE/CI if calculated) to a `.txt` file in an `evaluation_results` subdirectory.
-    -   Generates and saves plots (e.g., true vs. predicted) to the same subdirectory. The true vs. predicted plot is now a hexagonal binning plot to show point density, includes a regression line with 95% CI, and features a customized grid. The ideal y=x line has been removed, and the plot aspect ratio is no longer forced to be equal.
+    -   **Caching Behavior:**
+        -   Saves computed predictions/targets to `evaluation_results/..._predictions_targets.npz`.
+        -   Saves computed metrics to `evaluation_results/..._metrics.txt`.
+        -   Always regenerates the plot file `evaluation_results/..._results.png`.
+        -   On subsequent runs, if `_predictions_targets.npz` and `_metrics.txt` exist and the new `--force_recompute` flag is *not* used, it skips prediction/inference and metric recalculation, using the cached files. The plot is still regenerated.
+        -   If `_predictions_targets.npz` exists but `_metrics.txt` does not (and `--force_recompute` is not used), it loads the predictions/targets, recalculates metrics, and regenerates the plot.
+        -   If `_predictions_targets.npz` does not exist (or `--force_recompute` is used), it recomputes predictions/targets, metrics, and regenerates the plot.
+    -   **Execution Logic:**
+        -   Loads hyperparameters and prepares test data loader.
+        -   Checks for cached predictions/targets and metrics based on the `--force_recompute` flag.
+        -   If necessary, loads the model checkpoint (for `fnn`, `linear`, `linear_distance`) or prepares for Euclidean calculation.
+        -   If necessary, runs inference or Euclidean distance calculation to obtain predictions and targets, then saves them.
+        -   Calls `evaluation.metrics.calculate_regression_metrics` to compute/recompute metrics (if not cached or forced).
+        -   Saves metrics to `.txt` file (if newly computed or forced).
+        -   Always calls `visualization.plot.plot_true_vs_predicted` to generate and save the plot using loaded or computed predictions/metrics.
 -   **`src/unknown_unknowns/models/predictor.py`:** Contains the PyTorch Lightning model definitions. Includes a `BasePredictor` class with common logic (training/validation/prediction steps, optimizer configuration) and specific model classes inheriting from it: `FNNPredictor`, `LinearRegressionPredictor` (operates on concatenated embeddings), and `LinearDistancePredictor` (operates on squared embedding difference).
 -   **`src/unknown_unknowns/data/preprocessing.py`:** Contains scriptable logic to preprocess raw CSV data (e.g., applying NaN thresholds). Run via `uv run python src/unknown_unknowns/data/preprocessing.py --input_dir ... --output_dir ...`.
 -   **`src/unknown_unknowns/data/datasets.py`:** Contains data loading logic (`create_single_loader`, `H5PyDataset`) for handling HDF5 embedding files and CSV data files.

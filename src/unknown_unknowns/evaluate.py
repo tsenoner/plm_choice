@@ -207,172 +207,256 @@ def generate_evaluation_results(
     run_dir: Path,
     checkpoint_name: str,
     test_set_name: str,
+    metrics_path: Path,
+    plot_path: Path,
+    force_recompute: bool,
     n_bootstrap: int = 1000,
 ):
-    """Calculate metrics, save plot, and save raw metrics file."""
-    print(f"Calculating metrics for test set '{test_set_name}'...")
-    eval_dir = run_dir / "evaluation_results"
-    eval_dir.mkdir(exist_ok=True)
+    """Calculate metrics, (re)generate plot, and save raw metrics file if it doesn't exist or recompute is forced for metrics."""
 
-    # Calculate raw metrics
-    metrics = calculate_regression_metrics(
-        targets, predictions, n_bootstrap=n_bootstrap
-    )
+    # Plot is always regenerated if this function is called, unless metrics skip happens.
+    # Metrics skip logic:
+    if not force_recompute and metrics_path.is_file():
+        print(
+            f"Metrics file ({metrics_path}) found. Loading metrics and regenerating plot."
+        )
+        # Load existing metrics for plot title and console output
+        metrics = {}
+        try:
+            with open(metrics_path, "r") as f:
+                for line in f:
+                    if line.startswith("#") or ":" not in line:
+                        continue
+                    key, value = line.strip().split(":", 1)
+                    try:
+                        metrics[key.strip()] = float(value.strip())
+                    except ValueError:
+                        metrics[key.strip()] = (
+                            value.strip()
+                        )  # Keep as string if not float (e.g. NaN)
+            print(
+                f"\nLoaded Metrics for Test Set '{test_set_name}' (from {metrics_path}):"
+            )
+            for (
+                metric,
+                value_p,
+            ) in metrics.items():  # Use different var name to avoid conflict
+                if isinstance(value_p, (float, np.floating)) and np.isnan(value_p):
+                    print(f"{metric}: NaN")
+                elif isinstance(value_p, float) and value_p < 1e-4:
+                    print(f"{metric}: {value_p:.4e}")
+                elif isinstance(value_p, float):
+                    print(f"{metric}: {value_p:.4f}")
+                else:
+                    print(f"{metric}: {value_p}")  # Print string as is
+        except Exception as e:
+            print(
+                f"Could not read existing metrics file ({metrics_path}): {e}. Will recompute metrics."
+            )
+            metrics = calculate_regression_metrics(
+                targets, predictions, n_bootstrap=n_bootstrap
+            )
+            # Save recomputed metrics
+            with open(metrics_path, "w") as f:
+                f.write(f"# Evaluation metrics for checkpoint: {checkpoint_name}\n")
+                f.write(f"# Test Set: {test_set_name}\n")
+                for metric, value in metrics.items():
+                    f.write(f"{metric}: {value}\n")
+            print(f"Saved recomputed metrics to: {metrics_path}")
 
-    base_filename = f"test_{test_set_name}_{checkpoint_name}"
-    results_png = eval_dir / f"{base_filename}_results.png"
-    metrics_file = eval_dir / f"{base_filename}_metrics.txt"
+    else:  # Metrics need to be computed (or forced)
+        print(f"Generating metrics and plot for test set '{test_set_name}'...")
+        metrics = calculate_regression_metrics(
+            targets, predictions, n_bootstrap=n_bootstrap
+        )
+        # Save metrics
+        with open(metrics_path, "w") as f:
+            f.write(f"# Evaluation metrics for checkpoint: {checkpoint_name}\n")
+            f.write(f"# Test Set: {test_set_name}\n")
+            for metric, value in metrics.items():
+                f.write(f"{metric}: {value}\n")
+        print(f"Saved metrics to: {metrics_path}")
+        # Console print for newly computed metrics
+        print(f"\nMetrics for Test Set '{test_set_name}':")
+        for metric, value in metrics.items():
+            if isinstance(value, (float, np.floating)) and np.isnan(value):
+                print(f"{metric}: NaN")
+            elif value < 1e-4:
+                print(f"{metric}: {value:.4e}")
+            else:
+                print(f"{metric}: {value:.4f}")
 
+    # Plot is always generated here, using loaded or newly computed metrics
     plot_title = f"Evaluation on '{test_set_name}' ({checkpoint_name})"
     plot_true_vs_predicted(
-        targets, predictions, results_png, metrics=metrics, title=plot_title
+        targets, predictions, plot_path, metrics=metrics, title=plot_title
     )
-    print(f"Saved evaluation plot to: {results_png}")
-
-    print(f"\nMetrics for Test Set '{test_set_name}':")
-    for metric, value in metrics.items():
-        if isinstance(value, (float, np.floating)) and np.isnan(value):
-            print(f"{metric}: NaN")
-        elif value < 1e-4:
-            print(f"{metric}: {value:.4e}")
-        else:
-            print(f"{metric}: {value:.4f}")
-
-    with open(metrics_file, "w") as f:
-        f.write(f"# Evaluation metrics for checkpoint: {checkpoint_name}\n")
-        f.write(f"# Test Set: {test_set_name}\n")
-        for metric, value in metrics.items():
-            f.write(f"{metric}: {value}\n")
-    print(f"Saved metrics to: {metrics_file}")
+    print(f"Saved evaluation plot to: {plot_path}")
 
 
 def main(args):
     """Main workflow orchestrator for evaluation."""
-    run_dir = args.run_dir.resolve()
-    if not run_dir.is_dir():
-        raise NotADirectoryError(f"Specified run directory not found: {run_dir}")
-
     try:
-        hparams = load_hparams(run_dir)
-    except (FileNotFoundError, KeyError, ValueError) as e:
-        print(f"Error loading hyperparameters: {e}")
+        hparams = load_hparams(args.run_dir)
+    except Exception as e:
+        print(f"Error loading hparams: {e}")
         return
 
-    model_type = hparams.get("model_type")
-    predictions = None
-    targets = None
-    eval_identifier = ""
+    model_type = hparams["model_type"]
+    test_loader, test_csv_path = prepare_evaluation_data(hparams, args.test_csv)
+    test_set_name = test_csv_path.stem  # e.g., 'test' from 'test.csv'
 
-    try:
-        # Load test data using hparams
-        test_loader, test_csv_path = prepare_evaluation_data(hparams, args.test_csv)
-        test_set_name = test_csv_path.stem
-    except (FileNotFoundError, KeyError, ValueError) as e:
-        print(f"Error preparing evaluation data: {e}")
-        return
-
-    # --- Handle Euclidean Baseline ---
-    if model_type == "euclidean":
-        print("\nEvaluating Euclidean Distance Baseline...")
-        try:
-            predictions, targets = run_euclidean_distance(test_loader)
-            eval_identifier = (
-                "euclidean_baseline"  # Use as placeholder for checkpoint name
-            )
-        except Exception as e:
-            print(f"Error during Euclidean distance calculation: {e}")
-            return
-
-    # --- Handle Trained Models (FNN, Linear, LinearDistance) ---
-    else:
-        print(f"\nEvaluating Trained Model (type: {model_type})...")
-        best_checkpoint_path = find_best_checkpoint(run_dir)
+    checkpoint_name: str
+    if model_type in ["fnn", "linear", "linear_distance"]:
+        best_checkpoint_path = find_best_checkpoint(args.run_dir)
         if not best_checkpoint_path:
-            print("Evaluation aborted: Could not find a suitable checkpoint file.")
+            print("No checkpoint found, cannot evaluate model.")
             return
-        eval_identifier = best_checkpoint_path.stem  # Use checkpoint stem
-
-        # Determine model class
-        model_class = None  # Initialize
-        if model_type == "fnn":
-            model_class = FNNPredictor
-        elif model_type == "linear":
-            model_class = LinearRegressionPredictor
-        elif model_type == "linear_distance":  # Add case for the new model
-            model_class = LinearDistancePredictor
-        # Handle potential old naming conventions if needed
-        elif "FNNPredictor" in str(model_type):
-            print(
-                "Warning: Found old model type 'FNNPredictor' in hparams, using FNNPredictor class."
-            )
-            model_class = FNNPredictor
-        elif "LinearRegressionPredictor" in str(model_type):
-            print(
-                "Warning: Found old model type 'LinearRegressionPredictor' in hparams, using LinearRegressionPredictor class."
-            )
-            model_class = LinearRegressionPredictor
-
-        # Check if a model class was successfully determined
-        if model_class is None:
-            print(
-                f"Error: Unsupported or unknown model_type '{model_type}' for loading checkpoint."
-            )
-            return
-
-        # Load model and run inference
-        try:
-            model = load_model_from_checkpoint(best_checkpoint_path, model_class)
-        except Exception as e:
-            print(f"Error loading model from checkpoint {best_checkpoint_path}: {e}")
-            return
-        try:
-            predictions, targets = run_inference(model, test_loader)
-        except Exception as e:
-            print(f"Error during model inference: {e}")
-            return
-
-    # --- Generate Results (Common for both paths if successful) ---
-    if predictions is not None and targets is not None:
-        try:
-            generate_evaluation_results(
-                predictions,
-                targets,
-                run_dir,
-                eval_identifier,
-                test_set_name,
-                n_bootstrap=args.n_bootstrap,
-            )
-            print(
-                f"\nEvaluation complete. Results saved in: {run_dir / 'evaluation_results'}"
-            )
-        except Exception as e:
-            print(f"Error generating evaluation results: {e}")
+        checkpoint_name = best_checkpoint_path.stem
+    elif model_type == "euclidean":
+        checkpoint_name = "euclidean_baseline"
     else:
-        print("\nEvaluation could not be completed (predictions or targets missing).")
+        print(f"Unknown model type '{model_type}' in hparams. Cannot evaluate.")
+        return
+
+    eval_dir = args.run_dir / "evaluation_results"
+    eval_dir.mkdir(exist_ok=True)
+
+    base_filename = f"test_{test_set_name}_{checkpoint_name}"
+    preds_targets_path = eval_dir / f"{base_filename}_predictions_targets.npz"
+    metrics_path = eval_dir / f"{base_filename}_metrics.txt"
+    plot_path = eval_dir / f"{base_filename}_results.png"
+
+    if (
+        not args.force_recompute
+        and preds_targets_path.is_file()
+        and metrics_path.is_file()
+        and plot_path.is_file()
+    ):
+        print(
+            f"All evaluation artifacts (predictions, metrics, plot) found for {base_filename}. Skipping."
+        )
+        if metrics_path.is_file():
+            print(f"\nExisting Metrics (from {metrics_path}):")
+            try:
+                with open(metrics_path, "r") as f:
+                    lines = [
+                        line.strip()
+                        for line in f.readlines()
+                        if not line.startswith("#")
+                    ]
+                    for line in lines:
+                        print(line)
+            except Exception as e:
+                print(f"Could not read existing metrics file: {e}")
+        return
+
+    predictions: Optional[np.ndarray] = None
+    targets: Optional[np.ndarray] = None
+    predictions_were_loaded = False
+
+    if preds_targets_path.is_file() and not args.force_recompute:
+        print(
+            f"Loading pre-computed predictions and targets from: {preds_targets_path}"
+        )
+        try:
+            data = np.load(preds_targets_path)
+            predictions = data["predictions"]
+            targets = data["targets"]
+            if predictions is not None and targets is not None:
+                print("Successfully loaded pre-computed predictions and targets.")
+                predictions_were_loaded = True
+            else:
+                print(
+                    "Warning: Loaded file is missing 'predictions' or 'targets' key. Recomputing."
+                )
+        except Exception as e:
+            print(
+                f"Warning: Could not load predictions/targets from {preds_targets_path}: {e}. Recomputing."
+            )
+
+    if not predictions_were_loaded:
+        print("Predictions/targets not loaded or recompute forced. Computing now...")
+        if model_type in ["fnn", "linear", "linear_distance"]:
+            best_checkpoint_path_for_compute = find_best_checkpoint(args.run_dir)
+            if not best_checkpoint_path_for_compute:
+                print("Critical: No checkpoint found during recompute path.")
+                return
+            model_class_map = {
+                "fnn": FNNPredictor,
+                "linear": LinearRegressionPredictor,
+                "linear_distance": LinearDistancePredictor,
+            }
+            ModelClass = model_class_map[model_type]
+            model = load_model_from_checkpoint(
+                best_checkpoint_path_for_compute, ModelClass
+            )
+            predictions, targets = run_inference(model, test_loader)
+        elif model_type == "euclidean":
+            predictions, targets = run_euclidean_distance(test_loader)
+
+        if predictions is not None and targets is not None:
+            try:
+                np.savez_compressed(
+                    preds_targets_path, predictions=predictions, targets=targets
+                )
+                print(
+                    f"Saved freshly computed predictions and targets to: {preds_targets_path}"
+                )
+            except Exception as e:
+                print(
+                    f"Warning: Could not save freshly computed predictions/targets to {preds_targets_path}: {e}"
+                )
+        else:
+            print(
+                "Error: Failed to compute predictions/targets. Evaluation aborted before saving."
+            )
+            return
+
+    if predictions is not None and targets is not None:
+        generate_evaluation_results(
+            predictions,
+            targets,
+            args.run_dir,
+            checkpoint_name,
+            test_set_name,
+            metrics_path=metrics_path,
+            plot_path=plot_path,
+            force_recompute=args.force_recompute,
+            n_bootstrap=args.n_bootstrap,
+        )
+    else:
+        print(
+            "Error: Predictions and targets could not be obtained. Evaluation aborted."
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained model checkpoint or baseline from a run directory."
+        description="Evaluate a trained model or Euclidean baseline."
     )
     parser.add_argument(
-        "--run_dir",
-        type=Path,
-        required=True,
-        help="Path to the run directory containing checkpoints/hparams.yaml.",
+        "--run_dir", type=Path, required=True, help="Path to the model run directory."
     )
     parser.add_argument(
         "--test_csv",
         type=Path,
         default=None,
-        help="Optional: Path to specific test CSV. Uses test.csv from hparams if not set.",
+        help="Optional path to a specific test CSV file to use for evaluation. "
+        "If not provided, uses 'test.csv' from the original training data directory.",
     )
     parser.add_argument(
         "--n_bootstrap",
         type=int,
         default=1000,
-        help="Number of bootstrap samples for Pearson R^2 SE/CI. Set 0 to disable.",
+        help="Number of bootstrap samples for calculating SE/CI for correlation metrics. "
+        "Set to 1 or 0 to disable bootstrapping.",
+    )
+    parser.add_argument(
+        "--force_recompute",
+        action="store_true",
+        help="Force re-computation of predictions even if saved predictions/targets file exists.",
     )
 
-    args = parser.parse_args()
-    main(args)
+    cli_args = parser.parse_args()
+    main(cli_args)
