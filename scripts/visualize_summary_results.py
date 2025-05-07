@@ -59,7 +59,7 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
 # Color map for individual embeddings (lowercase stem)
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
     "prott5": "#377eb8",
-    "prottucker": "#373bb7",
+    "prottucker": "#7342e5",
     "prostt5": "#1217b5",
     "clean": "#4daf4a",
     "esm1b": "#5fd35b",
@@ -247,7 +247,7 @@ def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
                     marker="",
                     linestyle="-",
                     color=line_color,
-                    alpha=0.7,
+                    alpha=0.2,
                     zorder=2,
                 )
 
@@ -424,6 +424,13 @@ def main():
         action="store_true",
         help="If set, exclude results from 'Random' embeddings from the plots.",
     )
+    parser.add_argument(
+        "--model_types",
+        type=str,
+        nargs="+",  # Allows multiple model types to be specified
+        default=None,  # Default to None, meaning all model types
+        help="Space-separated list of model types to include in the plots (fnn, linear, linear_distance, euclidean). If not specified, all are included.",
+    )
     args = parser.parse_args()
 
     # --- Load Data ---
@@ -456,6 +463,19 @@ def main():
         if results_df.empty:
             log.error(
                 "DataFrame is empty after filtering 'Random' entries. Cannot generate plots."
+            )
+            return
+
+    # --- Optional Filtering for Model Types ---
+    if args.model_types:
+        initial_count = len(results_df)
+        results_df = results_df[results_df["Model Type"].isin(args.model_types)].copy()
+        log.info(
+            f"--model_types specified. Filtered to {len(results_df)} entries from {initial_count}. Keeping: {args.model_types}"
+        )
+        if results_df.empty:
+            log.error(
+                f"DataFrame is empty after filtering for model types: {args.model_types}. Cannot generate plots."
             )
             return
 
