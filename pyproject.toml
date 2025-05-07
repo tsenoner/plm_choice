@@ -17,7 +17,14 @@ dependencies = [
     "torch>=2.5.1",
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [dependency-groups]
 dev = [
     "jupyter>=1.1.1",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
