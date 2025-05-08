@@ -161,6 +161,7 @@ def main():
                     print(f"Successfully evaluated {run_dir}")
             except Exception as e:
                 print(f"An exception occurred while evaluating {run_dir}: {e}")
+        # exit()
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 from scipy.optimize import curve_fit
+from matplotlib.colors import LogNorm
 
 
 def plot_true_vs_predicted(
@@ -22,9 +23,16 @@ def plot_true_vs_predicted(
     ax.grid(True, alpha=0.6)  # Draw grid behind other elements and set alpha
 
     hb = ax.hexbin(
-        targets, predictions, gridsize=25, cmap="viridis", mincnt=1, alpha=0.6, zorder=2
+        targets,
+        predictions,
+        gridsize=100,
+        cmap="viridis",
+        mincnt=1,
+        alpha=0.6,
+        zorder=2,
+        norm=LogNorm(),
     )  # Hexagonal binning to show point density
-    plt.colorbar(hb, label="counts")
+    plt.colorbar(hb, label="log(counts)")
 
     # Calculate and plot regression line
     slope, intercept, r_value, p_value, std_err = stats.linregress(targets, predictions)

@@ -98,7 +98,7 @@ This project aims to train and evaluate machine learning models to predict speci
 -   **Euclidean Baseline Integration:** Treated as a distinct non-trainable `model_type`.
 -   **Metrics Calculation:** Separated metric calculation logic into `evaluation/metrics.py`. Includes robust calculation of standard regression metrics and optional bootstrapping via `_bootstrap_stat` helper to estimate standard errors and confidence intervals for Pearson R^2 and Spearman Rho, providing insight into the stability of these correlation measures.
 -   **Output Format:** Evaluation results (metrics) are saved as raw numerical values in the `.txt` file for easier machine parsing and downstream analysis, while console output provides basic formatting.
--   **Plotting Enhancements:** The primary true vs. predicted plot has been updated to use hexagonal binning for better visualization of point density, especially with large datasets. It includes a clear regression line with its 95% confidence interval, and the grid is styled for better readability (transparent and behind plot elements). The y=x ideal line has been removed to reduce clutter, and the plot aspect ratio is no longer fixed, allowing axes to scale to their data.
+-   **Plotting Enhancements:** The primary true vs. predicted plot has been updated to use hexagonal binning with logarithmic color scaling (`LogNorm`) for better visualization of point density, especially with large datasets. It includes a clear regression line with its 95% confidence interval, and the grid is styled for better readability (transparent and behind plot elements). The y=x ideal line has been removed to reduce clutter, and the plot aspect ratio is no longer fixed, allowing axes to scale to their data.
 
 ## 7. Environment
 
