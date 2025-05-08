@@ -32,6 +32,13 @@ This project aims to train and evaluate machine learning models to predict speci
 -   **`run_experiments.py`:** (Project Root) Orchestrates the entire experimental workflow. Iterates through specified model types (`fnn`, `linear`, `linear_distance`, `euclidean`), target parameters, and all `.h5` embedding files found in the embedding directory. Extracts the base name of the `--csv_dir` directory (`<train_data_sub_dir>`). Performs redundancy checks based on the expected output path (`models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`), constructs this base path, and calls `train.py`, passing the base path via the `--output_base_dir` argument. Optionally calls `evaluate.py`.
 -   **`scripts/generate_random_embeddings.py`:** (Scripts Directory) Generates HDF5 files (`random_<dim>.h5`) containing random embeddings (standard normal distribution) for protein IDs found in a template HDF5 file (e.g., `prott5.h5`). These files are saved to the standard embedding directory (`data/processed/sprot_embs/`) and are intended to be used as input embeddings for the standard training workflow (`fnn`, `linear`, `linear_distance`) to establish a baseline.
 -   **`scripts/evaluate_multiple_runs.py`:** (Scripts Directory) Provides a flexible way to re-evaluate multiple model runs. It takes an `--input_path` which can be a high-level directory (e.g., `models/sprot_train`), a mid-level directory (e.g., `models/sprot_train/fnn/fident`), or a specific timestamped run directory. It recursively searches for valid run directories (identified by the presence of `tensorboard/hparams.yaml`) and then calls `src/unknown_unknowns/evaluate.py --run_dir <path_to_run_dir>` for each. This is useful for updating plots or re-calculating metrics for multiple existing runs with new evaluation code or plotting styles. Includes a `--dry_run` option.
+-   **`scripts/create_summary_grid_plots.py`:** (Scripts Directory) Generates composite grid images from individual evaluation plots.
+    -   **Purpose:** To provide a consolidated view of all embedding performances for a specific model type and target parameter combination.
+    -   **Inputs:**
+        -   `--input_path`: (Required, default: `models/sprot_train`) The base directory to search for model run outputs. Can be a high-level directory (e.g., `models/sprot_train`), a specific model/parameter directory, or even a direct path to an evaluation_results directory.
+        -   `--output_dir`: (Optional, default: `out/summary_grids/`) The directory where the output grid plots will be saved.
+    -   **Logic:** Recursively searches the `--input_path` for individual plot files (`*_results.png`) located within `evaluation_results` directories. It parses the directory structure to identify the model type, parameter name, embedding name, and timestamp for each plot. For each unique combination of model type, parameter name, and embedding, it selects the plot corresponding to the latest timestamp.
+    -   **Outputs:** Saves composite grid plot files (e.g., `grid_<model_type>_<param_name>.png`) into the `--output_dir`. Each grid displays all embedding-specific plots for a given model type and parameter, with embedding names as subplot titles.
 -   **`src/unknown_unknowns/train.py`:** Handles the training of a single model instance (`fnn`, `linear`, `linear_distance`) *or* sets up the run directory for the non-trainable Euclidean baseline within a specified output directory.
     -   Takes parameters via command-line arguments, including the base output directory (`--output_base_dir`) provided by `run_experiments.py`.
     -   Creates a timestamped subdirectory within the `--output_base_dir` for the specific run.
@@ -60,7 +67,9 @@ This project aims to train and evaluate machine learning models to predict speci
 -   **`src/unknown_unknowns/data/preprocessing.py`:** Contains scriptable logic to preprocess raw CSV data (e.g., applying NaN thresholds). Run via `uv run python src/unknown_unknowns/data/preprocessing.py --input_dir ... --output_dir ...`.
 -   **`src/unknown_unknowns/data/datasets.py`:** Contains data loading logic (`create_single_loader`, `H5PyDataset`) for handling HDF5 embedding files and CSV data files.
 -   **`src/unknown_unknowns/evaluation/metrics.py`:** Calculates standard regression metrics (MSE, RMSE, MAE, R2, Pearson, Spearman, and associated p-values). Includes optional bootstrapping (`_bootstrap_stat` helper) for Pearson R^2 and Spearman correlation coefficients to estimate standard error and confidence intervals. Returns raw numerical results.
--   **`src/unknown_unknowns/visualization/plot.py`:** Generates plots (e.g., true vs. predicted).
+-   **`src/unknown_unknowns/visualization/plot.py`:** Generates plots (e.g., true vs. predicted scatter plots from evaluation runs).
+    -   The primary function `plot_true_vs_predicted` creates hexagonal binning scatter plots with regression lines and 95% confidence intervals.
+    -   Recent enhancements include significantly increased font sizes for titles, labels, and legends, and reduced whitespace around the plot elements to improve clarity and ensure better presentation in composite views (like those generated by `scripts/create_summary_grid_plots.py`).
 -   **`src/unknown_unknowns/utils/helpers.py`:** Utility functions.
 
 ## 4. Data
@@ -114,6 +123,7 @@ This project aims to train and evaluate machine learning models to predict speci
 
 ## 9. Results Visualization
 
+### 9.1 Summary Metric Plots
 -   **Script:** `scripts/visualize_summary_results.py`
 -   **Purpose:** Parses the evaluation metric files (`_metrics.txt`) generated by `evaluate.py` across different runs and creates summary plots visualizing performance.
 -   **Inputs:**
@@ -143,3 +153,27 @@ This project aims to train and evaluate machine learning models to predict speci
     uv run python scripts/visualize_summary_results.py --results_dir models/sprot_train --output out/summary_plot_no_random --ignore-random
     ```
 -   **Dependencies:** Requires `pandas`, `seaborn`, and `matplotlib` to be installed in the environment.
+
+### 9.2 Grid Plots of Individual Evaluations
+
+-   **Script:** `scripts/create_summary_grid_plots.py`
+-   **Purpose:** Consolidates individual evaluation plots (true vs. predicted scatter plots generated by `evaluate.py`) into a single grid image for each model type and target parameter combination. This allows for quick visual comparison of performance across all embeddings for a specific experimental setup.
+-   **Inputs:**
+    -   `--input_path`: (Required, default: `models/sprot_train`) The base directory containing structured experiment results. The script flexibly searches for `evaluation_results/*_results.png` files under this path, expecting a structure like `.../<model_type>/<param_name>/<embedding_name>/<timestamp>/evaluation_results/`. It can handle high-level paths (e.g., `models/sprot_train`) or more specific ones (e.g., `models/sprot_train/fnn/fident`).
+    -   `--output_dir`: (Optional, default: `out/summary_grids/`) Directory to save the generated grid plots.
+-   **Outputs:**
+    -   **Grid Plot Files (PNG):** For each combination of `model_type` and `param_name` found, a single PNG file (e.g., `grid_fnn_fident.png`) is generated. This file contains a grid of all the individual true vs. predicted plots for different embeddings, using the latest timestamped result for each embedding. Subplot titles indicate the `embedding_name`.
+-   **Plot Characteristics:**
+    -   The script arranges the individual `*_results.png` images into a grid.
+    -   The main title of the grid plot indicates the `model_type` and `param_name`.
+    -   Subplot titles (above each individual plot image) indicate the `embedding_name`.
+    -   Font sizes and spacing have been optimized for readability.
+-   **Usage Example:**
+    ```bash
+    # Generate grid plots for all results in models/sprot_train, save to default out/summary_grids/
+    uv run python scripts/create_summary_grid_plots.py --input_path models/sprot_train
+
+    # Generate grid plots for only the 'fnn' model_type, save to a custom directory
+    uv run python scripts/create_summary_grid_plots.py --input_path models/sprot_train/fnn --output_dir out/custom_fnn_grids
+    ```
+-   **Dependencies:** Requires `matplotlib` to be installed in the environment.

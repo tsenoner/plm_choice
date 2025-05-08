@@ -16,7 +16,7 @@ def plot_true_vs_predicted(
     title: str = "True vs Predicted",
 ):
     """Generates a scatter plot of true vs predicted values."""
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(8, 8))
 
     ax = plt.gca()
     ax.set_axisbelow(True)  # Ensure grid is drawn below other artists
@@ -32,7 +32,9 @@ def plot_true_vs_predicted(
         zorder=2,
         norm=LogNorm(),
     )  # Hexagonal binning to show point density
-    plt.colorbar(hb, label="log(counts)")
+    cb = plt.colorbar(hb, label="log(counts)")
+    cb.set_label("log(counts)", fontsize=20)
+    cb.ax.tick_params(labelsize=18)
 
     # Calculate and plot regression line
     slope, intercept, r_value, p_value, std_err = stats.linregress(targets, predictions)
@@ -84,8 +86,9 @@ def plot_true_vs_predicted(
         zorder=3,
     )  # Ensure CI is between hexbins and regression line
 
-    ax.set_xlabel("True Values")
-    ax.set_ylabel("Predicted Values")
+    ax.set_xlabel("True Values", fontsize=20)
+    ax.set_ylabel("Predicted Values", fontsize=20)
+    ax.tick_params(axis="both", which="major", labelsize=18)
 
     plot_title = title
 
@@ -99,7 +102,8 @@ def plot_true_vs_predicted(
         elif not np.isnan(pearson_r_squared_val):  # Fallback: if only value is found
             plot_title += f"\nPearson R²: {pearson_r_squared_val:.4f}"
 
-    ax.set_title(plot_title)
-    ax.legend()
-    plt.savefig(output_file)
+    ax.set_title(plot_title, fontsize=24)
+    ax.legend(fontsize=18)
+    plt.tight_layout(pad=0.5)
+    plt.savefig(output_file, bbox_inches="tight", pad_inches=0.05)
     plt.close()
