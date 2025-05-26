@@ -20,6 +20,3 @@ wheels/
 
 # Models directory
 /models/
-
-# Test outputs directory
-/test_outputs/

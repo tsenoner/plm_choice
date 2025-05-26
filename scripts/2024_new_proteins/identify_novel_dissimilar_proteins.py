@@ -3,14 +3,13 @@ import pandas as pd
 import sqlite3
 
 # Define file paths
-NEW_PROTEINS_FILE = "data/explore/2024_newSeqs_pe12.tsv"
-UNIREF50_2024_DB = "data/explore/uniref50_2024_01.db"
-UNIREF50_2025_DB = "data/explore/uniref50_2025_01.db"
-# OUTPUT_FILE = "data/explore/newly_discovered_dissimilar_proteins_2024.txt" # Old output
+NEW_PROTEINS_FILE = "data/2024_new_proteins/2024_newSeqs_pe12.tsv"
+UNIREF50_2024_DB = "data/2024_new_proteins/uniref50_2024_01.db"
+UNIREF50_2025_DB = "data/2024_new_proteins/uniref50_2025_01.db"
 FINAL_PROTEINS_FASTA_FILE = (
-    "data/explore/newly_discovered_dissimilar_proteins_2024.fasta"
+    "data/2024_new_proteins/newly_discovered_dissimilar_proteins_2024.fasta"
 )
-SUMMARY_REPORT_FILE = "data/explore/analysis_summary_report.txt"
+SUMMARY_REPORT_FILE = "data/2024_new_proteins/analysis_summary_report.txt"
 
 ALL_2024_MEMBERS_TABLE_NAME = "all_2024_member_ids"
 

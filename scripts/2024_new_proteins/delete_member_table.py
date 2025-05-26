@@ -1,6 +1,6 @@
 import sqlite3
 
-DB_PATH = "data/explore/uniref50_2024_01.db"
+DB_PATH = "data/2024_new_proteins/uniref50_2024_01.db"
 TABLE_TO_DELETE = "all_2024_member_ids"
 
 
