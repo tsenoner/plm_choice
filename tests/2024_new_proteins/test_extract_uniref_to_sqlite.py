@@ -4,25 +4,32 @@ import sqlite3
 import json
 from pathlib import Path
 
-# Define paths relative to this file or the project root
+# --- Base Directory Setup ---
 THIS_FILE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = (
     THIS_FILE_DIR.parent.parent
-)  # Navigates up from tests/2024_new_proteins to project root
+)  # Assumes tests/<feature_subdir>/this_file.py
 
-SCRIPT_TO_TEST = PROJECT_ROOT / "scripts/2024_new_proteins/extract_uniref_to_sqlite.py"
-SAMPLE_CREATOR_SCRIPT = (
-    THIS_FILE_DIR / "create_test_sample.py"
-)  # Assumes create_test_sample.py is in the same directory
+# --- Configurable Path Components ---
+_FEATURE_NAME_PART = "2024_new_proteins"
+_SAMPLE_BASENAME = "sample_uniref_10"
+_SCRIPT_TO_TEST_FILENAME = "extract_uniref_to_sqlite.py"
+_SAMPLE_CREATOR_FILENAME = "create_test_sample.py"
+_SOURCE_DATA_INPUT_FILENAME = "uniref50_2025_01.xml.gz"
 
-TEST_DIR = THIS_FILE_DIR  # Output sample/db files in the test\'s own directory
-SAMPLE_XML_GZ = TEST_DIR / "sample_uniref_10.xml.gz"
-SAMPLE_XML = (
-    TEST_DIR / "sample_uniref_10.xml"
-)  # if create_test_sample.py also creates this
-SAMPLE_DB = TEST_DIR / "sample_uniref_10.db"
+# --- Derived Paths ---
+TEST_DIR = THIS_FILE_DIR
+SCRIPT_TO_TEST = (
+    PROJECT_ROOT / "scripts" / _FEATURE_NAME_PART / _SCRIPT_TO_TEST_FILENAME
+)
+SAMPLE_CREATOR_SCRIPT = TEST_DIR / _SAMPLE_CREATOR_FILENAME
+SOURCE_DATA_FOR_SAMPLE = (
+    PROJECT_ROOT / "data" / _FEATURE_NAME_PART / _SOURCE_DATA_INPUT_FILENAME
+)
+SAMPLE_XML_GZ = TEST_DIR / f"{_SAMPLE_BASENAME}.xml.gz"
+SAMPLE_XML = TEST_DIR / f"{_SAMPLE_BASENAME}.xml"  # May be used by other logic
+SAMPLE_DB = TEST_DIR / f"{_SAMPLE_BASENAME}.db"
 
-# Expected data for the first few entries based on user-provided JSON snippet
 EXPECTED_DATA = [
     {"cluster_id": "UniRef50_UPI002E2621C6", "members": ["UPI002E2621C6"]},
     {"cluster_id": "UniRef50_UPI00358F51CD", "members": ["UPI00358F51CD"]},
@@ -46,16 +53,19 @@ def sample_xml_setup():
         raise FileNotFoundError(
             f"Sample creator script not found: {SAMPLE_CREATOR_SCRIPT}"
         )
-
-    source_data_for_sample = PROJECT_ROOT / "data/explore/uniref50_2025_01.xml.gz"
-    if not source_data_for_sample.exists():
+    if not SOURCE_DATA_FOR_SAMPLE.exists():
         raise FileNotFoundError(
-            f"Source data for sample creation not found: {source_data_for_sample}"
+            f"Source data for sample creation not found: {SOURCE_DATA_FOR_SAMPLE}"
         )
 
     print(f"Running sample creator: {SAMPLE_CREATOR_SCRIPT}")
     process = subprocess.run(
-        ["python", str(SAMPLE_CREATOR_SCRIPT)],
+        [
+            "python",
+            str(SAMPLE_CREATOR_SCRIPT),
+            str(SOURCE_DATA_FOR_SAMPLE),
+            str(SAMPLE_XML_GZ),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -68,7 +78,7 @@ def sample_xml_setup():
         raise FileNotFoundError(f"Sample XML.gz file not created: {SAMPLE_XML_GZ}")
     print("Sample XML.gz created successfully.")
 
-    yield  # Tests run here
+    yield
 
     print("Cleaning up test environment (session-scoped sample XML)...")
     if SAMPLE_XML_GZ.exists():
@@ -95,7 +105,6 @@ def sample_db_setup(sample_xml_setup):
         "--output_sqlite",
         str(SAMPLE_DB),
     ]
-    # Correctly join the command list for printing
     cmd_str = " ".join(cmd)
     print(f"Running script: {cmd_str}")
     process = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -107,7 +116,7 @@ def sample_db_setup(sample_xml_setup):
         raise FileNotFoundError(f"SQLite DB not created by script: {SAMPLE_DB}")
     print(f"SQLite DB {SAMPLE_DB} created successfully for test.")
 
-    yield SAMPLE_DB  # Provide the DB path to the test function
+    yield SAMPLE_DB
 
     print(f"Cleaning up {SAMPLE_DB} after test.")
     if SAMPLE_DB.exists():
@@ -126,13 +135,14 @@ def test_database_creation_and_table_schema(sample_db_setup):
     assert cursor.fetchone() is not None, "'clusters' table not found."
 
     cursor.execute("PRAGMA table_info(clusters);")
-    columns_info = {row[1]: row[2] for row in cursor.fetchall()}  # name: type
+    columns_info = {row[1]: row[2] for row in cursor.fetchall()}
     assert "cluster_id" in columns_info, "'cluster_id' column missing."
     assert columns_info["cluster_id"].upper() == "TEXT", (
         "'cluster_id' column type is not TEXT."
     )
 
     # Check for PRIMARY KEY on cluster_id
+    # Need to re-execute PRAGMA or store its full result as fetchall exhausts the cursor.
     cursor.execute("PRAGMA table_info(clusters);")
     pk_column_info = next(
         (row for row in cursor.fetchall() if row[1] == "cluster_id"), None
@@ -179,11 +189,8 @@ def test_specific_cluster_data(sample_db_setup):
                 f"{expected['exact_member_count']} members. Found {len(actual_members)}."
             )
         elif "members" in expected:
-            # The current extract_uniref_to_sqlite.py uses list(dict.fromkeys(...)) which preserves order
-            # If order is not strictly guaranteed or important, sorted lists are better for comparison.
-            # For now, assuming order is preserved by the script as per original test logic.
-            # If member lists are large, comparing sets might be more efficient than sorting:
-            # assert set(actual_members) == set(expected["members"]), \
+            # Script preserves member order; direct comparison if order is guaranteed.
+            # Otherwise, use sorted comparison.
             assert sorted(actual_members) == sorted(expected["members"]), (
                 f"Member list mismatch for cluster {expected['cluster_id']}. "
                 f"Expected {sorted(expected['members'])}, got {sorted(actual_members)}"
