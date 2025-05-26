@@ -41,35 +41,35 @@ ModelConfig = Dict[str, Any]
 
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
     # --- ESM models via HuggingFace Transformers ---
-    "esm2_8M": {
+    "esm2_8m": {
         "hf_id": "facebook/esm2_t6_8M_UR50D",
         "loader": "transformers",
         "model_class": EsmModel,
         "tokenizer_class": AutoTokenizer,
         "family_key": "esm_transformer",
     },
-    "esm2_35M": {
+    "esm2_35m": {
         "hf_id": "facebook/esm2_t12_35M_UR50D",
         "loader": "transformers",
         "model_class": EsmModel,
         "tokenizer_class": AutoTokenizer,
         "family_key": "esm_transformer",
     },
-    "esm2_150M": {
+    "esm2_150m": {
         "hf_id": "facebook/esm2_t30_150M_UR50D",
         "loader": "transformers",
         "model_class": EsmModel,
         "tokenizer_class": AutoTokenizer,
         "family_key": "esm_transformer",
     },
-    "esm2_650M": {
+    "esm2_650m": {
         "hf_id": "facebook/esm2_t33_650M_UR50D",
         "loader": "transformers",
         "model_class": EsmModel,
         "tokenizer_class": AutoTokenizer,
         "family_key": "esm_transformer",
     },
-    "esm2_3B": {
+    "esm2_3b": {
         "hf_id": "facebook/esm2_t36_3B_UR50D",
         "loader": "transformers",
         "model_class": EsmModel,
@@ -77,7 +77,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "family_key": "esm_transformer",
     },
     # --- Native ESM3/ESMC models (requires 'esm' package) ---
-    "esm3_open_native": {
+    "esm3_open": {
         "hf_id": "esm3-open",
         "loader": "native_esm",
         "model_class": ESM3,
@@ -86,7 +86,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "notes": "Uses EvolutionaryScale/esm3-sm-open-v1 if hf_id is 'esm3-open', or specify full ID.",
         "requires_explicit_login": True,
     },
-    "esmc_300m_native": {
+    "esmc_300m": {
         "hf_id": "esmc_300m",
         "loader": "native_esm",
         "model_class": ESMC,
@@ -94,9 +94,9 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "family_key": "native_esmc",
         "requires_explicit_login": True,
     },
-    "esmc_600m_native": {
+    "esmc_600m": {
         "hf_id": "EvolutionaryScale/esmc-600m-2024-12",
-        "loader": "native_esm",  # Or "esmc_600m" alias
+        "loader": "native_esm",
         "model_class": ESMC,
         "tokenizer_class": None,
         "family_key": "native_esmc",
@@ -118,7 +118,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "family_key": "ankh",
     },
     # --- ProtT5 models via HuggingFace Transformers ---
-    "prot_t5_xl_uniref50": {
+    "prot_t5_xl": {
         "hf_id": "Rostlab/prot_t5_xl_half_uniref50-enc",
         "loader": "transformers",
         "model_class": T5EncoderModel,
@@ -127,7 +127,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "load_kwargs": {"torch_dtype": torch.float16},
         "post_load_hook": lambda m: m.half() if hasattr(m, "half") else m,
     },
-    "prost_t5_fp16": {
+    "prost_t5": {
         "hf_id": "Rostlab/ProstT5_fp16",
         "loader": "transformers",
         "model_class": T5EncoderModel,
@@ -453,24 +453,15 @@ def process_sequences_and_save(
     device: torch.device,
     h5_output_path: Path,
     max_seq_len: Optional[int],
-    model_key_for_filename: str,  # Used for HDF5 group key
+    model_key_for_filename: str,  # Used for logging and progress bar description
 ):
     """
     Processes sequences, generates embeddings, and saves them to an HDF5 file.
-    The HDF5 file will have a group named after the model_key_for_filename.
+    Embeddings are saved as top-level datasets in the HDF5 file.
     """
     num_successfully_embedded = 0
 
-    group_key = model_key_for_filename.replace("/", "_")  # Sanitize for HDF5 group name
-
     with h5py.File(h5_output_path, "a") as h5_file:  # Open in append mode
-        if group_key not in h5_file:
-            model_group = h5_file.create_group(group_key)
-            print(f"Created group '{group_key}' in HDF5 file.")
-        else:
-            model_group = h5_file[group_key]
-            print(f"Using existing group '{group_key}' in HDF5 file.")
-
         progress_bar = tqdm(
             sequences_to_process,
             unit="seq",
@@ -480,9 +471,9 @@ def process_sequences_and_save(
         for header, original_sequence in progress_bar:
             base_header = header.split()[0]
 
-            if base_header in model_group:
+            if base_header in h5_file:
                 tqdm.write(
-                    f"ℹ️ Embedding for '{base_header}' already exists in group '{group_key}'. Skipping."
+                    f"ℹ️ Embedding for '{base_header}' already exists in {h5_output_path}. Skipping."
                 )
                 num_successfully_embedded += 1
                 continue
@@ -519,7 +510,7 @@ def process_sequences_and_save(
                     )
                     continue
 
-                model_group.create_dataset(
+                h5_file.create_dataset(
                     name=base_header, data=embedding.astype(np.float32)
                 )
                 h5_file.flush()
@@ -554,9 +545,12 @@ def main():
         help="Key of the model to use (see MODEL_CONFIGS in script).",
     )
     parser.add_argument(
-        "output_hdf5_file",
+        "--output_hdf5_file",
         type=Path,
-        help="Path to the HDF5 file where embeddings will be saved (created/appended).",
+        default=None,
+        help="Optional path to the HDF5 file where embeddings will be saved. "
+        "If not provided, it defaults to '[fasta_filename_stem]_[model_key].h5' "
+        "in the same directory as the FASTA file.",
     )
     parser.add_argument(
         "--weights_dir",
@@ -599,6 +593,20 @@ def main():
         )
         sys.exit(1)
 
+    sanitized_model_key = args.model_key.replace("/", "_")
+
+    output_h5_path: Path
+    if args.output_hdf5_file is None:
+        output_h5_path = args.fasta_file.with_name(
+            f"{args.fasta_file.stem}_{sanitized_model_key}.h5"
+        )
+    else:
+        output_h5_path = args.output_hdf5_file
+
+    # Ensure the output directory exists
+    output_h5_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"ℹ️ Embeddings will be saved to: {output_h5_path}")
+
     # Removed NATIVE_ESM_AVAILABLE check for model config here
 
     max_len_to_use = args.max_seq_len
@@ -640,18 +648,15 @@ def main():
         family_key=family_key,
         embedding_type=args.embedding_type,
         device=device,
-        h5_output_path=args.output_hdf5_file,
+        h5_output_path=output_h5_path,
         max_seq_len=max_len_to_use,
         model_key_for_filename=args.model_key,
     )
 
     print("\n--- Embedding Generation Complete ---")
     print(f"Model: {args.model_key}")
-    print(f"Total sequences processed/found in HDF5 for this model: {num_embedded}")
-    sanitized_model_key = args.model_key.replace("/", "_")
-    print(
-        f"Embeddings saved in group '{sanitized_model_key}' in HDF5 file: {args.output_hdf5_file}"
-    )
+    print(f"Total sequences processed/found in HDF5: {num_embedded}")
+    print(f"Embeddings saved as datasets in HDF5 file: {output_h5_path}")
 
     del model
     del tokenizer

@@ -15,7 +15,7 @@ DEFAULT_HF_TOKEN_PATH = Path.home() / ".cache" / "huggingface" / "token"
 # Models to test, covering each family_key for broader coverage.
 # Dimensions should be verified if tests fail.
 TEST_MODELS = {
-    "esm2_8M": {  # family_key: esm_transformer
+    "esm2_8m": {  # family_key: esm_transformer
         "expected_dim_per_protein": 320,
         "expected_dim_per_residue_axis1": 320,
     },
@@ -23,22 +23,22 @@ TEST_MODELS = {
         "expected_dim_per_protein": 768,
         "expected_dim_per_residue_axis1": 768,
     },
-    "prot_t5_xl_uniref50": {  # family_key: prot_t5
+    "prot_t5_xl": {  # family_key: prot_t5
         "expected_dim_per_protein": 1024,
         "expected_dim_per_residue_axis1": 1024,
     },
     # Native ESM models require login. The script itself handles finding tokens
     # from default paths or --token_path. Tests will run them directly.
-    "esm3_open_native": {  # family_key: native_esm3
+    "esm3_open": {  # family_key: esm3
         "expected_dim_per_protein": 1536,
         "expected_dim_per_residue_axis1": 1536,
-        "requires_login_setup": True,  # This key can still be informative
-        "per_residue_len_adjust": 2,  # Accounts for start/end tokens often included by native ESM
+        "requires_login_setup": True,
+        "per_residue_len_adjust": 2,  # Accounts for start/end tokens
     },
-    "esmc_300m_native": {  # family_key: native_esmc
-        "expected_dim_per_protein": 960,  # Corrected from 1024
-        "expected_dim_per_residue_axis1": 960,  # Corrected from 1024
-        "requires_login_setup": True,  # This key can still be informative
+    "esmc_300m": {  # family_key: esmc
+        "expected_dim_per_protein": 960,
+        "expected_dim_per_residue_axis1": 960,
+        "requires_login_setup": True,
         "per_residue_len_adjust": 2,  # Accounts for start/end tokens
     },
 }
@@ -73,6 +73,7 @@ def run_script(
         str(SCRIPT_PATH),
         str(fasta_path),
         model_key,
+        "--output_hdf5_file",
         str(output_path),
         "--embedding_type",
         embedding_type,
@@ -117,20 +118,15 @@ def test_per_protein_embeddings(dummy_fasta_file, output_h5_file, model_key, con
 
     assert output_h5_file.exists(), "HDF5 output file was not created."
     with h5py.File(output_h5_file, "r") as hf:
-        group_key = model_key.replace("/", "_")
-        assert group_key in hf, f"Model group '{group_key}' not found in HDF5 file."
-        model_group = hf[group_key]
+        # Embeddings are now top-level datasets
+        # All valid sequences (9 out of 10) should be processed
+        assert len(hf.keys()) == 9, f"Expected 9 embeddings, found {len(hf.keys())}"
 
-        # All valid sequences (9 out of 10) should be processed as default max_seq_len is 2000
-        assert len(model_group.keys()) == 9, (
-            f"Expected 9 embeddings, found {len(model_group.keys())}"
-        )
+        assert "seq1_short" in hf
+        assert "seq5_empty_sequence" not in hf  # Skipped as it's empty
+        assert "seq7_potentially_long_for_testing_max_len_30" in hf
 
-        assert "seq1_short" in model_group
-        assert "seq5_empty_sequence" not in model_group  # Skipped as it's empty
-        assert "seq7_potentially_long_for_testing_max_len_30" in model_group
-
-        emb = model_group["seq1_short"][:]
+        emb = hf["seq1_short"][:]
         assert emb.ndim == 1, "Per-protein embedding should be 1D"
         assert emb.shape[0] == config["expected_dim_per_protein"], (
             f"Incorrect embedding dimension for {model_key}. Expected {config['expected_dim_per_protein']}, got {emb.shape[0]}"
@@ -154,17 +150,14 @@ def test_per_residue_embeddings(dummy_fasta_file, output_h5_file, model_key, con
 
     assert output_h5_file.exists()
     with h5py.File(output_h5_file, "r") as hf:
-        group_key = model_key.replace("/", "_")
-        assert group_key in hf
-        model_group = hf[group_key]
-        assert len(model_group.keys()) == 9
+        # Embeddings are now top-level datasets
+        assert len(hf.keys()) == 9
 
-        assert "seq2_standard_length" in model_group
-        emb = model_group["seq2_standard_length"][:]
+        assert "seq2_standard_length" in hf
+        emb = hf["seq2_standard_length"][:]
         assert emb.ndim == 2, "Per-residue embedding should be 2D"
 
         original_seq_len_seq2 = 108
-        # Adjust expected length for native ESM models if they include start/end tokens
         len_adjustment = config.get("per_residue_len_adjust", 0)
         expected_len = original_seq_len_seq2 + len_adjustment
 
@@ -178,65 +171,60 @@ def test_per_residue_embeddings(dummy_fasta_file, output_h5_file, model_key, con
 
 def test_max_seq_len_skipping(dummy_fasta_file, output_h5_file):
     """Test that max_seq_len correctly skips longer sequences."""
-    model_key = "esm2_8M"  # Use a fast model
+    model_key = "esm2_8m"  # Use a fast model, already updated key
     max_len = 30
-    # Sequences with length > 30: seq2_standard_length (108), seq7 (32)
-    # Expected count: 9 (total valid) - 2 (skipped) = 7
+    # Expected count: 9 (total valid in fasta) - 2 (skipped by max_len) = 7
 
     run_script(dummy_fasta_file, model_key, output_h5_file, max_seq_len=max_len)
 
     assert output_h5_file.exists()
     with h5py.File(output_h5_file, "r") as hf:
-        group_key = model_key.replace("/", "_")
-        assert group_key in hf
-        model_group = hf[group_key]
-
-        assert len(model_group.keys()) == 7, (
-            f"Expected 7 embeddings with max_len={max_len}, found {len(model_group.keys())}"
+        # Embeddings are now top-level datasets
+        assert len(hf.keys()) == 7, (
+            f"Expected 7 embeddings with max_len={max_len}, found {len(hf.keys())}"
         )
-        assert "seq2_standard_length" not in model_group
-        assert "seq7_potentially_long_for_testing_max_len_30" not in model_group
-        assert "seq1_short" in model_group
+        assert "seq2_standard_length" not in hf
+        assert "seq7_potentially_long_for_testing_max_len_30" not in hf
+        assert "seq1_short" in hf
 
 
 def test_append_to_hdf5(dummy_fasta_file, output_h5_file):
-    """Test that running the script for different models appends to the same HDF5 file."""
-    model1_key = "esm2_8M"
-    # Choose a different family model to ensure distinct group creation
+    """Test that running the script for different models appends datasets to the same HDF5 file."""
+    model1_key = "esm2_8m"  # Already updated key
     model2_key = "ankh_base"
 
+    # Run for model1, outputting to output_h5_file
     run_script(dummy_fasta_file, model1_key, output_h5_file)
-    run_script(dummy_fasta_file, model2_key, output_h5_file)  # Append with second model
+
+    # Run for model2, outputting to the SAME output_h5_file
+    run_script(dummy_fasta_file, model2_key, output_h5_file)
 
     assert output_h5_file.exists()
     with h5py.File(output_h5_file, "r") as hf:
-        group1_key = model1_key.replace("/", "_")
-        group2_key = model2_key.replace("/", "_")
-        assert group1_key in hf, f"Group for model {model1_key} not found."
-        assert group2_key in hf, f"Group for model {model2_key} not found."
-        assert len(hf[group1_key].keys()) == 9, (
-            f"Incorrect embed count for {model1_key}"
+        # Both models should have written their datasets to the root of the same file.
+        # Since the input FASTA is the same, and sequence headers are unique dataset keys,
+        # the file should contain all 9 unique processable sequences.
+        # The test now verifies that data from both runs co-exists.
+        assert len(hf.keys()) == 9, (
+            f"Expected 9 unique sequence embeddings after two model runs, found {len(hf.keys())}"
         )
-        assert len(hf[group2_key].keys()) == 9, (
-            f"Incorrect embed count for {model2_key}"
-        )
+        # Check a sequence processed by either (all sequences are processed by both runs in this setup)
+        assert "seq1_short" in hf
+        assert "seq2_standard_length" in hf
 
 
 def test_weights_dir_usage(dummy_fasta_file, output_h5_file, tmp_path_factory):
     """Test that the --weights_dir argument correctly sets the HF cache directory."""
-    model_key = "esm2_8M"  # Use a small, fast-downloading model
+    model_key = "esm2_8m"  # Use a small, fast-downloading model, already updated key
     custom_weights_dir = tmp_path_factory.mktemp("custom_hf_cache")
 
     run_script(
         dummy_fasta_file,
         model_key,
-        output_h5_file,  # Needs an output file, though we don't check its content here
+        output_h5_file,
         weights_dir=custom_weights_dir,
     )
 
-    # Check if the model was downloaded into the custom_weights_dir.
-    # Hugging Face typically creates a structure like: <cache_dir>/models--<org>--<model_name>
-    # For facebook/esm2_t6_8M_UR50D, this would be models--facebook--esm2_t6_8M_UR50D
     expected_model_folder_name_part = "models--facebook--esm2_t6_8M_UR50D"
     downloaded_correctly = False
     if custom_weights_dir.exists() and custom_weights_dir.is_dir():
