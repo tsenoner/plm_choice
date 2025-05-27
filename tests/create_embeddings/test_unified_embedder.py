@@ -23,7 +23,7 @@ TEST_MODELS = {
         "expected_dim_per_protein": 768,
         "expected_dim_per_residue_axis1": 768,
     },
-    "prot_t5_xl": {  # family_key: prot_t5
+    "prot_t5": {  # family_key: prot_t5 (using the key for prot_t5_xl_half_uniref50-enc)
         "expected_dim_per_protein": 1024,
         "expected_dim_per_residue_axis1": 1024,
     },
@@ -33,13 +33,11 @@ TEST_MODELS = {
         "expected_dim_per_protein": 1536,
         "expected_dim_per_residue_axis1": 1536,
         "requires_login_setup": True,
-        "per_residue_len_adjust": 2,  # Accounts for start/end tokens
     },
     "esmc_300m": {  # family_key: esmc
         "expected_dim_per_protein": 960,
         "expected_dim_per_residue_axis1": 960,
         "requires_login_setup": True,
-        "per_residue_len_adjust": 2,  # Accounts for start/end tokens
     },
 }
 
@@ -158,8 +156,7 @@ def test_per_residue_embeddings(dummy_fasta_file, output_h5_file, model_key, con
         assert emb.ndim == 2, "Per-residue embedding should be 2D"
 
         original_seq_len_seq2 = 108
-        len_adjustment = config.get("per_residue_len_adjust", 0)
-        expected_len = original_seq_len_seq2 + len_adjustment
+        expected_len = original_seq_len_seq2
 
         assert emb.shape[0] == expected_len, (
             f"Expected length {expected_len} for seq2 ({model_key}), got {emb.shape[0]}"

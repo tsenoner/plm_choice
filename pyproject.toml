@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib>=3.9.4",
     "pandas>=2.2.3",
     "pyarrow>=20.0.0",
+    "pyfaidx>=0.8.1.4",
     "scikit-learn>=1.6.0",
     "scipy>=1.13.1",
     "seaborn>=0.13.2",
@@ -29,6 +30,7 @@ where = ["src"]
 [dependency-groups]
 dev = [
     "jupyter>=1.1.1",
+    "jupytext>=1.17.1",
     "py-spy>=0.4.0",
     "pytest>=8.0.0",
 ]

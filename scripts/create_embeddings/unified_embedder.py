@@ -15,6 +15,7 @@ import h5py
 import torch
 import numpy as np
 from tqdm import tqdm
+from pyfaidx import Fasta
 
 # --- Hugging Face Transformers Imports ---
 from transformers import (
@@ -95,7 +96,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "requires_explicit_login": True,
     },
     "esmc_600m": {
-        "hf_id": "EvolutionaryScale/esmc-600m-2024-12",
+        "hf_id": "esmc_600m",
         "loader": "native_esm",
         "model_class": ESMC,
         "tokenizer_class": None,
@@ -118,7 +119,7 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "family_key": "ankh",
     },
     # --- ProtT5 models via HuggingFace Transformers ---
-    "prot_t5_xl": {
+    "prot_t5": {
         "hf_id": "Rostlab/prot_t5_xl_half_uniref50-enc",
         "loader": "transformers",
         "model_class": T5EncoderModel,
@@ -132,9 +133,10 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         "loader": "transformers",
         "model_class": T5EncoderModel,
         "tokenizer_class": T5Tokenizer,
-        "family_key": "prot_t5",
+        "tokenizer_load_kwargs": {"do_lower_case": False},
+        "family_key": "prost_t5",
         "load_kwargs": {"torch_dtype": torch.float16},
-        "post_load_hook": lambda m: m.half(),  # Apply .half() after loading
+        "post_load_hook": lambda m: m.half(),
     },
 }
 
@@ -201,29 +203,10 @@ def login_to_huggingface(token_path_str: Optional[str] = None):
 def read_fasta_sequences(fasta_path: Path) -> List[Tuple[str, str]]:
     """Reads sequences from a FASTA file."""
     sequences = []
-    current_header = None
-    current_seq_chunks = []
-
-    with fasta_path.open("r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if current_header:
-                    sequences.append((current_header, "".join(current_seq_chunks)))
-                current_header = line[1:]  # Store full header
-                current_seq_chunks = []
-            else:
-                if current_header is None:
-                    raise ValueError("FASTA parse error: sequence data before header.")
-                current_seq_chunks.append(line)
-
-    if current_header:  # Append the last sequence
-        sequences.append((current_header, "".join(current_seq_chunks)))
-
+    with Fasta(str(fasta_path)) as fasta_data:
+        for record in fasta_data:
+            sequences.append((record.name, str(record)))
     if not sequences:
-        # Use an f-string correctly here
         sys.stderr.write(f"WARNING: No sequences found in FASTA file: {fasta_path}\n")
     return sequences
 
@@ -240,8 +223,12 @@ def preprocess_sequence(sequence: str, model_family_key: str) -> str:
         .replace("B", "X")
     )
 
-    if model_family_key == "prot_t5":
-        # ProtT5 models often expect spaces between amino acids
+    if model_family_key == "prost_t5":
+        # Add spaces, then prefix for ProstT5
+        spaced_seq = " ".join(list(processed_seq))
+        return "<AA2fold> " + spaced_seq
+    elif model_family_key == "prot_t5":
+        # For regular ProtT5, only add spaces
         return " ".join(list(processed_seq))
     return processed_seq
 
@@ -267,6 +254,7 @@ def load_model_and_tokenizer(
     tokenizer_class: Optional[Type[PreTrainedTokenizer | Any]] = config.get(
         "tokenizer_class"
     )
+    tokenizer_load_kwargs = config.get("tokenizer_load_kwargs", {})
     family_key = config["family_key"]
     load_kwargs = config.get("load_kwargs", {})
     post_load_hook: Optional[Callable[[Any], None]] = config.get("post_load_hook")
@@ -292,7 +280,7 @@ def load_model_and_tokenizer(
             )
             if tokenizer_class:
                 tokenizer = tokenizer_class.from_pretrained(
-                    hf_id, cache_dir=actual_cache_dir
+                    hf_id, cache_dir=actual_cache_dir, **tokenizer_load_kwargs
                 )
 
         elif loader == "native_esm":
@@ -360,7 +348,10 @@ def generate_single_embedding(
             out = model.forward_and_sample(
                 tok.to(device), SamplingConfig(return_per_residue_embeddings=True)
             )
-            per_res_emb = out.per_residue_embedding.squeeze(0).cpu()  # (L, D)
+            per_res_emb_raw = out.per_residue_embedding.squeeze(0).cpu()  # (L, D)
+
+            # Directly slice to remove BOS/EOS tokens
+            cleaned_per_res_emb = per_res_emb_raw[1:-1, :]
 
         elif family_key == "native_esmc":
             # Native ESMC embedding extraction
@@ -373,64 +364,77 @@ def generate_single_embedding(
             out = model.logits(
                 tok.to(device), LogitsConfig(sequence=True, return_embeddings=True)
             )
-            per_res_emb = out.embeddings.squeeze(0).cpu()  # (L, D)
+            per_res_emb_raw = out.embeddings.squeeze(0).cpu()  # (L, D)
+
+            # Directly slice to remove BOS/EOS tokens
+            cleaned_per_res_emb = per_res_emb_raw[1:-1, :]
         else:
             raise ValueError(f"Unknown native ESM family key: {family_key}")
 
         if embedding_type == "per_protein":
-            return per_res_emb.mean(dim=0).numpy()
+            return cleaned_per_res_emb.mean(dim=0).numpy()
         elif embedding_type == "per_residue":
-            return per_res_emb.numpy()
+            return cleaned_per_res_emb.numpy()
         else:
             raise ValueError(f"Invalid embedding_type: {embedding_type}")
 
-    elif family_key in ["esm_transformer", "ankh", "prot_t5"]:
+    elif family_key in ["esm_transformer", "ankh", "prot_t5", "prost_t5"]:
         if tokenizer is None:
             raise ValueError(
                 f"Tokenizer is required for transformer model family: {family_key}"
             )
 
         # Common Transformers-based embedding generation
-        inputs = tokenizer(
-            sequence,
-            return_tensors="pt",
-            truncation=True,  # Ensure sequences fit, should be handled by max_seq_len mostly
-            padding=True,  # Pad to max length in batch or model max if not batching
-            add_special_tokens=True,
-        ).to(device)
+        tokenization_input = sequence
+        tokenizer_kwargs = {
+            "return_tensors": "pt",
+            "truncation": True,
+            "padding": True,
+            "add_special_tokens": True,
+        }
+
+        if family_key == "ankh":
+            tokenization_input = list(sequence)  # e.g. ['M', 'L', 'K']
+            tokenizer_kwargs["is_split_into_words"] = True
+
+        inputs = tokenizer(tokenization_input, **tokenizer_kwargs).to(device)
 
         with torch.no_grad():
             outputs = model(**inputs)
+        embeddings = outputs.last_hidden_state.squeeze(0).cpu().numpy()
 
-        embeddings = (
-            outputs.last_hidden_state.squeeze(0).cpu().numpy()
-        )  # (L_special, D)
+        # Correct slicing based on family_key
+        token_embeddings_for_avg = None
+        per_residue_slice = None
 
-        if embedding_type == "per_residue":
-            if family_key == "esm_transformer":
-                return embeddings[1:-1, :]  # Remove <cls> and <eos>
-            elif family_key in ["ankh", "prot_t5"]:
-                return embeddings[
-                    :-1, :
-                ]  # Remove <eos> (T5 tokenizers add it at the end)
-            else:  # Should not happen
-                return embeddings
+        if family_key == "esm_transformer":
+            # Skip <cls> and <eos>
+            token_embeddings_for_avg = embeddings[1:-1, :]
+            per_residue_slice = embeddings[1:-1, :]
+        elif family_key == "prost_t5":
+            # Skip <AA2fold> prefix (and potential BOS) and <eos>
+            token_embeddings_for_avg = embeddings[1:-1, :]
+            per_residue_slice = embeddings[1:-1, :]
+        elif family_key == "ankh":
+            token_embeddings_for_avg = embeddings[:-1, :]
+            per_residue_slice = embeddings[:-1, :]
+        elif family_key == "prot_t5":
+            token_embeddings_for_avg = embeddings[:-1, :]
+            per_residue_slice = embeddings[:-1, :]
+        else:
+            token_embeddings_for_avg = embeddings
+            per_residue_slice = embeddings
 
-        elif embedding_type == "per_protein":
-            if family_key == "esm_transformer":
-                token_embeddings = embeddings[1:-1, :]
-            elif family_key in ["ankh", "prot_t5"]:
-                token_embeddings = embeddings[:-1, :]
-            else:  # Should not happen
-                token_embeddings = embeddings
-
-            if token_embeddings.shape[0] == 0:  # Should not happen if sequence is valid
+        if embedding_type == "per_protein":
+            if token_embeddings_for_avg.shape[0] == 0:
                 print(
-                    f"WARNING: No token embeddings to average for sequence after stripping special tokens. Family: {family_key}",
+                    f"WARNING: No token embeddings to average for sequence after slicing. Family: {family_key}, Original shape: {embeddings.shape}",
                     file=sys.stderr,
                 )
-                return np.array([])  # Or handle as error
-            return token_embeddings.mean(axis=0)
+                return np.array([])
+            return token_embeddings_for_avg.mean(axis=0)
+        elif embedding_type == "per_residue":
+            return per_residue_slice
         else:
             raise ValueError(f"Invalid embedding_type: {embedding_type}")
     else:
@@ -482,23 +486,27 @@ def process_sequences_and_save(
                 tqdm.write(f"⚠️ Sequence '{base_header}' is empty. Skipping.")
                 continue
 
-            if max_seq_len is not None and len(original_sequence) > max_seq_len:
+            # Determine sequence length for filtering (before ProstT5 prefixing/spacing)
+            seq_len_for_check = len(original_sequence)
+            if max_seq_len is not None and seq_len_for_check > max_seq_len:
                 tqdm.write(
-                    f"⚠️ Sequence '{base_header}' (length {len(original_sequence)}) "
+                    f"⚠️ Sequence '{base_header}' (length {seq_len_for_check}) "
                     f"exceeds max length {max_seq_len}. Skipping."
                 )
                 continue
 
             progress_bar.set_postfix_str(
-                f"Processing: {base_header[:25]}... (len: {len(original_sequence)})"
+                f"Processing: {base_header[:25]}... (len: {seq_len_for_check})"
             )
 
             try:
-                processed_sequence = preprocess_sequence(original_sequence, family_key)
+                processed_sequence_for_embedding = preprocess_sequence(
+                    original_sequence, family_key
+                )
                 embedding = generate_single_embedding(
                     model,
                     tokenizer,
-                    processed_sequence,
+                    processed_sequence_for_embedding,
                     family_key,
                     embedding_type,
                     device,
@@ -662,6 +670,18 @@ def main():
     del tokenizer
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+    # Clean up .fai file
+    fai_file_path = args.fasta_file.with_suffix(args.fasta_file.suffix + ".fai")
+    if fai_file_path.is_file():
+        try:
+            fai_file_path.unlink()
+            print(f"✓ Cleaned up index file: {fai_file_path}")
+        except OSError as e:
+            print(
+                f"⚠️ Could not delete index file {fai_file_path}: {e}", file=sys.stderr
+            )
+
     print("✓ Done.")
 
 
