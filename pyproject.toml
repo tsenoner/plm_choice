@@ -33,6 +33,7 @@ dev = [
     "jupytext>=1.17.1",
     "py-spy>=0.4.0",
     "pytest>=8.0.0",
+    "python-docx>=1.1.2",
 ]
 
 [tool.pytest.ini_options]
