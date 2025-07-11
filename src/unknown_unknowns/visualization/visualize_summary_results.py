@@ -32,6 +32,9 @@ PLM_SIZES: Dict[str, int] = {
     "esm2_150m": 150_000_000,
     "esm2_650m": 650_000_000,
     "esm2_3b": 3_000_000_000,
+    "esmc_300m": 300_000_000,
+    "esmc_600m": 600_000_000,
+    "esm3_open": 1_400_000_000,
     "ankh_base": 450_000_000,
     "ankh_large": 1_150_000_000,
     "random_1024": 0,
@@ -50,6 +53,9 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
     "esm2_150m": "ESM-2",
     "esm2_650m": "ESM-2",
     "esm2_3b": "ESM-2",
+    "esmc_300m": "ESM-C",
+    "esmc_600m": "ESM-C",
+    "esm3_open": "ESM-3",
     "ankh_base": "Ankh",
     "ankh_large": "Ankh",
     "random_1024": "Random",
@@ -58,7 +64,7 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
 
 # Color map for individual embeddings (lowercase stem)
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    "prott5": "#377eb8",
+    "prott5": "#ff1493",
     "prottucker": "#7342e5",
     "prostt5": "#1217b5",
     "clean": "#4daf4a",
@@ -68,6 +74,9 @@ EMBEDDING_COLOR_MAP: Dict[str, str] = {
     "esm2_150m": "#f46d43",
     "esm2_650m": "#d73027",
     "esm2_3b": "#a50026",
+    "esmc_300m": "#17becf",
+    "esmc_600m": "#1f77b4",
+    "esm3_open": "#984ea3",
     "ankh_base": "#ffd700",
     "ankh_large": "#a88c01",
     "random_1024": "#808080",  # Grey for random
@@ -84,7 +93,7 @@ MODEL_MARKER_MAP: Dict[str, str] = {
 }
 
 # Families for which connecting lines should be drawn in the plot
-FAMILIES_TO_CONNECT: List[str] = ["ProtT5", "ESM-2", "Ankh", "ESM-1"]
+FAMILIES_TO_CONNECT: List[str] = ["ProtT5", "ESM-2", "ESM-C", "ESM-3", "Ankh", "ESM-1"]
 
 
 # --- Data Parsing ---
@@ -257,27 +266,44 @@ def _create_embedding_legend(fig: plt.Figure, embeddings: List[str]) -> plt.lege
     handles = []
     labels = []
     log.debug(f"Creating embedding legend for: {sorted(embeddings)}")
-    # Sort by embedding name for the legend itself
-    for embedding_name in sorted(embeddings):
+
+    # Group embeddings by family, then sort within each family by size
+    family_groups = {}
+    for embedding_name in embeddings:
         key = embedding_name.lower()
-        color = EMBEDDING_COLOR_MAP.get(key, "grey")
-        # Use a square marker for the color legend instead of a patch
-        handles.append(
-            mlines.Line2D(
-                [], [], color=color, marker="s", linestyle="None", markersize=7
+        family = EMBEDDING_FAMILY_MAP.get(key, "Unknown")
+        plm_size = PLM_SIZES.get(key, 0)  # Default to 0 if not found
+
+        if family not in family_groups:
+            family_groups[family] = []
+        family_groups[family].append((embedding_name, plm_size))
+
+    # Sort families alphabetically, and within each family sort by size
+    for family in sorted(family_groups.keys()):
+        # Sort embeddings within family by size, then by name for consistency
+        family_embeddings = sorted(family_groups[family], key=lambda x: (x[1], x[0]))
+
+        for embedding_name, _ in family_embeddings:
+            key = embedding_name.lower()
+            color = EMBEDDING_COLOR_MAP.get(key, "grey")
+            # Use a square marker for the color legend instead of a patch
+            handles.append(
+                mlines.Line2D(
+                    [], [], color=color, marker="s", linestyle="None", markersize=7
+                )
             )
-        )
-        # Use "Random" as label if key is "random_1024", else use original name
-        label = "Random" if key == "random_1024" else embedding_name
-        labels.append(label)
+            # Use "Random" as label if key is "random_1024", else use original name
+            label = "Random" if key == "random_1024" else embedding_name
+            labels.append(label)
 
     return fig.legend(
         handles=handles,
         labels=labels,
-        loc="center left",
-        bbox_to_anchor=(0.88, 0.65),
+        loc="upper center",
+        bbox_to_anchor=(0.35, 0.2),
         frameon=False,
         title="Embedding",
+        ncol=6,  # Display in multiple columns for better space usage
     )
 
 
@@ -298,10 +324,11 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
     return fig.legend(
         handles=handles,
         labels=labels,
-        loc="upper left",
-        bbox_to_anchor=(0.88, 0.30),
+        loc="upper center",
+        bbox_to_anchor=(0.8, 0.2),
         frameon=False,
         title="Model Type",
+        ncol=4,  # Display in multiple columns
     )
 
 
@@ -350,6 +377,8 @@ def generate_metric_plot(
         markers=MODEL_MARKER_MAP,
         kind="scatter",
         s=100,
+        height=6,  # Make plots taller/more rectangular
+        aspect=0.8,  # Adjust aspect ratio for more rectangular shape
         facet_kws={"sharey": True, "sharex": False},
         legend=False,
         zorder=5,
@@ -388,7 +417,7 @@ def generate_metric_plot(
     all_model_types = df["Model Type"].unique().tolist()
     _create_embedding_legend(g.figure, all_embeddings)
     _create_model_type_legend(g.figure, all_model_types)
-    plt.tight_layout(rect=[0, 0, 0.88, 0.97])
+    plt.tight_layout(rect=[0, 0.2, 1.0, 0.97])
 
     # Save the figure
     try:
@@ -431,6 +460,13 @@ def main():
         default=None,  # Default to None, meaning all model types
         help="Space-separated list of model types to include in the plots (fnn, linear, linear_distance, euclidean). If not specified, all are included.",
     )
+    parser.add_argument(
+        "--exclude_plms",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Space-separated list of pLM names (embedding names) to exclude from the plots.",
+    )
     args = parser.parse_args()
 
     # --- Load Data ---
@@ -463,6 +499,19 @@ def main():
         if results_df.empty:
             log.error(
                 "DataFrame is empty after filtering 'Random' entries. Cannot generate plots."
+            )
+            return
+
+    # --- Optional Filtering for PLMs ---
+    if args.exclude_plms:
+        initial_count = len(results_df)
+        results_df = results_df[~results_df["Embedding"].isin(args.exclude_plms)].copy()
+        log.info(
+            f"--exclude-plms flag set. Filtered out {initial_count - len(results_df)} entries for: {args.exclude_plms}"
+        )
+        if results_df.empty:
+            log.error(
+                "DataFrame is empty after filtering excluded pLMs. Cannot generate plots."
             )
             return
 
