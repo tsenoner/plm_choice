@@ -64,9 +64,9 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
 
 # Color map for individual embeddings (lowercase stem)
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    "prott5": "#ff1493",
-    "prottucker": "#7342e5",
-    "prostt5": "#1217b5",
+    "prott5": "#ff1493",  # Deep pink - ProtT5 family base color
+    "prottucker": "#ff69b4",  # Hot pink - Close to prott5
+    "prostt5": "#dc143c",  # Crimson - Close to prott5 family
     "clean": "#4daf4a",
     "esm1b": "#5fd35b",
     "esm2_8m": "#fdae61",

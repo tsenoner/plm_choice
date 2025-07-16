@@ -12,6 +12,23 @@ import os
 STD_BORDER_SPEC = {"val": "single", "sz": "4", "color": "auto"}  # 0.5pt line
 NO_BORDER_SPEC = {"val": "nil"}  # No border
 
+# Model sizes in parameters
+PLM_SIZES = {
+    "prott5": 1_500_000_000,
+    "prottucker": 1_500_000_000,
+    "prostt5": 1_500_000_000,
+    "clean": 650_000_000,
+    "esm1b": 650_000_000,
+    "esm2_8m": 8_000_000,
+    "esm2_35m": 35_000_000,
+    "esm2_150m": 150_000_000,
+    "esm2_650m": 650_000_000,
+    "esm2_3b": 3_000_000_000,
+    "ankh_base": 450_000_000,
+    "ankh_large": 1_150_000_000,
+    "random_1024": 0,
+}
+
 
 def _set_cell_border(cell, **kwargs):
     """Set specific borders for a cell. kwargs can be top, bottom, left, right.
@@ -82,7 +99,13 @@ def create_word_metric_tables(
     doc.add_heading("Metrics Summary Tables", level=0)
 
     metrics_to_tabulate = ["Pearson R2", "MAE", "Spearman", "R2"]
-    model_type_columns = sorted(df["Model Type"].unique())
+    # Sort model types by their parameter size
+    model_type_columns = sorted(
+        df["Model Type"].unique(),
+        key=lambda x: PLM_SIZES.get(
+            x.lower(), float("inf")
+        ),  # Use model size for sorting, default to inf if unknown
+    )
     parameter_names = sorted(df["Parameter"].unique())
 
     table_style_to_apply = "Table Grid"
@@ -147,8 +170,12 @@ def create_word_metric_tables(
         data_row_counter_for_banding = 0
 
         for param_name in parameter_names:
+            # Get embeddings for this parameter and sort them by model size
             embeddings_for_param = sorted(
-                df[df["Parameter"] == param_name]["Embedding"].unique()
+                df[df["Parameter"] == param_name]["Embedding"].unique(),
+                key=lambda x: PLM_SIZES.get(
+                    x.lower(), float("inf")
+                ),  # Sort by model size
             )
             if not embeddings_for_param:
                 continue
