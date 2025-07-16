@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("matplotlib").setLevel(logging.INFO)
 
 # --- Project Constants & Configuration ---
-# These match the constants from visualize_summary_results.py for consistency
+# These match the constants from create_performance_summary_plots.py for consistency
 
 PLM_SIZES: Dict[str, int] = {
     "prott5": 1_500_000_000,
@@ -178,7 +178,7 @@ class EmbeddingComparisonVisualizer:
             if not col.replace("dist_", "").lower().startswith("random")
         ]
 
-        # Sort by PLM family, then by size within family (same as visualize_summary_results.py)
+        # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
         def get_sort_key(col: str) -> tuple:
             embedding_name = col.replace("dist_", "").lower()
             family = EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown")

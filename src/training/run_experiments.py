@@ -40,7 +40,8 @@ def find_latest_run_dir(base_dir: Path) -> Optional[Path]:
 
 
 def main(args):
-    project_root = Path(__file__).parent.resolve()
+    # Since this script is in src/training/, go up two levels to get project root
+    project_root = Path(__file__).parent.parent.parent.resolve()
     # Use the provided embeddings directory path
     embeddings_dir = args.embeddings_dir.resolve()
     if not embeddings_dir.is_dir():
@@ -146,7 +147,7 @@ def main(args):
                     "uv",
                     "run",
                     "python",
-                    str(project_root / "src" / "unknown_unknowns" / "train.py"),
+                    str(project_root / "src" / "training" / "train.py"),
                     "--model_type",
                     model_type,
                     "--param_name",
@@ -229,7 +230,7 @@ def main(args):
                         "uv",
                         "run",
                         "python",
-                        str(project_root / "src" / "unknown_unknowns" / "evaluate.py"),
+                        str(project_root / "src" / "evaluation" / "evaluate.py"),
                         "--run_dir",
                         str(run_dir_to_evaluate),
                     ]

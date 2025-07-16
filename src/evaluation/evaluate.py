@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -9,15 +8,15 @@ import yaml
 import pytorch_lightning as pl
 
 # Project specific imports
-from data.datasets import create_single_loader
-from evaluation.metrics import calculate_regression_metrics
-from models.predictor import (
+from src.shared.datasets import create_single_loader
+from src.evaluation.metrics import calculate_regression_metrics
+from src.training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,
 )
-from visualization.plot import plot_true_vs_predicted
-from utils.helpers import get_device
+from src.visualization.plot_utils import plot_true_vs_predicted
+from src.shared.helpers import get_device
 
 # --- Computation and Caching Helpers ---
 

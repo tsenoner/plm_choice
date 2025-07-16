@@ -297,7 +297,7 @@ The module includes comprehensive error handling:
 This visualization module integrates seamlessly with the project's existing workflow:
 
 1. **Data Preparation**: Use processed CSV files from the standard pipeline
-2. **Color Consistency**: Matches colors from `visualize_summary_results.py`
+2. **Color Consistency**: Matches colors from `create_performance_summary_plots.py`
 3. **Output Structure**: Follows project conventions for output organization
 4. **Logging**: Uses project-standard logging configuration
 5. **CLI Interface**: Consistent with other project scripts

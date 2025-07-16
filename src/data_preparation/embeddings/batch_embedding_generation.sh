@@ -18,10 +18,10 @@ if [ ! -f "${FASTA_FILE}" ]; then
 fi
 
 # Path to the unified embedder script
-EMBEDDER_SCRIPT_REL_PATH="scripts/create_embeddings/unified_embedder.py"
+EMBEDDER_SCRIPT_REL_PATH="src/data_preparation/embeddings/embedding_generation.py"
 # Attempt to find the script relative to this script's location or assuming common project structure
 SCRIPT_DIR=$(dirname "$0")
-PROJECT_ROOT="${SCRIPT_DIR}/../.."
+PROJECT_ROOT="${SCRIPT_DIR}/../../.."
 EMBEDDER_SCRIPT="${PROJECT_ROOT}/${EMBEDDER_SCRIPT_REL_PATH}"
 
 if [ ! -f "${EMBEDDER_SCRIPT}" ]; then

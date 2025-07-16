@@ -64,7 +64,7 @@ def main():
             "Flexibly finds and re-evaluates model runs to update plots and metrics. "
             "Takes an input path and intelligently finds all individual run directories "
             "(containing tensorboard/hparams.yaml) beneath it, then calls "
-            "src/unknown_unknowns/evaluate.py for each."
+            "src/evaluation/evaluate.py for each."
         )
     )
     parser.add_argument(
@@ -78,8 +78,8 @@ def main():
     parser.add_argument(
         "--evaluate_script_path",
         type=Path,
-        default=Path("src/unknown_unknowns/evaluate.py"),
-        help="Path to the evaluate.py script (default: src/unknown_unknowns/evaluate.py).",
+        default=Path("src/evaluation/evaluate.py"),
+        help="Path to the evaluate.py script (default: src/evaluation/evaluate.py).",
     )
     parser.add_argument(
         "--dry_run",

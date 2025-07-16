@@ -11,15 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Type
 import yaml
-
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
-from data.datasets import create_single_loader, get_embedding_size
-from models.predictor import (
+from src.shared.datasets import create_single_loader, get_embedding_size
+from src.training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,

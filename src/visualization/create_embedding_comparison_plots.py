@@ -25,10 +25,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add the src directory to the path so we can import our modules
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from unknown_unknowns.visualization.pairwise_embedding_comparison import (
+from src.visualization.pairwise_embedding_comparison import (
     EmbeddingComparisonVisualizer,
     logger,
 )
@@ -92,7 +89,7 @@ def main():
         logger.error(f"Data file not found: {args.data_path}")
         sys.exit(1)
 
-    logger.info(f"Starting pairwise embedding comparison visualization")
+    logger.info("Starting pairwise embedding comparison visualization")
     logger.info(f"Data: {args.data_path}")
     logger.info(f"Output: {args.output_dir}")
     logger.info(f"Sample size: {args.sample_size or 'All data'}")
