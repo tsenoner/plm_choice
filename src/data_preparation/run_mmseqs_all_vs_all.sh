@@ -55,12 +55,15 @@ fi
 echo "Step 2: Running all-against-all search..."
 if [ ! -f "${RESULT_DB_NAME}.dbtype" ]; then
     mmseqs search "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$SEARCH_TMP_DIR" \
-        -s 9 \
-        --exhaustive-search 1 \
+        -s 7.5 \
         -e 0.001 \
-        --max-seqs 10000 \
         -a \
         --threads "$THREADS"
+        # --alignment-mode 3 \
+        # --max-seqs 1000 \
+        # --num-iterations 3 \
+        # --e-profile 1e-10 \
+        # --exhaustive-search 1
     echo "Search completed. Results database: $RESULT_DB_NAME"
 else
     echo "Search results database ${RESULT_DB_NAME} already exists. Skipping search."
@@ -68,7 +71,8 @@ fi
 
 # Step 3: Convert Results to Human-Readable Format
 echo "Step 3: Converting results to TSV format..."
-mmseqs convertalis "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$RESULT_TSV" --format-mode 4 --format-output query,target,fident,alnlen,mismatch,gapopen,nident,qaln,taln,qcov,tcov,evalue
+mmseqs convertalis "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$RESULT_TSV" --format-mode 4 --format-output query,target,fident,alnlen,mismatch,gapopen,nident,qcov,tcov,evalue
+# mmseqs convertalis "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$RESULT_TSV" --format-mode 4 --format-output query,target,fident,alnlen,mismatch,gapopen,nident,qaln,taln,qcov,tcov,evalue
 echo "Conversion complete. Results saved to: $RESULT_TSV"
 
 echo "--- All-vs-All MMseqs2 Search Finished Successfully ---"
@@ -76,7 +80,6 @@ echo "Output file: $RESULT_TSV"
 echo "Columns: query, target, fident, alnlen, nident, mismatch, qcov, tcov, evalue"
 
 # Clean up temporary directory
-# Comment out if you want to inspect intermediate files
 # echo "Cleaning up temporary directory: $TMP_DIR"
 # rm -rf "$TMP_DIR"
 

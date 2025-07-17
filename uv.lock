@@ -1445,6 +1445,17 @@ wheels = [
 ]
 
 [[package]]
+name = "matplotlib-venn"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/f7/47bddf95492f4d1370ed7164d2b16407805e8eeb38231361de65d387a562/matplotlib-venn-1.1.2.tar.gz", hash = "sha256:6f2b07a03e9bb5a62de2f32f965216739e175176f9d654dd19e7af2c22ec36e3", size = 40821, upload-time = "2025-02-25T10:44:24.294Z" }
+
+[[package]]
 name = "mdit-py-plugins"
 version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2936,6 +2947,7 @@ dependencies = [
     { name = "lightning" },
     { name = "lxml" },
     { name = "matplotlib" },
+    { name = "matplotlib-venn" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyfaidx" },
@@ -2966,6 +2978,7 @@ requires-dist = [
     { name = "lightning", specifier = ">=2.5.0.post0" },
     { name = "lxml", specifier = ">=5.4.0" },
     { name = "matplotlib", specifier = ">=3.9.4" },
+    { name = "matplotlib-venn", specifier = ">=1.1.2" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "pyarrow", specifier = ">=20.0.0" },
     { name = "pyfaidx", specifier = ">=0.8.1.4" },
