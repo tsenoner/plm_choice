@@ -20,3 +20,6 @@ wheels/
 
 # Models directory
 /models/
+
+# Local scripts (server-specific)
+scripts/
