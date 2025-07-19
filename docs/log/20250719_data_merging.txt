@@ -66,7 +66,7 @@ Available modes:
 ======================================================================
 📊 Final dataset: 188,021,387 rows × 5 columns
 📈 Plots saved to: out/data_analysis/
-💾 Dataset saved to: data/final/merged_protein_similarity.parquet
+💾 Dataset saved to: data/interm/sprot_pre2024/merged_protein_similarity.parquet
 🔍 Final columns: ['query', 'target', 'fident', 'hfsp', 'alntmscore']
 Rows with both HFSP and alnTMscore present:
 shape: (5, 5)

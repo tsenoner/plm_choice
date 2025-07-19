@@ -75,14 +75,12 @@ class ProteinAnalysisPipeline:
             foldseek_parquet = self.foldseek_tsv.with_stem(
                 f"{self.foldseek_tsv.stem}_test"
             ).with_suffix(".parquet")
-            final_merged = (
-                self.final_data_dir / "merged_protein_similarity_test.parquet"
-            )
+            final_merged = self.interm_dir / "merged_protein_similarity_test.parquet"
             plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}_test")
         else:
             mmseqs_parquet = self.mmseqs_tsv.with_suffix(".parquet")
             foldseek_parquet = self.foldseek_tsv.with_suffix(".parquet")
-            final_merged = self.final_data_dir / "merged_protein_similarity.parquet"
+            final_merged = self.interm_dir / "merged_protein_similarity.parquet"
             plots_dir = self.plots_dir
 
         return {
