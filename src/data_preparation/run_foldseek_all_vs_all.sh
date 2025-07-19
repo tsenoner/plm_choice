@@ -188,7 +188,7 @@ echo "Step 3: Converting results to TSV format..."
 # Format output: query, target, fident, evalue, qcov, tcov, lddt, rmsd, alntmscore, qlen, tlen
 foldseek convertalis "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$RESULT_TSV" \
     --format-mode 4 \
-    --format-output "query,target,fident,alnlen,mismatch,gapopen,nident,evalue,qcov,tcov,lddt,rmsd,alntmscore,qlen,tlen"
+    --format-output "query,target,fident,evalue,qcov,tcov,alntmscore"
 echo "Conversion complete. Results saved to: $RESULT_TSV"
 
 # Step 4: Display summary statistics
@@ -203,7 +203,7 @@ head -5 "$RESULT_TSV"
 echo "--- All-vs-All Foldseek Search Finished Successfully ---"
 echo "Input: $INPUT_PATH ($INPUT_FORMAT format)"
 echo "Output file: $RESULT_TSV"
-echo "Columns: query, target, fident, alnlen, mismatch, gapopen, nident, evalue, qcov, tcov, lddt, rmsd, alntmscore, qlen, tlen"
+echo "Columns: query, target, fident, evalue, qcov, tcov, alntmscore"
 
 # Clean up temporary directory
 # echo "Cleaning up temporary directory: $TMP_DIR"

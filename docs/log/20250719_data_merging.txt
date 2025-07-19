@@ -1,0 +1,97 @@
+❯ uvrun python src/data_preparation/merge_datasets.py
+🧬 Protein Similarity Analysis Pipeline
+==================================================
+Available modes:
+1. Test mode (recommended first) - 1M rows per dataset
+2. Full mode - Complete datasets
+
+🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE
+======================================================================
+🚀 FULL MODE: Processing complete datasets
+
+📁 Configuration:
+   MMSeqs2 TSV:     data/interm/sprot_pre2024/mmseqs/sprot_all_vs_all.tsv
+   FoldComp TSV:    data/interm/sprot_pre2024/foldcomp/plddt.tsv
+   FoldSeek TSV:    data/interm/sprot_pre2024/foldseek/afdb_swissprot_v4_all_vs_all.tsv
+   Plots output:    out/data_analysis
+   Final merged:    data/final/merged_protein_similarity.parquet
+
+🔄 Processing MMSeqs2 data...
+📖 Loaded parquet: data/interm/sprot_pre2024/mmseqs/sprot_all_vs_all.parquet
+🗑️  MMSeqs2: Removed 542,238 self-matches
+🧮 Computing HFSP scores...
+📊 MMSeqs2 final shape: (101948593, 12)
+
+🔄 Processing FoldComp data...
+📊 FoldComp final shape: (542378, 4)
+
+💾 Saving low confidence protein IDs...
+💾 Saved 47,264 low confidence IDs
+
+🔄 Processing FoldSeek data...
+📖 Loaded parquet: data/interm/sprot_pre2024/foldseek/afdb_swissprot_v4_all_vs_all.parquet
+🗑️  FoldSeek: Removed 539,280 self-matches
+🗑️  Removed 14,288,242 rows with low confidence structures (5.2%)
+📊 FoldSeek final shape: (262054054, 4)
+
+📊 Creating distribution plots...
+📊 Skipping existing plot: mmseqs_coverage.png
+📊 Skipping existing plot: mmseqs_pide.png
+📊 Skipping existing plot: mmseqs_hfsp.png
+📊 Skipping existing plot: foldcomp_plddt.png
+📊 Skipping existing plot: foldseek_coverage.png
+📊 Skipping existing plot: foldseek_tmscore.png
+📊 Created 1 new plots, 6 already existed in out/data_analysis
+
+🔗 Applying thresholds and merging datasets...
+🎯 MMSeqs2 thresholds: 28,619,136 removed (28.1%), 73,329,457 retained
+🎯 FoldSeek thresholds: 76,370,911 removed (29.1%), 185,683,143 retained
+📊 Pre-merge statistics:
+   MMSeqs2 filtered: 73,329,457 rows
+   FoldSeek filtered: 185,683,143 rows
+🔍 MMSeqs2 columns: ['query', 'target', 'fident', 'hfsp']
+🔍 FoldSeek columns: ['query', 'target', 'alntmscore']
+
+📈 Merge results:
+   Total unique pairs: 188,021,387
+   🎯 Matches found in both datasets: 70,991,213 (37.8%)
+   📊 MMSeqs2 only: 2,338,244 (1.2%)
+   🔍 FoldSeek only: 114,691,930 (61.0%)
+   🔗 Overlap rate: 37.8%
+
+🔍 Final dataset columns: ['query', 'target', 'fident', 'hfsp', 'alntmscore']
+
+======================================================================
+✅ ANALYSIS COMPLETE!
+======================================================================
+📊 Final dataset: 188,021,387 rows × 5 columns
+📈 Plots saved to: out/data_analysis/
+💾 Dataset saved to: data/final/merged_protein_similarity.parquet
+🔍 Final columns: ['query', 'target', 'fident', 'hfsp', 'alntmscore']
+Rows with both HFSP and alnTMscore present:
+shape: (5, 5)
+┌────────────┬────────────┬────────┬───────────┬────────────┐
+│ query      ┆ target     ┆ fident ┆ hfsp      ┆ alntmscore │
+│ ---        ┆ ---        ┆ ---    ┆ ---       ┆ ---        │
+│ str        ┆ str        ┆ f64    ┆ f64       ┆ f64        │
+╞════════════╪════════════╪════════╪═══════════╪════════════╡
+│ A0A009IHW8 ┆ C0RGW8     ┆ 0.422  ┆ 40.911072 ┆ 0.5305     │
+│ A0A023FBW7 ┆ A0A023FDY8 ┆ 0.966  ┆ 90.360178 ┆ 0.7406     │
+│ A0A023FBW7 ┆ A0A023FFB5 ┆ 0.483  ┆ 41.976034 ┆ 0.7246     │
+│ A0A023FBW7 ┆ A0A023G9N9 ┆ 0.369  ┆ 29.545209 ┆ 0.7956     │
+│ A0A023FBW7 ┆ A0A0C9S461 ┆ 0.327  ┆ 25.240826 ┆ 0.6032     │
+└────────────┴────────────┴────────┴───────────┴────────────┘
+shape: (5, 5)
+┌────────────┬────────────┬────────┬───────────┬────────────┐
+│ query      ┆ target     ┆ fident ┆ hfsp      ┆ alntmscore │
+│ ---        ┆ ---        ┆ ---    ┆ ---       ┆ ---        │
+│ str        ┆ str        ┆ f64    ┆ f64       ┆ f64        │
+╞════════════╪════════════╪════════╪═══════════╪════════════╡
+│ A0A009IHW8 ┆ A1AY86     ┆ null   ┆ null      ┆ 0.6487     │
+│ A0A009IHW8 ┆ C0RGW8     ┆ 0.422  ┆ 40.911072 ┆ 0.5305     │
+│ A0A009IHW8 ┆ P0DTS9     ┆ null   ┆ null      ┆ 0.5615     │
+│ A0A023FBW7 ┆ A0A023FDY8 ┆ 0.966  ┆ 90.360178 ┆ 0.7406     │
+│ A0A023FBW7 ┆ A0A023FFB5 ┆ 0.483  ┆ 41.976034 ┆ 0.7246     │
+└────────────┴────────────┴────────┴───────────┴────────────┘
+✅ Pipeline completed successfully!
+📊 Final dataset shape: (188021387, 5)

@@ -9,6 +9,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "altair>=5.5.0",
     "esm>=3.2.0",
     "h5py>=3.12.1",
     "ijson>=3.4.0",
@@ -17,6 +18,7 @@ dependencies = [
     "matplotlib>=3.9.4",
     "matplotlib-venn>=1.1.2",
     "pandas>=2.2.3",
+    "polars>=1.31.0",
     "pyarrow>=20.0.0",
     "pyfaidx>=0.8.1.4",
     "scikit-learn>=1.6.0",
