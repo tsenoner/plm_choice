@@ -21,6 +21,7 @@ Author: Tobias Senoner
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Tuple
 
@@ -50,7 +51,6 @@ class ProteinAnalysisPipeline:
         """Setup all file paths used in the pipeline."""
         # Base directories
         self.interm_dir = self.base_data_dir / "interm" / "sprot_pre2024"
-        self.final_data_dir = self.base_data_dir / "final"
 
         # Input file paths
         self.mmseqs_tsv = self.interm_dir / "mmseqs" / "sprot_all_vs_all.tsv"
@@ -691,32 +691,55 @@ class ProteinAnalysisPipeline:
         return f"-{formatted}" if num < 0 else formatted
 
 
-def run_test_analysis() -> pl.DataFrame:
-    """Run analysis in test mode for pipeline validation."""
-    pipeline = ProteinAnalysisPipeline()
-    return pipeline.run(test_mode=True, test_size=100_000)
-
-
-def run_full_analysis() -> pl.DataFrame:
-    """Run complete analysis on full datasets."""
-    pipeline = ProteinAnalysisPipeline()
-    return pipeline.run(test_mode=False)
-
-
 def main():
-    """Main entry point with user-friendly interface."""
-    print("🧬 Protein Similarity Analysis Pipeline")
-    print("=" * 50)
-    print("Available modes:")
-    print("1. Test mode (recommended first) - 1M rows per dataset")
-    print("2. Full mode - Complete datasets")
-    print()
+    """Main entry point with command-line argument parsing."""
+    parser = argparse.ArgumentParser(
+        description="Comprehensive protein similarity analysis pipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python merge_datasets.py              # Run full analysis
+  python merge_datasets.py --test       # Run test mode (100K rows per dataset)
+        """,
+    )
 
-    # return run_test_analysis()
-    return run_full_analysis()
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Run in test mode with smaller datasets (100K rows per dataset)",
+    )
+
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default="data",
+        help="Base data directory (default: data)",
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default="out",
+        help="Output directory for plots (default: out)",
+    )
+
+    args = parser.parse_args()
+
+    print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
+    print("=" * 50)
+
+    if args.test:
+        print("🧪 TEST MODE: Processing 100K rows per dataset")
+        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir)
+        result_df = pipeline.run(test_mode=True, test_size=100_000)
+    else:
+        print("🚀 FULL MODE: Processing complete datasets")
+        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir)
+        result_df = pipeline.run(test_mode=False)
+
+    print("✅ Pipeline completed successfully!")
+    print(f"📊 Final dataset shape: {result_df.shape}")
 
 
 if __name__ == "__main__":
-    result_df = main()
-    print("✅ Pipeline completed successfully!")
-    print(f"📊 Final dataset shape: {result_df.shape}")
+    main()
