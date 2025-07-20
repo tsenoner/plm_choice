@@ -4,7 +4,7 @@ This script runs training experiments for different models, embeddings, and para
 It also optionally evaluates the results after each training run.
 
 Usage:
-python run_experiments.py --csv_dir data/processed/sprot_train --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp
+python run_experiments.py --data_dir data/processed/sprot_pre2024 --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp
 """
 
 import argparse
@@ -42,21 +42,27 @@ def find_latest_run_dir(base_dir: Path) -> Optional[Path]:
 def main(args):
     # Since this script is in src/training/, go up two levels to get project root
     project_root = Path(__file__).parent.parent.parent.resolve()
-    # Use the provided embeddings directory path
-    embeddings_dir = args.embeddings_dir.resolve()
+
+    # Use the provided data directory path
+    data_dir = args.data_dir.resolve()
+    if not data_dir.is_dir():
+        print(f"Error: Provided data directory not found at {data_dir}")
+        return
+
+    # Look for sets and embeddings subdirectories
+    sets_dir = data_dir / "sets"
+    embeddings_dir = data_dir / "embeddings"
+
+    if not sets_dir.is_dir():
+        print(f"Error: Sets directory not found at {sets_dir}")
+        return
     if not embeddings_dir.is_dir():
-        print(f"Error: Provided embeddings directory not found at {embeddings_dir}")
+        print(f"Error: Embeddings directory not found at {embeddings_dir}")
         return
 
     models_base_dir = project_root / "models"
-
-    # Use the provided CSV directory path directly and resolve it
-    csv_dir_abs = args.csv_dir.resolve()
-    if not csv_dir_abs.is_dir():
-        print(f"Error: Provided CSV directory not found at {csv_dir_abs}")
-        return
-    # Extract the last part of the csv_dir path
-    train_data_sub_dir = csv_dir_abs.name
+    # Extract the last part of the data_dir path for the model subdirectory
+    train_data_sub_dir = data_dir.name
 
     # --- Experiment Definitions ---
     model_types = args.model_types
@@ -69,13 +75,14 @@ def main(args):
         print(f"Error: No HDF5 (.h5) embedding files found in {embeddings_dir}")
         return
 
-    print(f"Using embeddings directory: {embeddings_dir}")  # Log the used path
+    print(f"Using data directory: {data_dir}")  # Log the used path
+    print(f"Using embeddings directory: {embeddings_dir}")
+    print(f"Using sets directory: {sets_dir}")
     print(f"Found {len(embedding_files)} embedding files:")
     for f in embedding_files:
         print(f" - {f.name}")
     print(f"Target model types: {model_types}")
     print(f"Target parameters: {target_params}")
-    print(f"Using CSV directory: {csv_dir_abs}")
     if args.evaluate_after_train:
         print("Evaluation after each training run: Enabled")
     # Add log directory info
@@ -154,8 +161,8 @@ def main(args):
                     param_name,
                     "--embedding_file",
                     embedding_file_abs,
-                    "--csv_dir",
-                    str(csv_dir_abs),
+                    "--data_dir",
+                    str(sets_dir),
                     "--output_base_dir",
                     str(experiment_output_dir),
                     "--num_workers",
@@ -312,16 +319,12 @@ if __name__ == "__main__":
         description="Run training experiments for different models, embeddings, and parameters, optionally evaluating after each run."
     )
     parser.add_argument(
-        "--embeddings_dir",
+        "--data_dir",
         type=Path,
-        default=Path("data/processed/sprot_embs"),  # Set the default path
-        help="Path to the directory containing HDF5 embedding files (default: data/processed/sprot_embs)",
-    )
-    parser.add_argument(
-        "--csv_dir",
-        type=Path,
-        required=True,
-        help="Full path to the directory containing train.csv, val.csv, and test.csv.",
+        default=Path(
+            "data/processed/sprot_pre2024"
+        ),  # Set the default to the new structure
+        help="Path to the directory containing 'sets' and 'embeddings' subdirectories (default: data/processed/sprot_pre2024)",
     )
     parser.add_argument(
         "--evaluate_after_train",

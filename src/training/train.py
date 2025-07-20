@@ -2,7 +2,7 @@
 This script trains a specified model or calculates the Euclidean baseline.
 
 Usage:
-python train.py --model_type fnn --embedding_file path/to/embeddings.h5 --csv_dir path/to/csv_dir --param_name param_name
+python train.py --model_type fnn --embedding_file path/to/embeddings.h5 --data_dir path/to/data_dir --param_name param_name
 """
 
 import argparse
@@ -30,10 +30,10 @@ from src.training.models import (
 class ResolvedPaths:
     project_root: Path
     embeddings_file: Path  # Absolute path
-    csv_dir: Path  # Absolute path
-    train_csv: Path  # Absolute path
-    val_csv: Path  # Absolute path
-    test_csv: Path  # Absolute path
+    data_dir: Path  # Absolute path to directory containing train/val/test files
+    train_file: Path  # Absolute path to train file (parquet)
+    val_file: Path  # Absolute path to val file (parquet)
+    test_file: Path  # Absolute path to test file (parquet)
     output_dir: Path  # Base dir for the param/embedding combo
     run_dir: Path  # Timestamped run directory
 
@@ -51,7 +51,7 @@ def setup_environment(seed: int):
 def prepare_paths(
     output_base_dir: Path,
     embeddings_file: Path,
-    csv_dir: Path,
+    data_dir: Path,
     project_root: Path,
 ) -> ResolvedPaths:
     """Resolve output paths based on provided absolute inputs and create run directory."""
@@ -59,8 +59,8 @@ def prepare_paths(
     # Ensure provided paths exist
     if not embeddings_file.is_file():
         raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
-    if not csv_dir.is_dir():
-        raise NotADirectoryError(f"CSV directory not found: {csv_dir}")
+    if not data_dir.is_dir():
+        raise NotADirectoryError(f"Data directory not found: {data_dir}")
 
     # Create timestamped run directory within the provided base experiment dir
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -72,26 +72,27 @@ def prepare_paths(
     (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
     (run_dir / "tensorboard").mkdir(parents=True, exist_ok=True)
 
-    # Resolve absolute paths for CSV files within the provided csv_dir
-    train_csv = (csv_dir / "train.csv").resolve()
-    val_csv = (csv_dir / "val.csv").resolve()
-    test_csv = (csv_dir / "test.csv").resolve()
+    # Check for parquet files only
+    train_file = (data_dir / "train.parquet").resolve()
+    val_file = (data_dir / "val.parquet").resolve()
+    test_file = (data_dir / "test.parquet").resolve()
 
-    # Check essential CSV files exist
-    if not train_csv.is_file():
-        raise FileNotFoundError(f"Train CSV not found: {train_csv}")
-    if not val_csv.is_file():
-        raise FileNotFoundError(f"Validation CSV not found: {val_csv}")
-    if not test_csv.is_file():
-        print(f"Warning: Test CSV not found: {test_csv}")
+    # Check essential files exist
+    if not train_file.is_file():
+        raise FileNotFoundError(f"Train parquet file not found: {train_file}")
+    if not val_file.is_file():
+        raise FileNotFoundError(f"Validation parquet file not found: {val_file}")
+    if not test_file.is_file():
+        print(f"Warning: Test parquet file not found: {test_file}")
+        test_file = None
 
     return ResolvedPaths(
         project_root=project_root,
         embeddings_file=embeddings_file,
-        csv_dir=csv_dir,
-        train_csv=train_csv,
-        val_csv=val_csv,
-        test_csv=test_csv,
+        data_dir=data_dir,
+        train_file=train_file,
+        val_file=val_file,
+        test_file=test_file,
         output_dir=output_base_dir.resolve(),
         run_dir=run_dir,
     )
@@ -101,8 +102,8 @@ def prepare_data(
     param_name: str,
     batch_size: int,
     embeddings_file: Path,
-    train_csv: Path,
-    val_csv: Path,
+    train_file: Path,
+    val_file: Path,
     num_workers: int,
 ) -> Tuple[int, DataLoader, DataLoader]:
     """Load train/val datasets and return embedding size and dataloaders."""
@@ -119,10 +120,10 @@ def prepare_data(
     print(f"Using {num_workers} worker(s) for DataLoaders.")
 
     train_loader = create_single_loader(
-        csv_file=str(train_csv), shuffle=True, **loader_args
+        parquet_file=str(train_file), shuffle=True, **loader_args
     )
     val_loader = create_single_loader(
-        csv_file=str(val_csv), shuffle=False, **loader_args
+        parquet_file=str(val_file), shuffle=False, **loader_args
     )
 
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
@@ -203,7 +204,7 @@ def main(args):
     paths = prepare_paths(
         output_base_dir=args.output_base_dir,
         embeddings_file=args.embedding_file,
-        csv_dir=args.csv_dir,
+        data_dir=args.data_dir,
         project_root=project_root,
     )
 
@@ -223,7 +224,7 @@ def main(args):
             "model_type": args.model_type,
             "param_name": args.param_name,
             "embedding_file": str(paths.embeddings_file),
-            "csv_dir": str(paths.csv_dir),
+            "data_dir": str(paths.data_dir),
             "embedding_size": embedding_size,
             "batch_size": args.batch_size,  # Log batch size potentially used by eval
             "seed": args.seed,
@@ -250,8 +251,8 @@ def main(args):
             param_name=args.param_name,
             batch_size=args.batch_size,
             embeddings_file=paths.embeddings_file,
-            train_csv=paths.train_csv,
-            val_csv=paths.val_csv,
+            train_file=paths.train_file,
+            val_file=paths.val_file,
             num_workers=args.num_workers,
         )
 
@@ -282,7 +283,7 @@ def main(args):
             "model_type": args.model_type,
             "param_name": args.param_name,
             "embedding_file": str(paths.embeddings_file),
-            "csv_dir": str(paths.csv_dir),
+            "data_dir": str(paths.data_dir),
             "embedding_size": embedding_size,
             "learning_rate": args.learning_rate,
             "batch_size": args.batch_size,
@@ -341,10 +342,10 @@ if __name__ == "__main__":
         help="Absolute path to the embedding HDF5 file.",
     )
     parser.add_argument(
-        "--csv_dir",
+        "--data_dir",
         type=Path,
         required=True,
-        help="Absolute path to the directory containing train.csv, val.csv, test.csv.",
+        help="Absolute path to the directory containing train/val/test files (CSV or parquet format).",
     )
     parser.add_argument(
         "--param_name",

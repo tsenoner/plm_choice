@@ -84,7 +84,7 @@ def _get_predictions_targets(
     model_type: str,
     run_dir: Path,
     hparams: Dict[str, Any],  # Needed for DataLoader if recomputing
-    test_csv_path: Path,  # Needed for DataLoader if recomputing
+    test_data_path: Path,  # Needed for DataLoader if recomputing
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Gets predictions and targets, using cache or computing/saving as needed."""
     if not force_recompute and preds_targets_path.is_file():
@@ -108,7 +108,7 @@ def _get_predictions_targets(
     # If cache doesn't exist, is invalid, or force_recompute is True
     # Prepare DataLoader ONLY if computation is required
     try:
-        test_loader = _prepare_dataloader(hparams, test_csv_path)
+        test_loader = _prepare_dataloader(hparams, test_data_path)
     except Exception as e:
         print(f"Error preparing DataLoader for computation: {e}")
         return None
@@ -214,7 +214,7 @@ def _get_metrics(
 # --- Data Loading and Model Helpers (Mostly Unchanged) ---
 
 
-def _prepare_dataloader(hparams: Dict[str, Any], test_csv_path: Path) -> DataLoader:
+def _prepare_dataloader(hparams: Dict[str, Any], test_data_path: Path) -> DataLoader:
     """Prepares the DataLoader using resolved paths and hparams."""
     # Simplified: assumes embeddings_file exists (or fails here)
     embeddings_file = hparams["embedding_file"]
@@ -222,7 +222,7 @@ def _prepare_dataloader(hparams: Dict[str, Any], test_csv_path: Path) -> DataLoa
         raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
 
     test_loader = create_single_loader(
-        csv_file=str(test_csv_path),
+        parquet_file=str(test_data_path),
         hdf_file=str(embeddings_file),
         param_name=hparams["param_name"],
         batch_size=hparams["batch_size"],
@@ -270,12 +270,14 @@ def load_hparams(run_dir: Path) -> Dict[str, Any]:
     print(f"Loading hyperparameters from: {hparams_file}")
     with open(hparams_file, "r") as f:
         hparams = yaml.safe_load(f)
-    required = ["model_type", "param_name", "embedding_file", "csv_dir", "batch_size"]
+
+    required = ["model_type", "param_name", "embedding_file", "data_dir", "batch_size"]
     if missing := [k for k in required if k not in hparams]:
         raise KeyError(f"Missing keys in hparams.yaml: {missing}")
+
     try:
         hparams["embedding_file"] = Path(hparams["embedding_file"])
-        hparams["csv_dir"] = Path(hparams["csv_dir"])
+        hparams["data_dir"] = Path(hparams["data_dir"])
         hparams["batch_size"] = int(hparams["batch_size"])
     except Exception as e:
         raise ValueError(f"Error converting hparams values: {e}") from e
@@ -327,17 +329,25 @@ def main(args):
         hparams = load_hparams(args.run_dir)
         model_type = hparams["model_type"]
 
-        # 1. Resolve Test CSV Path
-        original_csv_dir = hparams["csv_dir"]
-        if args.test_csv:
-            test_csv_path = args.test_csv.resolve()
-            print(f"Using overridden test CSV: {test_csv_path}")
+        # 1. Resolve Test Data Path (parquet only)
+        original_data_dir = hparams["data_dir"]
+        if args.test_file:
+            test_data_path = args.test_file.resolve()
+            print(f"Using overridden test file: {test_data_path}")
         else:
-            test_csv_path = (original_csv_dir / "test.csv").resolve()
-            print(f"Using default test CSV: {test_csv_path}")
-        if not test_csv_path.is_file():
-            raise FileNotFoundError(f"Test CSV file not found: {test_csv_path}")
-        test_set_name = test_csv_path.stem
+            # Look for parquet file only
+            test_data_path = (original_data_dir / "test.parquet").resolve()
+
+            if not test_data_path.is_file():
+                raise FileNotFoundError(
+                    f"Test parquet file not found: {test_data_path}"
+                )
+
+            print(f"Using default test file: {test_data_path}")
+
+        if not test_data_path.is_file():
+            raise FileNotFoundError(f"Test data file not found: {test_data_path}")
+        test_set_name = test_data_path.stem
 
         # 2. Determine Checkpoint/Identifier
         checkpoint_name: str
@@ -366,7 +376,7 @@ def main(args):
             model_type,
             args.run_dir,
             hparams,
-            test_csv_path,  # Pass needed info for potential recompute
+            test_data_path,  # Pass needed info for potential recompute
         )
         if preds_targets_tuple is None:
             raise RuntimeError("Failed to obtain predictions/targets")
@@ -412,11 +422,11 @@ if __name__ == "__main__":
         "--run_dir", type=Path, required=True, help="Path to the model run directory."
     )
     parser.add_argument(
-        "--test_csv",
+        "--test_file",
         type=Path,
         default=None,
-        help="Optional path to a specific test CSV file to use for evaluation. "
-        "If not provided, uses 'test.csv' from the original training data directory.",
+        help="Optional path to a specific test parquet file to use for evaluation. "
+        "If not provided, uses 'test.parquet' from the original training data directory.",
     )
     parser.add_argument(
         "--n_bootstrap",
