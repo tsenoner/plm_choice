@@ -1,59 +1,17 @@
 # Data Preparation Module
 
-Comprehensive protein similarity analysis pipeline that processes MMSeqs2, FoldComp, and FoldSeek data to analyze protein similarities and structural qualities.
+Comprehensive protein similarity analysis and dataset splitting pipeline that processes MMSeqs2, FoldComp, and FoldSeek data.
 
 ## Overview
 
-This module provides a unified pipeline that:
+This module provides two main pipelines:
 
-- Processes sequence similarity (MMSeqs2), structural confidence (FoldComp), and structural similarity (FoldSeek) data
-- Applies quality thresholds and filtering
-- Creates distribution plots for data quality analysis
-- Merges datasets with full outer joins to preserve all protein pairs
-
-## Quick Start
-
-```bash
-# Run the complete pipeline (full datasets)
-python merge_datasets.py
-
-# Run in test mode (recommended first)
-python merge_datasets.py --test
-```
-
-## Pipeline Components
-
-### 1. MMSeqs2 Processing
-
-- **Purpose**: Sequence similarity analysis
-- **Filters**:
-  - Coverage ≥ 0.8 (minimum of query/target coverage)
-  - PIDE ≥ 0.3 (percentage identity)
-  - HFSP ≥ 0.0 (functional similarity score)
-- **Output**: Sequence similarity scores with computed HFSP values
-
-### 2. FoldComp Processing
-
-- **Purpose**: Structural confidence assessment
-- **Filters**: pLDDT ≥ 70 (structural confidence threshold)
-- **Output**: Average pLDDT scores for structural quality assessment
-
-### 3. FoldSeek Processing
-
-- **Purpose**: Structural similarity analysis
-- **Filters**:
-  - Coverage ≥ 0.8 (minimum of query/target coverage)
-  - TM-Score ≥ 0.4 (structural alignment quality)
-- **Output**: Structural similarity scores
-
-### 4. Data Merging
-
-- **Method**: Full outer join to preserve all protein pairs from both datasets
-- **Output**: Comprehensive dataset with sequence and structural similarity metrics
+1. **Protein Similarity Analysis** (`merge_datasets.py`) - Processes and merges similarity data
+2. **Dataset Splitting** (`split_dataset.py`) - Creates train/val/test splits with clustering
 
 ## Configuration
 
-The pipeline automatically configures paths based on the expected directory structure:
+### Directory Structure
 
 ```
 data/
@@ -70,37 +28,69 @@ data/
 
 ### Data Preparation
 
-Before running the pipeline, you need to extract pLDDT scores from FoldComp data:
+Before running the pipeline, extract pLDDT scores from FoldComp data:
 
 ```bash
 # Extract pLDDT scores from FoldComp database
 ./bin/foldcomp extract --plddt -p 2 data/interm/sprot_pre2024/foldcomp/afdb_swissprot_v4 data/interm/sprot_pre2024/foldcomp/plddt.tsv
 ```
 
-## Output
+## Scripts
 
-### Dataset
+### 1. merge_datasets.py
 
-The final merged dataset contains:
+**Purpose**: Process and merge protein similarity data from multiple sources
 
-| Column       | Source   | Description                   | Threshold |
-| ------------ | -------- | ----------------------------- | --------- |
-| `query`      | Both     | Query protein identifier      | -         |
-| `target`     | Both     | Target protein identifier     | -         |
-| `fident`     | MMSeqs2  | Sequence identity             | ≥ 0.3     |
-| `hfsp`       | Computed | Functional similarity score   | ≥ 0.0     |
-| `alntmscore` | FoldSeek | Structural alignment TM-Score | ≥ 0.4     |
+**Quick Start**:
 
-### Visualizations
+```bash
+# Run complete pipeline
+python merge_datasets.py
 
-The pipeline generates:
+# Test mode (recommended first)
+python merge_datasets.py --test
+```
 
-- Individual violin plots for each metric distribution
-- Combined 2×3 subplot figure with all distributions
-- Threshold annotations showing data quality statistics
+**Output**: `interm/merged_protein_similarity.parquet`
 
-## HFSP Formula
+### 2. split_dataset.py
 
+**Purpose**: Create train/val/test splits using clustering to prevent data leakage
+
+**Quick Start**:
+
+```bash
+# Sequence-based clustering (MMseqs2)
+python split_dataset.py database output_dir --tool mmseqs
+
+# Structure-based clustering (FoldSeek)
+python split_dataset.py database output_dir --tool foldseek
+
+# Custom thread count
+python split_dataset.py database output_dir --tool foldseek -t 16
+```
+
+**Output**: Split files in `output_dir/splits/` and cluster information in `output_dir/clusters/`
+
+## Data Processing Details
+
+### merge_datasets.py
+
+**Features**:
+
+- Computes HFSP (functional similarity score)
+- Processes MMSeqs2 (sequence similarity), Foldcomp (compressed PDB structures), and Foldseek (structural similarity)
+- Applies quality thresholds and filtering
+- Creates distribution plots for data quality analysis
+- Merges datasets with full outer joins
+
+**Processing Components**:
+
+- **MMSeqs2**: Sequence similarity analysis with coverage ≥ 0.8, PIDE ≥ 0.3, HFSP ≥ 0.0
+- **FoldComp**: Structural confidence assessment with pLDDT ≥ 70
+- **FoldSeek**: Structural similarity analysis with coverage ≥ 0.8, TM-Score ≥ 0.4
+
+**HFSP Formula**:
 The HFSP (functional similarity score) is computed as:
 
 $$
@@ -115,11 +105,49 @@ L &= \text{ungapped alignment length}
 \end{align*}
 $$
 
-## Features
+### split_dataset.py
 
-- **Test Mode**: Process smaller datasets for pipeline validation
-- **Caching**: Automatic parquet conversion for improved performance
-- **Quality Control**: Comprehensive filtering and thresholding
-- **Visualization**: Distribution plots with threshold annotations
-- **Statistics**: Detailed merge statistics and overlap analysis
-- **Memory Efficient**: Uses Polars for high-performance data processing
+**Features**:
+
+- Supports both MMseqs2 (sequences) and FoldSeek (structures)
+- Clusters similar items to prevent data leakage
+- Creates balanced train/val/test splits (70%/15%/15%)
+- Generates comprehensive split summaries
+- Splits protein pairs from merged similarity dataset
+
+**Processing Components**:
+
+- **Clustering**: Groups similar sequences/structures with 30% similarity threshold
+- **Splitting**: Greedy assignment to maintain split ratios while preventing data leakage
+- **Pair Splitting**: Filters protein pairs from merged dataset based on cluster assignments
+- **Output**: Cluster-based train/val/test splits with detailed statistics and pair files
+
+## Output Files
+
+### merge_datasets.py
+
+| File                                | Description                           |
+| ----------------------------------- | ------------------------------------- |
+| `merged_protein_similarity.parquet` | Final merged dataset                  |
+| `plots/`                            | Distribution plots and visualizations |
+
+**Dataset Columns**:
+
+- `query`, `target`: Protein identifiers
+- `fident`: Sequence identity (≥ 0.3)
+- `hfsp`: Functional similarity score (≥ 0.0)
+- `alntmscore`: Structural TM-Score (≥ 0.4)
+
+### split_dataset.py
+
+| File                               | Description                    |
+| ---------------------------------- | ------------------------------ |
+| `splits/train_sequences.txt`       | Training set items             |
+| `splits/val_sequences.txt`         | Validation set items           |
+| `splits/test_sequences.txt`        | Test set items                 |
+| `splits/split_summary.txt`         | Comprehensive statistics       |
+| `clusters/cluster_members.tsv`     | Detailed cluster information   |
+| `splits/inter_split_pairs.parquet` | Pairs between different splits |
+| `sets/train.parquet`               | Training set protein pairs     |
+| `sets/val.parquet`                 | Validation set protein pairs   |
+| `sets/test.parquet`                | Test set protein pairs         |
