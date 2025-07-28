@@ -25,10 +25,9 @@ dependencies = [
     "scipy>=1.13.1",
     "seaborn>=0.13.2",
     "sentencepiece>=0.2.0",
-    "tensorboard>=2.18.0",
-    "tensorboardx>=2.6.2.2",
     "torch>=2.5.1",
     "tqdm>=4.67.1",
+    "wandb>=0.21.0",
 ]
 
 [tool.hatch.build.targets.wheel]
