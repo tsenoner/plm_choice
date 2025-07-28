@@ -6,6 +6,11 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 
+def _square_transform(r: float) -> float:
+    """Transform function to square the correlation coefficient."""
+    return r**2
+
+
 def _bootstrap_worker(args):
     """Worker function for parallel bootstrap sampling."""
     targets, predictions, stat_func, value_transform, seed = args
@@ -154,7 +159,7 @@ def calculate_regression_metrics(
         {
             "stat_func": pearsonr,
             "stat_name": "Pearson_r2",
-            "value_transform": lambda r: r**2,
+            "value_transform": _square_transform,
         },
         {"stat_func": spearmanr, "stat_name": "Spearman", "value_transform": None},
     ]
