@@ -2,6 +2,32 @@ import numpy as np
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from typing import Dict, Optional, Callable, List, Any
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+
+
+def _bootstrap_worker(args):
+    """Worker function for parallel bootstrap sampling."""
+    targets, predictions, stat_func, value_transform, seed = args
+    np.random.seed(seed)
+    n_samples = len(targets)
+
+    # Generate bootstrap indices
+    indices = np.random.choice(n_samples, size=n_samples, replace=True)
+    targets_boot, predictions_boot = targets[indices], predictions[indices]
+
+    try:
+        if np.var(targets_boot) < 1e-9 or np.var(predictions_boot) < 1e-9:
+            return np.nan
+        else:
+            stat_val, _ = stat_func(targets_boot, predictions_boot)
+            return (
+                value_transform(stat_val)
+                if value_transform and not np.isnan(stat_val)
+                else stat_val
+            )
+    except ValueError:
+        return np.nan
 
 
 def _bootstrap_stat(
@@ -15,11 +41,10 @@ def _bootstrap_stat(
     se_key_suffix: str = "_SE",
     ci_key_suffix_lower: str = "_CI_lower",
     ci_key_suffix_upper: str = "_CI_upper",
+    use_parallel: bool = True,
 ) -> Dict[str, float]:
-    """Helper: Performs bootstrapping for a given statistic."""
-    print(f"Performing {n_bootstrap} bootstrap samples for {stat_name} SE/CI...")
+    """Helper: Performs bootstrapping for a given statistic with optional parallel processing."""
     n_samples = len(targets)
-    bootstrap_stat_values = np.empty(n_bootstrap)
     rng = np.random.default_rng()
 
     key_base = stat_name
@@ -28,22 +53,55 @@ def _bootstrap_stat(
     ci_upper_key = f"{key_base}_{int(confidence_level * 100)}{ci_key_suffix_upper}"
     results = {se_key: np.nan, ci_lower_key: np.nan, ci_upper_key: np.nan}
 
-    for i in range(n_bootstrap):
-        indices = rng.integers(0, n_samples, size=n_samples)
-        targets_boot, predictions_boot = targets[indices], predictions[indices]
+    # Use parallel processing for large bootstrap samples
+    if use_parallel and n_bootstrap >= 100:
         try:
-            if np.var(targets_boot) < 1e-9 or np.var(predictions_boot) < 1e-9:
+            n_processes = min(cpu_count(), 8)  # Limit to 8 processes max
+
+            # Prepare arguments for parallel processing
+            seeds = rng.integers(0, 2**31, n_bootstrap)
+            worker_args = [
+                (targets, predictions, stat_func, value_transform, seed)
+                for seed in seeds
+            ]
+
+            with Pool(processes=n_processes) as pool:
+                bootstrap_stat_values = list(
+                    tqdm(
+                        pool.imap(_bootstrap_worker, worker_args),
+                        total=n_bootstrap,
+                        desc=f"Bootstrap {stat_name} (parallel)",
+                        unit="sample",
+                    )
+                )
+
+            bootstrap_stat_values = np.array(bootstrap_stat_values)
+
+        except Exception as e:
+            print(f"Parallel bootstrap failed ({e}), falling back to sequential...")
+            use_parallel = False
+
+    # Sequential processing (fallback or for small n_bootstrap)
+    if not use_parallel or n_bootstrap < 100:
+        bootstrap_stat_values = np.empty(n_bootstrap)
+
+        # Bootstrap sampling with progress bar
+        for i in tqdm(range(n_bootstrap), desc=f"Bootstrap {stat_name}", unit="sample"):
+            indices = rng.integers(0, n_samples, size=n_samples)
+            targets_boot, predictions_boot = targets[indices], predictions[indices]
+            try:
+                if np.var(targets_boot) < 1e-9 or np.var(predictions_boot) < 1e-9:
+                    stat_val = np.nan
+                else:
+                    stat_val, _ = stat_func(targets_boot, predictions_boot)
+            except ValueError:
                 stat_val = np.nan
-            else:
-                stat_val, _ = stat_func(targets_boot, predictions_boot)
-        except ValueError:
-            stat_val = np.nan
-        final_val = (
-            value_transform(stat_val)
-            if value_transform and not np.isnan(stat_val)
-            else stat_val
-        )
-        bootstrap_stat_values[i] = final_val
+            final_val = (
+                value_transform(stat_val)
+                if value_transform and not np.isnan(stat_val)
+                else stat_val
+            )
+            bootstrap_stat_values[i] = final_val
 
     valid_bootstrap_stats = bootstrap_stat_values[~np.isnan(bootstrap_stat_values)]
     num_valid = len(valid_bootstrap_stats)

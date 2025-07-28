@@ -6,9 +6,11 @@ import torch
 from torch.utils.data import DataLoader
 import yaml
 import pytorch_lightning as pl
+from tqdm import tqdm
 
 # Project specific imports
 from src.shared.datasets import create_single_loader
+from src.shared.experiment_manager import ExperimentManager
 from src.evaluation.metrics import calculate_regression_metrics
 from src.training.models import (
     FNNPredictor,
@@ -18,11 +20,10 @@ from src.training.models import (
 from src.visualization.plot_utils import plot_true_vs_predicted
 from src.shared.helpers import get_device
 
+
 # --- Computation and Caching Helpers ---
-
-
 def _compute_and_save_predictions_targets(
-    model_type: str, run_dir: Path, test_loader: DataLoader, save_path: Path
+    model_type: str, experiment_dir: Path, test_loader: DataLoader, save_path: Path
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Computes predictions/targets via inference or baseline and saves them."""
     print("Computing predictions and targets...")
@@ -30,10 +31,19 @@ def _compute_and_save_predictions_targets(
     targets: Optional[np.ndarray] = None
 
     if model_type in ["fnn", "linear", "linear_distance"]:
-        best_checkpoint_path = find_best_checkpoint(run_dir)
-        if not best_checkpoint_path:
-            print("Critical: No checkpoint found during compute path.")
+        # Find best checkpoint directly
+        checkpoints_dir = experiment_dir / "checkpoints"
+        if not checkpoints_dir.exists():
+            print("Critical: No checkpoints directory found.")
             return None
+
+        # Look for best checkpoint (guaranteed by save_top_k=1)
+        best_ckpt_files = list(checkpoints_dir.glob("best-*.ckpt"))
+        if not best_ckpt_files:
+            print("Critical: No best checkpoint found.")
+            return None
+
+        best_checkpoint_path = best_ckpt_files[0]
         model_class_map = {
             "fnn": FNNPredictor,
             "linear": LinearRegressionPredictor,
@@ -82,7 +92,7 @@ def _get_predictions_targets(
     preds_targets_path: Path,
     force_recompute: bool,
     model_type: str,
-    run_dir: Path,
+    experiment_dir: Path,
     hparams: Dict[str, Any],  # Needed for DataLoader if recomputing
     test_data_path: Path,  # Needed for DataLoader if recomputing
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -114,7 +124,7 @@ def _get_predictions_targets(
         return None
 
     return _compute_and_save_predictions_targets(
-        model_type, run_dir, test_loader, preds_targets_path
+        model_type, experiment_dir, test_loader, preds_targets_path
     )
 
 
@@ -211,7 +221,7 @@ def _get_metrics(
     )
 
 
-# --- Data Loading and Model Helpers (Mostly Unchanged) ---
+# --- Data Loading and Model Helpers ---
 
 
 def _prepare_dataloader(hparams: Dict[str, Any], test_data_path: Path) -> DataLoader:
@@ -246,28 +256,65 @@ def load_model_from_checkpoint(
     return model
 
 
-def find_best_checkpoint(run_dir: Path) -> Optional[Path]:
-    """Find the single checkpoint file."""
-    checkpoint_dir = run_dir / "checkpoints"
-    if not checkpoint_dir.is_dir():
-        return None
-    ckpt_files = list(checkpoint_dir.glob("*.ckpt"))
-    if not ckpt_files:
-        return None
-    if len(ckpt_files) > 1:
-        print(
-            f"Warning: Found {len(ckpt_files)} ckpt files, using first: {ckpt_files[0]}"
-        )
-    print(f"Found checkpoint: {ckpt_files[0]}")
-    return ckpt_files[0]
+def load_hparams_from_wandb(experiment_dir: Path) -> Dict[str, Any]:
+    """Load hyperparameters from wandb's config.yaml file."""
+    wandb_dir = experiment_dir / "wandb"
+
+    if not wandb_dir.exists():
+        raise FileNotFoundError(f"Wandb directory not found: {wandb_dir}")
+
+    # Look for config.yaml in wandb run directories
+    config_files = []
+
+    # Check latest-run first (if it exists)
+    latest_run_dir = wandb_dir / "latest-run"
+    if latest_run_dir.exists():
+        config_file = latest_run_dir / "files" / "config.yaml"
+        if config_file.exists():
+            config_files.append(config_file)
+
+    # Check all run directories
+    for run_subdir in wandb_dir.iterdir():
+        if run_subdir.is_dir() and run_subdir.name.startswith("run-"):
+            config_file = run_subdir / "files" / "config.yaml"
+            if config_file.exists():
+                config_files.append(config_file)
+
+    if not config_files:
+        raise FileNotFoundError(f"No wandb config.yaml files found in {wandb_dir}")
+
+    # Use the most recent config file
+    config_file = max(config_files, key=lambda f: f.stat().st_mtime)
+
+    print(f"Loading hyperparameters from wandb config: {config_file}")
+    with open(config_file, "r") as f:
+        config = yaml.safe_load(f)
+
+    # Convert wandb config format to expected format
+    hparams = {}
+    for key, value_dict in config.items():
+        if isinstance(value_dict, dict) and "value" in value_dict:
+            hparams[key] = value_dict["value"]
+        else:
+            hparams[key] = value_dict
+
+    # Convert paths back to Path objects for compatibility
+    if "embedding_file" in hparams:
+        hparams["embedding_file"] = Path(hparams["embedding_file"])
+    if "data_dir" in hparams:
+        hparams["data_dir"] = Path(hparams["data_dir"])
+    if "batch_size" in hparams:
+        hparams["batch_size"] = int(hparams["batch_size"])
+
+    return hparams
 
 
-def load_hparams(run_dir: Path) -> Dict[str, Any]:
-    """Load hyperparameters from hparams.yaml."""
-    hparams_file = run_dir / "tensorboard" / "hparams.yaml"
+def load_hparams_from_local(experiment_dir: Path) -> Dict[str, Any]:
+    """Fallback: Load hyperparameters from local hparams.yaml file."""
+    hparams_file = experiment_dir / "hparams.yaml"
     if not hparams_file.is_file():
         raise FileNotFoundError(f"hparams.yaml not found at {hparams_file}")
-    print(f"Loading hyperparameters from: {hparams_file}")
+    print(f"Loading hyperparameters from local file: {hparams_file}")
     with open(hparams_file, "r") as f:
         hparams = yaml.safe_load(f)
 
@@ -284,22 +331,50 @@ def load_hparams(run_dir: Path) -> Dict[str, Any]:
     return hparams
 
 
+def load_hparams(experiment_dir: Path) -> Dict[str, Any]:
+    """Load hyperparameters from wandb config files."""
+    try:
+        return load_hparams_from_wandb(experiment_dir)
+    except FileNotFoundError as e:
+        # For euclidean baseline or other cases where wandb config might not exist
+        print(f"Could not load from wandb config: {e}")
+        print("Trying local hparams.yaml as fallback...")
+        return load_hparams_from_local(experiment_dir)
+
+
 def run_inference(
     model: pl.LightningModule, test_loader: DataLoader
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Run inference on the test set."""
+    """Run inference on the test set with parallel processing."""
     print("Running inference...")
     device = get_device()
     model.to(device)
+    model.eval()  # Ensure model is in eval mode
+
     preds, tgts = [], []
+
+    # Use torch.no_grad() and optimized inference
     with torch.no_grad():
-        for batch in test_loader:
+        for batch in tqdm(test_loader, desc="Model inference", unit="batch"):
             if len(batch) != 3:
                 raise ValueError("Unexpected batch structure")
             q_emb, t_emb, val = batch
-            pred = model(q_emb.to(device), t_emb.to(device))
+
+            # Move to device efficiently
+            q_emb = q_emb.to(device, non_blocking=True)
+            t_emb = t_emb.to(device, non_blocking=True)
+
+            # Forward pass
+            pred = model(q_emb, t_emb)
+
+            # Move back to CPU and store
             preds.append(pred.cpu())
             tgts.append(val.cpu())
+
+            # Clear cache periodically for large datasets
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     print("Inference complete.")
     return torch.cat(preds).numpy().flatten(), torch.cat(tgts).numpy().flatten()
 
@@ -326,7 +401,11 @@ def run_euclidean_distance(test_loader: DataLoader) -> Tuple[np.ndarray, np.ndar
 def main(args):
     """Main workflow orchestrator for evaluation."""
     try:
-        hparams = load_hparams(args.run_dir)
+        # Compute project root for models_base_dir
+        project_root = Path(__file__).parent.parent.parent
+        models_base_dir = project_root / "models"
+
+        hparams = load_hparams(args.experiment_dir)
         model_type = hparams["model_type"]
 
         # 1. Resolve Test Data Path (parquet only)
@@ -349,10 +428,12 @@ def main(args):
             raise FileNotFoundError(f"Test data file not found: {test_data_path}")
         test_set_name = test_data_path.stem
 
-        # 2. Determine Checkpoint/Identifier
+        # 2. Determine Checkpoint/Identifier using ExperimentManager
         checkpoint_name: str
         if model_type in ["fnn", "linear", "linear_distance"]:
-            ckpt_path = find_best_checkpoint(args.run_dir)
+            # Create a minimal ExperimentManager for checkpoint finding
+            exp_manager = ExperimentManager.from_hparams(hparams, models_base_dir)
+            ckpt_path = exp_manager.find_best_checkpoint(args.experiment_dir)
             if not ckpt_path:
                 raise FileNotFoundError("No checkpoint found")
             checkpoint_name = ckpt_path.stem
@@ -362,7 +443,7 @@ def main(args):
             raise ValueError(f"Unknown model type '{model_type}' in hparams")
 
         # 3. Determine Artifact Paths
-        eval_dir = args.run_dir / "evaluation_results"
+        eval_dir = args.experiment_dir / "evaluation_results"
         eval_dir.mkdir(exist_ok=True)
         base_filename = f"test_{test_set_name}_{checkpoint_name}"
         preds_targets_path = eval_dir / f"{base_filename}_predictions_targets.npz"
@@ -374,7 +455,7 @@ def main(args):
             preds_targets_path,
             args.force_recompute,
             model_type,
-            args.run_dir,
+            args.experiment_dir,
             hparams,
             test_data_path,  # Pass needed info for potential recompute
         )
@@ -407,7 +488,7 @@ def main(args):
 
     except Exception as e:
         print("\n--- EVALUATION FAILED --- ")
-        print(f"Error during evaluation for run {args.run_dir}: {e}")
+        print(f"Error during evaluation for experiment {args.experiment_dir}: {e}")
         import traceback
 
         traceback.print_exc()
@@ -419,7 +500,11 @@ if __name__ == "__main__":
         description="Evaluate a trained model or Euclidean baseline, using caching."
     )
     parser.add_argument(
-        "--run_dir", type=Path, required=True, help="Path to the model run directory."
+        "--run_dir",
+        type=Path,
+        required=True,
+        help="Path to the experiment directory.",
+        dest="experiment_dir",
     )
     parser.add_argument(
         "--test_file",
@@ -433,7 +518,7 @@ if __name__ == "__main__":
         type=int,
         default=1000,
         help="Number of bootstrap samples for calculating SE/CI for correlation metrics. "
-        "Set to 1 or 0 to disable bootstrapping.",
+        "Set to 1 or 0 to disable bootstrapping. (default: 1000)",
     )
     parser.add_argument(
         "--force_recompute",

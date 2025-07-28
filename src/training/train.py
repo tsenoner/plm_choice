@@ -6,36 +6,23 @@ python train.py --model_type fnn --embedding_file path/to/embeddings.h5 --data_d
 """
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Type
-import yaml
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
+import wandb
+import yaml
 
 from src.shared.datasets import create_single_loader, get_embedding_size
+from src.shared.experiment_manager import ExperimentManager, ExperimentPaths
 from src.training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,
 )
-
-
-# Define a simple structure to hold paths
-@dataclass
-class ResolvedPaths:
-    project_root: Path
-    embeddings_file: Path  # Absolute path
-    data_dir: Path  # Absolute path to directory containing train/val/test files
-    train_file: Path  # Absolute path to train file (parquet)
-    val_file: Path  # Absolute path to val file (parquet)
-    test_file: Path  # Absolute path to test file (parquet)
-    output_dir: Path  # Base dir for the param/embedding combo
-    run_dir: Path  # Timestamped run directory
 
 
 def setup_environment(seed: int):
@@ -46,56 +33,6 @@ def setup_environment(seed: int):
         torch.set_float32_matmul_precision("medium")
     else:
         print("CUDA not available.")
-
-
-def prepare_paths(
-    output_base_dir: Path,
-    embeddings_file: Path,
-    data_dir: Path,
-    project_root: Path,
-) -> ResolvedPaths:
-    """Resolve output paths based on provided absolute inputs and create run directory."""
-
-    # Ensure provided paths exist
-    if not embeddings_file.is_file():
-        raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
-    if not data_dir.is_dir():
-        raise NotADirectoryError(f"Data directory not found: {data_dir}")
-
-    # Create timestamped run directory within the provided base experiment dir
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = output_base_dir.resolve() / timestamp
-    print(f"Creating run directory: {run_dir}")
-
-    # Create run structure
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
-    (run_dir / "tensorboard").mkdir(parents=True, exist_ok=True)
-
-    # Check for parquet files only
-    train_file = (data_dir / "train.parquet").resolve()
-    val_file = (data_dir / "val.parquet").resolve()
-    test_file = (data_dir / "test.parquet").resolve()
-
-    # Check essential files exist
-    if not train_file.is_file():
-        raise FileNotFoundError(f"Train parquet file not found: {train_file}")
-    if not val_file.is_file():
-        raise FileNotFoundError(f"Validation parquet file not found: {val_file}")
-    if not test_file.is_file():
-        print(f"Warning: Test parquet file not found: {test_file}")
-        test_file = None
-
-    return ResolvedPaths(
-        project_root=project_root,
-        embeddings_file=embeddings_file,
-        data_dir=data_dir,
-        train_file=train_file,
-        val_file=val_file,
-        test_file=test_file,
-        output_dir=output_base_dir.resolve(),
-        run_dir=run_dir,
-    )
 
 
 def prepare_data(
@@ -134,25 +71,33 @@ def train_model(
     model_class: Type[pl.LightningModule],
     model_kwargs: dict,
     trainer_kwargs: dict,
-    paths: ResolvedPaths,
+    paths: ExperimentPaths,
     train_loader: DataLoader,
     val_loader: DataLoader,
-    early_stopping_patience: int,
-    hparams_log: dict,
-) -> Tuple[str, TensorBoardLogger]:
+    hparams: dict,
+    wandb_project: str = "which-plm",
+    wandb_entity: str = None,
+    resume_from_checkpoint: bool = False,
+) -> Tuple[str, WandbLogger, float]:
     """Configure and run the PyTorch Lightning training loop for a given model."""
     print(f"Configuring model ({model_class.__name__}) and trainer...")
+
+    # Extract hyperparameters from hparams dict
+    early_stopping_patience = hparams.get("early_stopping_patience", 10)
+    val_check_interval = hparams.get("val_check_interval", 0.2)
+    batch_size = hparams.get("batch_size", 1024)
 
     # Instantiate the selected model
     model = model_class(**model_kwargs)
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
-        dirpath=paths.run_dir / "checkpoints",
+        dirpath=paths.checkpoints_dir,
         save_top_k=1,
+        save_last=True,
         monitor="val_loss",
         mode="min",
-        filename="model-{epoch:02d}-{val_loss:.3f}",
+        filename="best-{epoch:02d}-{step}-{val_loss:.3f}",
     )
     early_stopping_callback = EarlyStopping(
         monitor="val_loss",
@@ -162,95 +107,162 @@ def train_model(
     )
     callbacks = [early_stopping_callback, checkpoint_callback]
 
-    # Logger
-    logger = TensorBoardLogger(
-        save_dir=str(paths.run_dir / "tensorboard"),
-        name=None,
-        version="",
-        default_hp_metric=False,
-    )
+    # Weights & Biases logger configuration
+    # Generate a unique run name
+    embedding_name = Path(hparams["embedding_file"]).stem
+    run_name = f"{hparams['model_type']}-{hparams['param_name']}-{embedding_name}"
 
-    # Log hyperparameters manually
-    logger.log_hyperparams(hparams_log)
+    logger = WandbLogger(
+        project=wandb_project,
+        entity=wandb_entity,
+        name=run_name,
+        save_dir=str(paths.experiment_dir),
+        log_model=True,  # Log model checkpoints to wandb
+    )
+    print(f"Using Weights & Biases logging - Project: {wandb_project}, Run: {run_name}")
+
+    # Log hyperparameters to wandb
+    logger.log_hyperparams(hparams)
 
     # --- Trainer Setup ---
-    logging_steps = max(1, len(train_loader) // 4)
+    # Calculate logging frequency to be consistent with validation
+    # If val_check_interval is a fraction, convert to steps for consistent logging
+    if isinstance(val_check_interval, float) and 0 < val_check_interval <= 1:
+        # Validation happens every val_check_interval * epoch_steps
+        val_steps = max(1, int(len(train_loader) * val_check_interval))
+        # Log at least as frequently as validation, but not more than every 10 steps
+        logging_steps = max(10, min(val_steps // 2, len(train_loader) // 4))
+    else:
+        # val_check_interval is integer steps
+        logging_steps = max(1, min(val_check_interval // 2, len(train_loader) // 4))
+
+    print(
+        f"Validation every {val_check_interval} ({'fraction of epoch' if isinstance(val_check_interval, float) else 'steps'})"
+    )
+    print(f"Logging every {logging_steps} steps")
+    print(f"Batch size: {batch_size}")
+
     trainer = pl.Trainer(
         callbacks=callbacks,
         logger=logger,
         log_every_n_steps=logging_steps,
         enable_checkpointing=True,
-        enable_progress_bar=False,
+        enable_progress_bar=True,
         enable_model_summary=True,
+        val_check_interval=val_check_interval,
         **trainer_kwargs,
     )
 
     # --- Training ---
     print("Starting training...")
-    trainer.fit(model, train_loader, val_loader)
+
+    # Check for checkpoint to resume from if specified
+    ckpt_path = None
+    if resume_from_checkpoint and paths.last_checkpoint.exists():
+        ckpt_path = paths.last_checkpoint
+        print(f"Resuming training from: {ckpt_path}")
+    elif resume_from_checkpoint:
+        print("No last.ckpt found - starting fresh training")
+
+    trainer.fit(model, train_loader, val_loader, ckpt_path=ckpt_path)
 
     best_model_path = checkpoint_callback.best_model_path
-    print(f"\nTraining finished. Best model saved at: {best_model_path}")
+    best_model_score = (
+        float(checkpoint_callback.best_model_score)
+        if checkpoint_callback.best_model_score is not None
+        else 0.0
+    )
 
-    return best_model_path, logger
+    print(f"\nTraining finished. Best model saved at: {best_model_path}")
+    print(f"Best validation loss: {best_model_score:.6f}")
+
+    return best_model_path, logger, best_model_score
 
 
 def main(args):
     """Main workflow orchestrator for training or Euclidean baseline setup."""
     setup_environment(args.seed)
 
-    project_root = Path(__file__).parent.parent.parent
+    # Initialize wandb for all model types except euclidean baseline
+    if args.model_type != "euclidean":
+        print("Initializing Weights & Biases...")
+        try:
+            wandb.login()
+            print("Successfully logged into Weights & Biases")
+        except Exception as e:
+            print(f"Warning: Could not log into wandb automatically: {e}")
+            print(
+                "Please run 'wandb login' manually or set WANDB_API_KEY environment variable"
+            )
 
-    paths = prepare_paths(
-        output_base_dir=args.output_base_dir,
-        embeddings_file=args.embedding_file,
-        data_dir=args.data_dir,
-        project_root=project_root,
+    # Create experiment manager
+    # Determine dataset directory - if data_dir is 'sets', get parent; otherwise use data_dir
+    if args.data_dir.name == "sets":
+        dataset_dir = args.data_dir.parent
+    else:
+        dataset_dir = args.data_dir
+
+    exp_manager = ExperimentManager(
+        dataset_dir=dataset_dir,
+        embedding_name=args.embedding_file.stem,
+        model_type=args.model_type,
+        param_name=args.param_name,
+        models_base_dir=args.output_base_dir.parents[
+            3
+        ],  # Go up 4 levels: embedding/param/model/dataset -> models
+    )
+
+    # Create experiment paths
+    paths = exp_manager.create_experiment_paths(
+        project_root=Path(__file__).parent.parent.parent
     )
 
     # --- Euclidean Baseline Setup Only ---
     if args.model_type == "euclidean":
-        print("Setting up run directory for Euclidean Distance Baseline...")
+        print("Setting up directory for Euclidean Distance Baseline...")
 
-        # Need embedding size for hparams
+        # Euclidean baseline doesn't use wandb, so save hparams locally
         try:
-            embedding_size = get_embedding_size(str(paths.embeddings_file))
+            embedding_size = get_embedding_size(str(paths.embedding_file))
         except Exception as e:
-            print(f"Error getting embedding size for hparams: {e}")
-            embedding_size = -1  # Indicate error or unknown
+            print(f"Warning: Could not get embedding size: {e}")
+            embedding_size = -1
 
-        # Save hparams for evaluation script consistency
         hparams_to_log = {
             "model_type": args.model_type,
             "param_name": args.param_name,
-            "embedding_file": str(paths.embeddings_file),
+            "embedding_file": str(paths.embedding_file),
             "data_dir": str(paths.data_dir),
             "embedding_size": embedding_size,
-            "batch_size": args.batch_size,  # Log batch size potentially used by eval
+            "batch_size": args.batch_size,
             "seed": args.seed,
         }
-        hparams_path = paths.run_dir / "tensorboard" / "hparams.yaml"
+
+        hparams_path = paths.experiment_dir / "hparams.yaml"
         try:
-            hparams_path.parent.mkdir(
-                parents=True, exist_ok=True
-            )  # Ensure tensorboard dir exists
             with open(hparams_path, "w") as f:
                 yaml.dump(hparams_to_log, f)
-            print(f"Saved hyperparameters to {hparams_path}")
+            print(f"Saved hyperparameters to {hparams_path} (euclidean baseline)")
         except Exception as e:
-            print(f"Error saving hyperparameters: {e}")
+            print(f"Warning: Could not save hyperparameters: {e}")
 
         print("\nEuclidean baseline setup complete.")
-        print(f"Run directory created: {paths.run_dir}")
-        # Print the run dir path for the runner script
-        print(str(paths.run_dir.resolve()))
+        print(f"Experiment directory: {paths.experiment_dir}")
+
+        # Create completion marker for euclidean baseline
+        exp_manager.create_completion_marker(
+            paths.experiment_dir, "euclidean_baseline", 0.0
+        )
+
+        # Print the experiment dir path for the runner script
+        print(str(paths.experiment_dir.resolve()))
 
     # --- Standard Model Training ---
     else:
         embedding_size, train_loader, val_loader = prepare_data(
             param_name=args.param_name,
             batch_size=args.batch_size,
-            embeddings_file=paths.embeddings_file,
+            embeddings_file=paths.embedding_file,
             train_file=paths.train_file,
             val_file=paths.val_file,
             num_workers=args.num_workers,
@@ -282,42 +294,54 @@ def main(args):
         hparams_to_log = {
             "model_type": args.model_type,
             "param_name": args.param_name,
-            "embedding_file": str(paths.embeddings_file),
+            "embedding_file": str(paths.embedding_file),
             "data_dir": str(paths.data_dir),
             "embedding_size": embedding_size,
             "learning_rate": args.learning_rate,
             "batch_size": args.batch_size,
             "max_epochs": args.max_epochs,
             "early_stopping_patience": args.early_stopping_patience,
+            "val_check_interval": args.val_check_interval,
+            "num_workers": args.num_workers,
             "seed": args.seed,
         }
         if args.model_type == "fnn":
             hparams_to_log["hidden_size"] = args.hidden_size
 
         # Train model
-        best_model_path, _ = train_model(
+        best_model_path, _, best_model_score = train_model(
             model_class=model_class,
             model_kwargs=model_kwargs,
             trainer_kwargs=trainer_kwargs,
             paths=paths,
             train_loader=train_loader,
             val_loader=val_loader,
-            early_stopping_patience=args.early_stopping_patience,
-            hparams_log=hparams_to_log,
+            hparams=hparams_to_log,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            resume_from_checkpoint=args.resume_from_checkpoint,
+        )
+
+        # Create completion marker using the experiment manager
+        exp_manager.create_completion_marker(
+            paths.experiment_dir,
+            best_model_path,
+            best_model_score,
         )
 
         # --- Final Output for Training ---
         print(
             f"\nRun completed successfully. Best checkpoint saved to: {best_model_path}"
         )
-        print("To view TensorBoard logs for this run, use:")
-        print(f"tensorboard --logdir {paths.run_dir / 'tensorboard'}")
-        print("\nTo evaluate the best model, run evaluate.py using the run directory:")
+        print("View logs and metrics at: https://wandb.ai")
         print(
-            f'uv run python src/unknown_unknowns/evaluate.py --run_dir "{paths.run_dir}"'
+            "\nTo evaluate the best model, run evaluate.py using the experiment directory:"
         )
-        # Print the run dir path for the runner script
-        print(str(paths.run_dir.resolve()))
+        print(
+            f'uv run python src/evaluation/evaluate.py --run_dir "{paths.experiment_dir}"'
+        )
+        # Print the experiment dir path for the runner script
+        print(str(paths.experiment_dir.resolve()))
 
 
 if __name__ == "__main__":
@@ -360,7 +384,7 @@ if __name__ == "__main__":
         "--output_base_dir",
         type=Path,
         required=True,
-        help="Absolute path to the base directory where the timestamped run folder should be created.",
+        help="Absolute path to the experiment directory.",
     )
 
     # --- Core Training Hyperparameters (with defaults set here) ---
@@ -380,10 +404,17 @@ if __name__ == "__main__":
         help="Maximum number of training epochs (default: 100)",
     )
     parser.add_argument(
+        "-esp",
         "--early_stopping_patience",
         type=int,
-        default=5,
+        default=3,
         help="Patience for early stopping (default: 5)",
+    )
+    parser.add_argument(
+        "--val_check_interval",
+        type=float,
+        default=0.2,
+        help="How often to run validation during training. Float = fraction of epoch (0.2 = 5 times per epoch), Int = every N steps (default: 0.2)",
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed (default: 42)"
@@ -402,6 +433,25 @@ if __name__ == "__main__":
         type=int,
         default=64,
         help="Hidden layer size for FNN model (default: 64) - Ignored for linear model.",
+    )
+
+    # --- Weights & Biases Configuration ---
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="unknown-unknowns",
+        help="Weights & Biases project name (default: unknown-unknowns).",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="Weights & Biases entity (username/team). If not specified, uses your default entity.",
+    )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        action="store_true",
+        help="Resume training from the latest checkpoint in the experiment directory.",
     )
 
     args = parser.parse_args()

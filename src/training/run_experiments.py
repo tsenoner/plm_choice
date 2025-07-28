@@ -1,42 +1,20 @@
 #!/usr/bin/env python
 """
 This script runs training experiments for different models, embeddings, and parameters.
+All training runs use Weights & Biases for logging and visualization.
+Wandb automatically captures all console output, metrics, and model artifacts.
 It also optionally evaluates the results after each training run.
 
 Usage:
-python run_experiments.py --data_dir data/processed/sprot_pre2024 --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp
+python run_experiments.py --data_dir data/processed/sprot_pre2024 --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp --wandb_project my-project
 """
 
 import argparse
 import subprocess
 from pathlib import Path
-import os
-import re
-from typing import Optional
-import datetime  # Import datetime for timestamp
-import tqdm  # Import tqdm for progress bar
+from tqdm import tqdm
 
-
-def find_latest_run_dir(base_dir: Path) -> Optional[Path]:
-    """Find the most recently created timestamped subdirectory in base_dir."""
-    if not base_dir.is_dir():
-        return None
-
-    timestamp_pattern = re.compile(r"\d{8}_\d{6}")  # Compile pattern YYYYMMDD_HHMMSS
-
-    subdirs = [
-        d
-        for d in base_dir.iterdir()
-        # Check if it's a directory AND its name matches the pattern
-        if d.is_dir() and timestamp_pattern.fullmatch(d.name)
-    ]
-
-    if not subdirs:
-        return None
-
-    # Find the one with the latest creation time (st_ctime)
-    latest_dir = max(subdirs, key=lambda d: os.stat(d).st_ctime)
-    return latest_dir
+from src.shared.experiment_manager import ExperimentManager
 
 
 def main(args):
@@ -61,8 +39,6 @@ def main(args):
         return
 
     models_base_dir = project_root / "models"
-    # Extract the last part of the data_dir path for the model subdirectory
-    train_data_sub_dir = data_dir.name
 
     # --- Experiment Definitions ---
     model_types = args.model_types
@@ -83,10 +59,14 @@ def main(args):
         print(f" - {f.name}")
     print(f"Target model types: {model_types}")
     print(f"Target parameters: {target_params}")
+    print(f"Wandb project: {args.wandb_project}")
+    if args.wandb_entity:
+        print(f"Wandb entity: {args.wandb_entity}")
     if args.evaluate_after_train:
         print("Evaluation after each training run: Enabled")
-    # Add log directory info
-    print("Detailed logs will be stored in 'run_logs' subdirectories.")
+    print(
+        "All training logs and metrics are captured automatically by Weights & Biases."
+    )
     print("\n")
 
     total_combinations = len(model_types) * len(target_params) * len(embedding_files)
@@ -97,50 +77,48 @@ def main(args):
     error_count = 0  # Track general errors
 
     # Wrap the iteration with tqdm for a progress bar
-    pbar = tqdm.tqdm(total=total_combinations, desc="Running Experiments", unit="run")
+    pbar = tqdm(total=total_combinations, desc="Running Experiments", unit="run")
 
     # Iterate through all combinations
     for model_type in model_types:
         for param_name in target_params:
             for embedding_file_path in embedding_files:
                 embedding_name = embedding_file_path.stem
-                embedding_file_abs = str(embedding_file_path.resolve())
 
                 # Update progress bar description
                 pbar.set_description(
                     f"Checking: {model_type}/{param_name}/{embedding_name}"
                 )
 
-                experiment_output_dir = (
-                    models_base_dir
-                    / train_data_sub_dir  # Add the training data subdir
-                    / model_type  # Use model_type directly
-                    / param_name
-                    / embedding_name
+                # Create experiment manager for this combination
+                exp_manager = ExperimentManager(
+                    dataset_dir=data_dir,  # data/processed/sprot_pre2024
+                    embedding_name=embedding_name,  # e.g., 'esm1b'
+                    model_type=model_type,
+                    param_name=param_name,
+                    models_base_dir=models_base_dir,
                 )
 
-                # --- Redundancy Check ---
-                if experiment_output_dir.exists():
-                    if any(item.is_dir() for item in experiment_output_dir.iterdir()):
-                        # Removed print statement for skipping
-                        # print(
-                        #     f"Skipping: Output directory {experiment_output_dir} already exists with subdirectories."
-                        # )
-                        skipped_count += 1
-                        pbar.update(1)  # Update progress bar
-                        pbar.set_postfix(
-                            skipped=skipped_count, errors=error_count, refresh=True
-                        )
-                        continue
-                # ------------------------
+                # Check experiment status using the centralized manager
+                status, experiment_dir = exp_manager.check_experiment_status()
 
-                # --- Create Log Directory and Define Log Paths (AFTER check) ---
-                log_dir = experiment_output_dir / "run_logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                train_log_path = log_dir / f"train_{timestamp_str}.log"
-                eval_log_path = log_dir / f"eval_{timestamp_str}.log"
-                # -------------------------------------------------------------
+                if status == "completed":
+                    # Training completed - skip this experiment
+                    skipped_count += 1
+                    pbar.update(1)
+                    pbar.set_postfix(
+                        skipped=skipped_count, errors=error_count, refresh=True
+                    )
+                    continue
+                elif status == "interrupted":
+                    # Training interrupted but has checkpoint - resume
+                    print(
+                        f"Resuming interrupted training: {model_type}/{param_name}/{embedding_name}"
+                    )
+                    resume_training = True
+                else:
+                    # Fresh start (not_started or empty)
+                    resume_training = False
 
                 # Update description before training
                 pbar.set_description(
@@ -160,47 +138,50 @@ def main(args):
                     "--param_name",
                     param_name,
                     "--embedding_file",
-                    embedding_file_abs,
+                    str(embedding_file_path.resolve()),
                     "--data_dir",
                     str(sets_dir),
                     "--output_base_dir",
-                    str(experiment_output_dir),
+                    str(exp_manager.experiment_dir),
                     "--num_workers",
                     "10",
                     "--batch_size",
-                    "4096",
+                    "1024",
                     "--learning_rate",
                     "0.0001",
                     "--max_epochs",
-                    "200",
+                    "100",
                     "--early_stopping_patience",
-                    "5",
+                    "10",
+                    "--val_check_interval",
+                    str(args.val_check_interval),  # Use the provided val_check_interval
                 ]
 
-                # print(f"Executing: {' '.join(train_command)}")
-                # print(f"Log file: {train_log_path}")  # Indicate log file path
+                # Add wandb configuration
+                if args.wandb_project:
+                    train_command.extend(["--wandb_project", args.wandb_project])
+                if args.wandb_entity:
+                    train_command.extend(["--wandb_entity", args.wandb_entity])
+
+                # Add resume flag if resuming
+                if resume_training:
+                    train_command.append("--resume_from_checkpoint")
+
                 training_successful = False
                 try:
-                    # Run training, redirecting output to log file
-                    with open(train_log_path, "a", encoding="utf-8") as log_file:
-                        subprocess.run(
-                            train_command,
-                            check=True,  # Will raise CalledProcessError on failure
-                            cwd=project_root,
-                            text=True,
-                            stdout=log_file,  # Redirect stdout
-                            stderr=log_file,  # Redirect stderr
-                        )
-                    # print(
-                    #     f"Successfully finished training for Model={model_type}, Param={param_name}, Embedding={embedding_name}"
-                    # )
+                    # Run training - wandb captures all output automatically
+                    subprocess.run(
+                        train_command,
+                        check=True,  # Will raise CalledProcessError on failure
+                        cwd=project_root,
+                        text=True,
+                    )
                     training_successful = True
 
                 except subprocess.CalledProcessError as e:
                     error_count += 1
-                    # Keep error message
-                    tqdm.tqdm.write(  # Use tqdm.write to avoid messing up the progress bar
-                        f"Error during training for {model_type}/{param_name}/{embedding_name}: Check log {train_log_path}\nDetails: {e}"
+                    tqdm.write(
+                        f"Error during training for {model_type}/{param_name}/{embedding_name}: {e}"
                     )
                 except KeyboardInterrupt:
                     pbar.close()
@@ -208,64 +189,39 @@ def main(args):
                     return
                 except Exception as e:
                     error_count += 1
-                    # Keep error message
-                    tqdm.tqdm.write(
-                        f"Unexpected error during training execution for {model_type}/{param_name}/{embedding_name}: Check log {train_log_path}\nDetails: {e}"
+                    tqdm.write(
+                        f"Unexpected error during training execution for {model_type}/{param_name}/{embedding_name}: {e}"
                     )
 
                 # --- Optional Evaluation Step ---
-                run_dir_to_evaluate = None
                 if training_successful and args.evaluate_after_train:
-                    # print(f"Finding run directory in {experiment_output_dir}...") # Keep error finding dir, comment out info prints
-                    run_dir_to_evaluate = find_latest_run_dir(experiment_output_dir)
-                    if run_dir_to_evaluate:
-                        # print(f"Found latest run directory: {run_dir_to_evaluate}") # Keep error finding dir, comment out info prints
-                        pass
-                    else:
-                        print(
-                            f"Error: Could not find timestamped run directory in {experiment_output_dir} after successful training."
-                        )
-
-                if run_dir_to_evaluate:
-                    # Update description before evaluation
+                    # Use the experiment directory for evaluation
                     pbar.set_description(
                         f"Evaluating: {model_type}/{param_name}/{embedding_name}"
                     )
 
-                    # print(f"Running evaluation for run: {run_dir_to_evaluate}")
                     eval_command = [
                         "uv",
                         "run",
                         "python",
                         str(project_root / "src" / "evaluation" / "evaluate.py"),
                         "--run_dir",
-                        str(run_dir_to_evaluate),
+                        str(experiment_dir),
                     ]
 
-                    # print(f"Executing: {' '.join(eval_command)}")
-                    # print(f"Log file: {eval_log_path}")  # Indicate log file path
                     try:
-                        # Let evaluation output stream as well, redirecting output
-                        with open(eval_log_path, "a", encoding="utf-8") as log_file:
-                            subprocess.run(
-                                eval_command,
-                                check=True,
-                                cwd=project_root,
-                                text=True,
-                                stdout=log_file,  # Redirect stdout
-                                stderr=log_file,  # Redirect stderr
-                            )
-                        # print(
-                        #     f"Successfully finished evaluation for {run_dir_to_evaluate}"
-                        # )
+                        # Run evaluation - output goes to console/wandb
+                        subprocess.run(
+                            eval_command,
+                            check=True,
+                            cwd=project_root,
+                            text=True,
+                        )
                         eval_success_count += 1
                     except subprocess.CalledProcessError as e:
                         eval_fail_count += 1
                         error_count += 1  # Count eval errors too
-                        # Keep error message
-                        tqdm.tqdm.write(
-                            f"Error during evaluation for {run_dir_to_evaluate}: Check log {eval_log_path}\nDetails: {e}"
-                        )
+                        tqdm.write(f"Error during evaluation for {experiment_dir}: {e}")
                     except KeyboardInterrupt:
                         pbar.close()
                         print("\nEvaluation interrupted by user.")
@@ -273,23 +229,9 @@ def main(args):
                     except Exception as e:
                         eval_fail_count += 1
                         error_count += 1  # Count eval errors too
-                        # Keep error message
-                        tqdm.tqdm.write(
-                            f"Unexpected error during evaluation for {run_dir_to_evaluate}: Check log {eval_log_path}\nDetails: {e}"
+                        tqdm.write(
+                            f"Unexpected error during evaluation for {experiment_dir}: {e}"
                         )
-                elif args.evaluate_after_train and training_successful:
-                    # Log failure if we expected to evaluate but couldn't find dir
-                    eval_fail_count += 1
-                    error_count += 1
-                    # Optional: log this specific failure case
-                    tqdm.tqdm.write(
-                        f"Skipping evaluation: Could not determine run directory for {experiment_output_dir}"
-                    )
-                # Removed redundant skip messages unless training failed
-                # elif args.evaluate_after_train:
-                #     print(
-                #         f"Skipping evaluation: Training failed for Model={model_type}, Param={param_name}, Embedding={embedding_name}"
-                #     )
 
                 # Update progress bar after processing each combination
                 pbar.update(1)
@@ -300,7 +242,6 @@ def main(args):
                     eval_fail=eval_fail_count,
                     refresh=True,
                 )
-                # # Removed: print("---") # Ensure commented out
 
     pbar.close()  # Close the progress bar cleanly
 
@@ -344,6 +285,24 @@ if __name__ == "__main__":
         default=["fident", "alntmscore", "hfsp"],
         choices=["fident", "alntmscore", "hfsp"],
         help="List of target parameters to run.",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="unknown-unknowns",
+        help="Weights & Biases project name (default: unknown-unknowns).",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="Weights & Biases entity (username/team).",
+    )
+    parser.add_argument(
+        "--val_check_interval",
+        type=float,
+        default=0.2,
+        help="How often to run validation during training. 0.2 = 5 times per epoch (default: 0.2)",
     )
 
     args = parser.parse_args()

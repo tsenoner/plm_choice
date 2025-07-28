@@ -5,28 +5,50 @@ from torch.utils.data import Dataset, DataLoader
 
 
 class H5PyDataset(Dataset):
-    def __init__(self, data: pl.DataFrame, file_path: str, param_name: str):
-        self.data = data
+    def __init__(
+        self,
+        data: pl.DataFrame,
+        file_path: str,
+        param_name: str,
+    ):
         self.param_name = param_name
         self.file_path = file_path
         self.file = None
 
+        self.queries = data.select("query").to_series().to_numpy()
+        self.targets = data.select("target").to_series().to_numpy()
+        self.param_values = (
+            data.select(param_name).to_series().to_numpy().astype(np.float32)
+        )
+
     def __len__(self):
-        return self.data.height
+        return len(self.queries)
 
     def __getitem__(self, idx):
         if self.file is None:
-            # Ensure file is opened in worker process if using num_workers > 0
-            self.file = h5py.File(self.file_path, "r", swmr=True)
+            # Optimized HDF5 file opening with larger cache
+            self.file = h5py.File(
+                self.file_path,
+                "r",
+                swmr=True,
+            )
 
-        # Get row from Polars DataFrame as a tuple
-        row_data = self.data.row(idx, named=True)
-        # Return numpy arrays again - this was better for aten::copy_
-        query_emb_np = self.file[row_data["query"]][:].flatten().astype(np.float32)
-        target_emb_np = self.file[row_data["target"]][:].flatten().astype(np.float32)
-        param_value_np = np.float32(row_data[self.param_name])
+        query_id = self.queries[idx]
+        target_id = self.targets[idx]
+        param_value = self.param_values[idx]
 
-        return query_emb_np, target_emb_np, param_value_np
+        # Get embeddings with optional caching
+        query_emb_np = self._get_embedding(query_id)
+        target_emb_np = self._get_embedding(target_id)
+
+        return query_emb_np, target_emb_np, param_value
+
+    def _get_embedding(self, protein_id: str) -> np.ndarray:
+        """Get embedding"""
+        # Load from HDF5
+        embedding = self.file[protein_id][:].flatten().astype(np.float32)
+
+        return embedding
 
     def close(self):
         if self.file is not None:
@@ -36,7 +58,7 @@ class H5PyDataset(Dataset):
 
 def get_embedding_size(hdf_file: str) -> int:
     """Reads the shape of the first dataset in the HDF5 file and returns its total size as an int."""
-    with h5py.File(hdf_file, "r") as hdf:
+    with h5py.File(hdf_file, "r", rdcc_nbytes=32 * 1024 * 1024) as hdf:
         first_key = next(iter(hdf))
         embedding_shape = hdf[first_key].shape
         return int(np.prod(embedding_shape))
@@ -99,13 +121,24 @@ def create_single_loader(
     shuffle: bool = False,
     num_workers: int = 4,
 ) -> DataLoader:
-    """Creates a DataLoader for a single parquet dataset."""
+    """Creates an optimized DataLoader for a single parquet dataset."""
     data = _load_and_filter_data(parquet_file, hdf_file, param_name)
-    dataset = H5PyDataset(data, hdf_file, param_name)
+
+    dataset = H5PyDataset(
+        data,
+        hdf_file,
+        param_name,
+    )
 
     persistent_workers = num_workers > 0
+
+    # Calculate optimal prefetch factor
+    prefetch_factor = max(2, min(6, batch_size // 1024 + 2)) if num_workers > 0 else 2
+
     if persistent_workers:
-        print(f"Using {num_workers} persistent workers for DataLoader.")
+        print(
+            f"Using {num_workers} persistent workers with prefetch_factor={prefetch_factor}"
+        )
     else:
         print(f"Not using persistent workers (num_workers={num_workers}).")
 
@@ -115,8 +148,8 @@ def create_single_loader(
         shuffle=shuffle,
         num_workers=num_workers,
         persistent_workers=persistent_workers,
-        pin_memory=True,  # Explicitly set pin_memory=True
-        # pin_memory_device="mps" # Usually not needed, PyTorch handles default device
+        pin_memory=True,
+        prefetch_factor=prefetch_factor,
     )
-    print("DataLoader initialized with pin_memory=True.")
+    print("Optimized DataLoader initialized with pin_memory=True.")
     return loader
