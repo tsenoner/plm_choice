@@ -87,6 +87,16 @@ def train_model(
     val_check_interval = hparams.get("val_check_interval", 0.2)
     batch_size = hparams.get("batch_size", 1024)
 
+    # Calculate actual patience based on val_check_interval
+    if isinstance(val_check_interval, float) and 0 < val_check_interval <= 1:
+        actual_patience = max(1, int(early_stopping_patience / val_check_interval))
+    else:
+        actual_patience = early_stopping_patience
+
+    print(
+        f"Early stopping patience: {early_stopping_patience} epochs = {actual_patience} validation checks"
+    )
+
     # Instantiate the selected model
     model = model_class(**model_kwargs)
 
@@ -101,24 +111,51 @@ def train_model(
     )
     early_stopping_callback = EarlyStopping(
         monitor="val_loss",
-        patience=early_stopping_patience,
+        patience=actual_patience,
         mode="min",
         verbose=True,
     )
     callbacks = [early_stopping_callback, checkpoint_callback]
 
     # Weights & Biases logger configuration
-    # Generate a unique run name
     embedding_name = Path(hparams["embedding_file"]).stem
     run_name = f"{hparams['model_type']}-{hparams['param_name']}-{embedding_name}"
+
+    # Handle wandb run resuming
+    wandb_run_id = None
+    wandb_id_file = paths.experiment_dir / "wandb_run_id.txt"
+
+    if resume_from_checkpoint and wandb_id_file.exists():
+        try:
+            with open(wandb_id_file, "r") as f:
+                wandb_run_id = f.read().strip()
+            print(f"Resuming wandb run with ID: {wandb_run_id}")
+        except Exception as e:
+            print(f"Could not load wandb run ID: {e}. Starting new run.")
+            wandb_run_id = None
 
     logger = WandbLogger(
         project=wandb_project,
         entity=wandb_entity,
         name=run_name,
         save_dir=str(paths.experiment_dir),
-        log_model=True,  # Log model checkpoints to wandb
+        log_model=True,
+        id=wandb_run_id,
+        resume="must" if wandb_run_id else None,
     )
+
+    # Save wandb run ID for future resuming (only for new runs)
+    if not wandb_run_id:
+        try:
+            # Access experiment to ensure run is created
+            _ = logger.experiment
+            new_run_id = logger.experiment.id
+            with open(wandb_id_file, "w") as f:
+                f.write(new_run_id)
+            print(f"Saved wandb run ID: {new_run_id}")
+        except Exception as e:
+            print(f"Warning: Could not save wandb run ID: {e}")
+
     print(f"Using Weights & Biases logging - Project: {wandb_project}, Run: {run_name}")
 
     # Log hyperparameters to wandb

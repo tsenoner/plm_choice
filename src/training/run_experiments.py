@@ -101,6 +101,9 @@ def main(args):
 
                 # Check experiment status using the centralized manager
                 status, experiment_dir = exp_manager.check_experiment_status()
+                # print(f"Experiment status: {status}")
+                # print(f"Experiment directory: {experiment_dir}")
+                # exit()
 
                 if status == "completed":
                     # Training completed - skip this experiment
@@ -152,7 +155,7 @@ def main(args):
                     "--max_epochs",
                     "100",
                     "--early_stopping_patience",
-                    "10",
+                    "2",
                     "--val_check_interval",
                     str(args.val_check_interval),  # Use the provided val_check_interval
                 ]
