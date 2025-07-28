@@ -142,6 +142,7 @@ def train_model(
         log_model=True,
         id=wandb_run_id,
         resume="must" if wandb_run_id else None,
+        tags=[hparams["model_type"], hparams["param_name"]],
     )
 
     # Save wandb run ID for future resuming (only for new runs)
