@@ -12,14 +12,9 @@ wheels/
 # macOS specific
 .DS_Store
 
-# Data directory
+# Directories
 /data/
-
-# Output directory
 /out/
-
-# Models directory
 /models/
-
-# Notebooks
 /notebooks/
+/logs/
