@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 import yaml
 import pytorch_lightning as pl
 from tqdm import tqdm
+import wandb
 
 # Project specific imports
 from src.shared.datasets import create_single_loader
@@ -395,6 +396,53 @@ def run_euclidean_distance(test_loader: DataLoader) -> Tuple[np.ndarray, np.ndar
     return np.concatenate(dists), np.concatenate(tgts)
 
 
+def log_evaluation_to_wandb(
+    experiment_dir: Path,
+    hparams: Dict[str, Any],
+    metrics: Dict[str, Any],
+    plot_path: Path,
+    test_set_name: str,
+):
+    """Logs evaluation metrics and plots to a resumed wandb run."""
+    wandb_run_id_file = experiment_dir / "wandb_run_id.txt"
+    if not wandb_run_id_file.exists():
+        print("Warning: wandb_run_id.txt not found. Cannot log to wandb.")
+        return
+
+    with open(wandb_run_id_file, "r") as f:
+        wandb_run_id = f.read().strip()
+
+    if not wandb_run_id:
+        print("Warning: wandb_run_id is empty. Cannot log to wandb.")
+        return
+
+    try:
+        print(f"Resuming wandb run '{wandb_run_id}' to log evaluation results...")
+        wandb.init(
+            project=hparams.get("wandb_project", "default-project"),
+            entity=hparams.get("wandb_entity"),
+            id=wandb_run_id,
+            resume="allow",
+            dir=str(experiment_dir),
+        )
+
+        # Log metrics with a prefix to distinguish them
+        wandb.log({f"test_{test_set_name}/{k}": v for k, v in metrics.items()})
+
+        # Log the evaluation plot
+        wandb.log(
+            {f"test_{test_set_name}/evaluation_plot": wandb.Image(str(plot_path))}
+        )
+
+        print("Successfully logged evaluation results to wandb.")
+
+    except Exception as e:
+        print(f"Warning: Failed to log evaluation results to wandb: {e}")
+    finally:
+        if wandb.run:
+            wandb.finish()
+
+
 # --- Main Orchestration ---
 
 
@@ -483,6 +531,16 @@ def main(args):
             targets, predictions, plot_path, metrics=metrics, title=plot_title
         )
         print(f"Saved evaluation plot to: {plot_path}")
+
+        # 7. Log to WandB
+        if model_type != "euclidean":
+            log_evaluation_to_wandb(
+                args.experiment_dir,
+                hparams,
+                metrics,
+                plot_path,
+                test_set_name,
+            )
 
         print("\nEvaluation process complete.")
 

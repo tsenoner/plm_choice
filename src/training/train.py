@@ -273,6 +273,8 @@ def main(args):
             "embedding_size": embedding_size,
             "batch_size": args.batch_size,
             "seed": args.seed,
+            "wandb_project": args.wandb_project,
+            "wandb_entity": args.wandb_entity,
         }
 
         hparams_path = paths.experiment_dir / "hparams.yaml"
@@ -341,6 +343,8 @@ def main(args):
             "val_check_interval": args.val_check_interval,
             "num_workers": args.num_workers,
             "seed": args.seed,
+            "wandb_project": args.wandb_project,
+            "wandb_entity": args.wandb_entity,
         }
         if args.model_type == "fnn":
             hparams_to_log["hidden_size"] = args.hidden_size
