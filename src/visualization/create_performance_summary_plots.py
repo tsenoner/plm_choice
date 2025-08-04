@@ -148,69 +148,74 @@ def load_results_data(base_dir: Path) -> pd.DataFrame:
     results = []
     log.info(f"Searching recursively for '*_metrics.txt' files under: {base_dir}")
 
-    # Use rglob to find all _metrics.txt files recursively
     metric_files = list(base_dir.rglob("*_metrics.txt"))
     log.info(f"Found {len(metric_files)} potential '*_metrics.txt' files via rglob:")
 
     if not metric_files:
-        raise ValueError("No '*_metrics.txt' files found anywhere under {base_dir}.")
-
-    # Define expected number of path parts relative to base_dir
-    # models/train_sub/<model_type>/<param_name>/<embedding_name>/<timestamp>/evaluation_results/*_metrics.txt
-    #                 | 1          | 2          | 3              | 4         | 5                | 6
-    EXPECTED_DEPTH = 6
+        raise ValueError(f"No '*_metrics.txt' files found anywhere under {base_dir}.")
 
     for metric_file in metric_files:
-        relative_path = metric_file.relative_to(base_dir)
-        relative_parts = relative_path.parts
+        metrics = {}  # Initialize metrics for each file
+        try:
+            relative_path = metric_file.relative_to(base_dir)
 
-        # Skip files with unexpected path structure
-        if len(relative_parts) != EXPECTED_DEPTH:
-            log.warning(
-                f"Skipping file with unexpected path structure: {relative_path}\n"
-                f"Expected path format: <model_type>/<param_name>/<embedding_name>/<timestamp>/evaluation_results/*_metrics.txt\n"
-                f"Found {len(relative_parts)} path components instead of expected {EXPECTED_DEPTH}"
+            try:
+                eval_results_index = relative_path.parts.index("evaluation_results")
+            except ValueError:
+                log.warning(
+                    f"Skipping file with unexpected structure (missing 'evaluation_results'): {relative_path}"
+                )
+                continue
+
+            # Expected structure: <...>/<model_type>/<param_name>/<embedding_name>/evaluation_results/...
+            if eval_results_index < 3:
+                log.warning(
+                    f"Skipping file due to unexpected path depth relative to 'evaluation_results': {relative_path}"
+                )
+                continue
+
+            embedding_name = relative_path.parts[eval_results_index - 1]
+            param_name = relative_path.parts[eval_results_index - 2]
+            model_type = relative_path.parts[eval_results_index - 3]
+
+            embedding_key = embedding_name.lower()
+            metrics = parse_metrics_file(metric_file)
+
+            results.append(
+                {
+                    "Model Type": model_type,
+                    "Parameter": param_name,
+                    "Embedding": embedding_name,
+                    "Embedding Key": embedding_key,
+                    "Embedding Family": EMBEDDING_FAMILY_MAP.get(
+                        embedding_key, "Unknown"
+                    ),
+                    "PLM Size": PLM_SIZES.get(embedding_key),
+                    **metrics,
+                }
             )
-            continue
+        except Exception as e:
+            log.error(f"Failed to process file {metric_file}: {e}", exc_info=True)
 
-        # Extract metadata from path
-        model_type, param_name, embedding_name = relative_parts[0:3]
-        embedding_key = embedding_name.lower()
-        metrics = parse_metrics_file(metric_file)
-
-        # Add result to collection, merging dicts
-        results.append(
-            {
-                "Model Type": model_type,
-                "Parameter": param_name,
-                "Embedding": embedding_name,
-                "Embedding Key": embedding_key,
-                "Embedding Family": EMBEDDING_FAMILY_MAP.get(embedding_key, "Unknown"),
-                "PLM Size": PLM_SIZES.get(embedding_key),
-                **metrics,  # Unpack the parsed metrics dictionary here
-            }
+    if not results:
+        log.error(
+            "No valid metric files were parsed. Please check the directory structure and file contents."
         )
+        return pd.DataFrame()
 
-    # Create DataFrame and convert columns to numeric types
     results_df = pd.DataFrame(results)
-    # Define all expected numeric columns
-    # numeric_cols = [
-    #     "Pearson R2",
-    #     "Pearson R2 SE",
-    #     "MAE",
-    #     "Spearman",
-    #     "Spearman SE",
-    #     "R2",
-    #     "PLM Size",
-    # ]
-    numeric_cols = metrics.keys()
-    for col in numeric_cols:
-        if col in results_df.columns:
-            results_df[col] = pd.to_numeric(results_df[col])
-        else:
-            log.warning(
-                f"Column '{col}' not found in parsed data, skipping numeric conversion."
-            )
+
+    # This part was causing the UnboundLocalError when no files were parsed.
+    # We get the keys from the first valid parsed metric file.
+    if results:
+        numeric_cols = metrics.keys()
+        for col in numeric_cols:
+            if col in results_df.columns:
+                results_df[col] = pd.to_numeric(results_df[col])
+            else:
+                log.warning(
+                    f"Column '{col}' not found in parsed data, skipping numeric conversion."
+                )
 
     log.info(f"Successfully parsed {len(results_df)} valid result entries.")
     return results_df

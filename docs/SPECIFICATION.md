@@ -13,11 +13,19 @@ This project aims to train and evaluate machine learning models to predict speci
   - Embedding files (found automatically as `.h5` files in `data/processed/sprot_embs/` - this includes both PLM and generated random embeddings).
 - **Redundancy Check:** Before launching a run, `run_experiments.py` checks if a corresponding output directory (`models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`) already contains timestamped results. If so, it skips the combination to avoid redundant computations. `<train_data_sub_dir>` is the base name of the directory specified by `--csv_dir`.
 - **Optional Evaluation:** The `--evaluate_after_train` flag can be passed to `run_experiments.py` to automatically trigger the evaluation script (`src/evaluation/evaluate.py`) for each successfully completed run (including the Euclidean baseline setup).
+- **Experiment Tracking:** Training and evaluation results are logged to Weights & Biases (`wandb`). This includes metrics, hyperparameters, and evaluation plots.
+
 - **Usage Example:**
 
   ```bash
   # Generate random embeddings (if not already present)
   uv run python src/data_preparation/embeddings/random_embeddings.py
+
+  # Create a subset of the main dataset
+  uv run python scripts/create_subset_datasets.py --input_dir data/processed/sprot_pre2024 --output_dir data/processed/sprot_pre2024_subset --n_samples 1000
+
+  # Reduce dimensionality of embeddings using PCA
+  uv run python scripts/reduce_embeddings_pca.py --input_dir data/processed/sprot_embs --output_dir data/processed/sprot_embs_pca --n_components 128
 
   # Run FNN, Linear, LinearDistance & Euclidean models for all params/embeddings using 'processed/sprot_train' data, evaluate after
   # This will include runs using the 'random_*.h5' files as input embeddings for FNN/Linear/LinearDistance
@@ -31,20 +39,22 @@ This project aims to train and evaluate machine learning models to predict speci
 ## 3. Key Scripts & Components
 
 - **`src/training/run_experiments.py`:** (Training) Orchestrates the entire experimental workflow. Iterates through specified model types (`fnn`, `linear`, `linear_distance`, `euclidean`), target parameters, and all `.h5` embedding files found in the embedding directory. Extracts the base name of the `--csv_dir` directory (`<train_data_sub_dir>`). Performs redundancy checks based on the expected output path (`models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`), constructs this base path, and calls `src/training/train.py`, passing the base path via the `--output_base_dir` argument. Optionally calls `src/evaluation/evaluate.py`.
+- **`scripts/create_subset_datasets.py`:** (Data Preparation) Creates a smaller subset of a dataset. Takes an input directory containing `train.csv`, `val.csv`, and `test.csv` and an output directory. It samples a specified number of items from the training set and creates new `train.csv`, `val.csv`, and `test.csv` files in the output directory.
+- **`scripts/reduce_embeddings_pca.py`:** (Data Preparation) Applies PCA to reduce the dimensionality of embedding files. It takes an input directory of `.h5` embedding files and an output directory, and saves the reduced-dimensionality embeddings to the output directory.
 - **`src/data_preparation/embeddings/random_embeddings.py`:** (Data Preparation) Generates HDF5 files (`random_<dim>.h5`) containing random embeddings (standard normal distribution) for protein IDs found in a template HDF5 file (e.g., `prott5.h5`). These files are saved to the standard embedding directory (`data/processed/sprot_embs/`) and are intended to be used as input embeddings for the standard training workflow (`fnn`, `linear`, `linear_distance`) to establish a baseline.
-- **`src/evaluation/evaluate_multiple_runs.py`:** (Evaluation) Provides a flexible way to re-evaluate multiple model runs. It takes an `--input_path` which can be a high-level directory (e.g., `models/sprot_train`), a mid-level directory (e.g., `models/sprot_train/fnn/fident`), or a specific timestamped run directory. It recursively searches for valid run directories (identified by the presence of `tensorboard/hparams.yaml`) and then calls `src/evaluation/evaluate.py --run_dir <path_to_run_dir>` for each. This is useful for updating plots or re-calculating metrics for multiple existing runs with new evaluation code or plotting styles. Includes a `--dry_run` option.
+- **`src/evaluation/evaluate_multiple_runs.py`:** (Evaluation) Provides a flexible way to re-evaluate multiple model runs. It takes an `--input_path` which can be a high-level directory (e.g., `models/sprot_train`), a mid-level directory (e.g., `models/sprot_train/fnn/fident`), or a specific timestamped run directory. It recursively searches for valid run directories (identified by the presence of `tensorboard/hparams.yaml` or `wandb/`) and then calls `src/evaluation/evaluate.py --run_dir <path_to_run_dir>` for each. This is useful for updating plots or re-calculating metrics for multiple existing runs with new evaluation code or plotting styles. Includes a `--dry_run` option.
 - **`src/visualization/create_evaluation_grid_plots.py`:** (Visualization) Generates composite grid images from individual evaluation plots.
   - **Purpose:** To provide a consolidated view of all embedding performances for a specific model type and target parameter combination.
   - **Inputs:**
     - `--input_path`: (Required, default: `models/sprot_train`) The base directory to search for model run outputs. Can be a high-level directory (e.g., `models/sprot_train`), a specific model/parameter directory, or even a direct path to an evaluation_results directory.
     - `--output_dir`: (Optional, default: `out/summary_grids/`) The directory where the output grid plots will be saved.
-  - **Logic:** Recursively searches the `--input_path` for individual plot files (`*_results.png`) located within `evaluation_results` directories. It parses the directory structure to identify the model type, parameter name, embedding name, and timestamp for each plot. For each unique combination of model type, parameter name, and embedding, it selects the plot corresponding to the latest timestamp.
+  - **Logic:** Recursively searches the `--input_path` for individual plot files (`*_results.png`) located within `evaluation_results` directories. It parses the directory structure to identify the model type, parameter name, and embedding name for each plot. For each unique combination, it uses the corresponding plot.
   - **Outputs:** Saves composite grid plot files (e.g., `grid_<model_type>_<param_name>.png`) into the `--output_dir`. Each grid displays all embedding-specific plots for a given model type and parameter, with embedding names as subplot titles.
 - **`src/training/train.py`:** Handles the training of a single model instance (`fnn`, `linear`, `linear_distance`) _or_ sets up the run directory for the non-trainable Euclidean baseline within a specified output directory.
   - Takes parameters via command-line arguments, including the base output directory (`--output_base_dir`) provided by `run_experiments.py`.
   - Creates a timestamped subdirectory within the `--output_base_dir` for the specific run.
-  - **If model type is `fnn`, `linear`, or `linear_distance`:** Selects the appropriate model class (`FNNPredictor`, `LinearRegressionPredictor`, or `LinearDistancePredictor`), uses PyTorch Lightning for training using the specified input embedding file (which could be a PLM embedding or a generated random embedding), saves checkpoints and TensorBoard logs within the timestamped run directory.
-  - **If model type is `euclidean`:** Creates the necessary structure (`tensorboard/hparams.yaml`) within the timestamped run directory. No training occurs; evaluation is handled directly by `src/evaluation/evaluate.py`.
+  - **If model type is `fnn`, `linear`, or `linear_distance`:** Selects the appropriate model class (`FNNPredictor`, `LinearRegressionPredictor`, or `LinearDistancePredictor`), uses PyTorch Lightning for training using the specified input embedding file (which could be a PLM embedding or a generated random embedding), saves checkpoints and logs to Weights & Biases (`wandb`) within the timestamped run directory.
+  - **If model type is `euclidean`:** Creates the necessary structure (`wandb/hparams.yaml`) within the timestamped run directory. No training occurs; evaluation is handled directly by `src/evaluation/evaluate.py`.
   - Hyperparameter defaults for trainable models are defined directly within its `argparse` setup.
 - **`src/evaluation/evaluate.py`:** Evaluates a trained model checkpoint (`fnn`, `linear`, `linear_distance`) or the Euclidean baseline from a specific run directory.
   - Takes the run directory (`--run_dir`) and optionally the number of bootstrap samples (`--n_bootstrap`, default 1000) as input.
@@ -76,20 +86,20 @@ This project aims to train and evaluate machine learning models to predict speci
 ## 4. Data
 
 - **Raw Data:** Original CSV files are expected in `data/raw/<subdir_name>/` (e.g., `data/raw/training/`).
-- **Processed Data:** Preprocessing scripts save results to `data/processed/<subdir_name>/` (e.g., `data/processed/sprot_train/`). `run_experiments.py` uses the directory specified by `--csv_dir`.
-- **Embeddings:** Stored as HDF5 files (`.h5`) in `data/processed/sprot_embs/`. This directory contains both PLM embeddings (e.g., `prott5.h5`) and generated random embeddings (e.g., `random_512.h5`). `run_experiments.py` automatically discovers and uses all `.h5` files found here.
+- **Processed Data:** Preprocessing scripts save results to `data/processed/<subdir_name>/` (e.g., `data/processed/sprot_train/`). `run_experiments.py` uses the directory specified by `--csv_dir`. This can include subsets or other variations, e.g., `data/processed/sprot_pre2024_subset`.
+- **Embeddings:** Stored as HDF5 files (`.h5`) in directories like `data/processed/sprot_embs/`. This directory contains both PLM embeddings (e.g., `prott5.h5`) and generated random embeddings (e.g., `random_512.h5`). `run_experiments.py` automatically discovers and uses all `.h5` files found here. Reduced-dimensionality embeddings may be stored in separate directories (e.g., `data/processed/sprot_embs_pca`).
 - **CSV Files:** The directory specified via `--csv_dir` must contain `train.csv`, `val.csv`, and `test.csv`.
 
 ## 5. Output Structure
 
 - Runs are saved under `models/`.
-- Structure: `models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/<timestamp>/`
-  - `<train_data_sub_dir>`: The base name of the directory provided via `--csv_dir` (e.g., `sprot_train`).
+- Structure: `models/<train_data_sub_dir>/<model_type>/<param_name>/<embedding_name>/`
+  - `<train_data_sub_dir>`: The base name of the directory provided via `--csv_dir` (e.g., `sprot_train`, `sprot_pre2024_subset`, `sprot_pre2024_subset_pca`).
   - `<model_type>`: `fnn`, `linear`, `euclidean`, or `linear_distance`.
   - `<embedding_name>`: The stem of the HDF5 file used (e.g., `prott5`, `ankh_base`, `random_512`, `random_1024`).
-- Inside the `<timestamp>` directory:
+- Inside the `<embedding_name>` directory:
   - `checkpoints/`: Contains the saved model checkpoint (`.ckpt`) for trainable models. Empty for Euclidean.
-  - `tensorboard/`: Contains TensorBoard logs (if applicable) and the `hparams.yaml` file.
+  - `wandb/`: Contains Weights & Biases logs and the `hparams.yaml` file.
   - `evaluation_results/`: Contains plots and the raw evaluation metrics (`_metrics.txt`), potentially including SE and CI values for correlation coefficients if bootstrapping was enabled during evaluation.
 
 ## 6. Key Design Decisions & Rationale
@@ -97,6 +107,7 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Automation:** Shifted from manual script execution per experiment to an automated `run_experiments.py` script to handle numerous combinations efficiently and reduce errors.
 - **Modular Structure:** Organized code into functional directories (`src/training/`, `src/evaluation/`, `src/visualization/`, `src/data_preparation/`, `src/shared/`) for better maintainability and workflow clarity.
 - **Configuration Management:** Eliminated the central `config.py` file. Configuration is handled via CLI arguments and `hparams.yaml` saved in run directories.
+- **Experiment Tracking:** Migrated from TensorBoard to Weights & Biases (`wandb`) for more robust experiment tracking, comparison, and visualization.
 - **Parameterization & Flexibility:** `run_experiments.py` and `src/training/train.py` are parameterized via CLI arguments.
 - **Path Handling:** `src/training/train.py` uses absolute paths passed via arguments. `run_experiments.py` resolves paths before calling `src/training/train.py`.
 - **Modularity:** Separated concerns into distinct scripts and modules organized by function.
@@ -104,7 +115,7 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Predictor Refactoring:** Model classes in `src/training/predictor.py` inherit from a `BasePredictor` to reduce code duplication.
 - **Linear Distance Model:** Added `LinearDistancePredictor` to explore if predicting directly from the squared difference of embeddings is effective.
 - **Random Embedding Baseline:** Implemented by generating random embedding files (`src/data_preparation/embeddings/random_embeddings.py`) and using them as standard inputs to the existing trainable model workflows. This allows direct comparison of model performance on meaningful vs. random inputs using the same architecture.
-- **Output Organization:** Nested output directory structure clearly separates results.
+- **Output Organization:** Nested output directory structure clearly separates results. The `<train_data_sub_dir>` can now reflect more complex data origins, such as `sprot_pre2024_subset_pca`.
 - **Progress Visibility:** Training progress bars are streamed live.
 - **Euclidean Baseline Integration:** Treated as a distinct non-trainable `model_type`.
 - **Metrics Calculation:** Separated metric calculation logic into `src/evaluation/metrics.py`. Includes robust calculation of standard regression metrics and optional bootstrapping via `_bootstrap_stat` helper to estimate standard errors and confidence intervals for Pearson R^2 and Spearman Rho, providing insight into the stability of these correlation measures.
@@ -131,9 +142,9 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Script:** `src/visualization/create_performance_summary_plots.py`
 - **Purpose:** Parses the evaluation metric files (`_metrics.txt`) generated by `src/evaluation/evaluate.py` across different runs and creates summary plots visualizing performance.
 - **Inputs:**
-  - `--results_dir`: (Required) The base directory containing the experiment results (e.g., `models/train_sub`, `models/sprot_train`). It expects the standard output structure: `<results_dir>/<model_type>/<param_name>/<embedding_name>/<timestamp>/evaluation_results/*_metrics.txt`.
+  - `--results_dir`: (Required) The base directory containing the experiment results (e.g., `models/train_sub`, `models/sprot_train`). It expects a flexible output structure, such as: `<results_dir>/<...optional_subdirs...>/<model_type>/<param_name>/<embedding_name>/evaluation_results/*_metrics.txt`.
   - `--output`: (Optional) The directory where the output plots and CSV file will be saved. Defaults to `./plots/`.
-  - `--ignore-random`: (Optional flag) If set, results associated with the 'Random' embedding family (specifically `random_1024`) will be excluded from the plots.
+  - `--ignore-random`: (Optional flag) If set, results associated with the 'Random' embedding family will be excluded from the plots.
 - **Outputs:**
   - **CSV File:** `parsed_metrics_all.csv` saved in the `--output` directory. This file contains the aggregated data parsed from all found metric files, including PLM size, embedding family, model type, parameter, and all extracted metrics (Pearson R2, MAE, Spearman, R2, and their SEs if applicable).
   - **Plot Files (PNG):** Separate plots are generated for key metrics and saved in the `--output` directory. Filenames are based on the metric (e.g., `pearson_r2.png`, `spearman_rho.png`, `mae.png`, `r2.png`).
@@ -151,7 +162,7 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Usage Example:**
 
   ```bash
-  # Generate plots and CSV for results in models/train_sub, save to out/summary_plot/
+  # Generate plots and CSV for results in models/sprot_train, save to out/summary_plot/
   uv run python src/visualization/create_performance_summary_plots.py --results_dir models/sprot_train --output out/summary_plot
 
   # Generate plots ignoring the random baseline
@@ -165,10 +176,10 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Script:** `src/visualization/create_evaluation_grid_plots.py`
 - **Purpose:** Consolidates individual evaluation plots (true vs. predicted scatter plots generated by `src/evaluation/evaluate.py`) into a single grid image for each model type and target parameter combination. This allows for quick visual comparison of performance across all embeddings for a specific experimental setup.
 - **Inputs:**
-  - `--input_path`: (Required, default: `models/sprot_train`) The base directory containing structured experiment results. The script flexibly searches for `evaluation_results/*_results.png` files under this path, expecting a structure like `.../<model_type>/<param_name>/<embedding_name>/<timestamp>/evaluation_results/`. It can handle high-level paths (e.g., `models/sprot_train`) or more specific ones (e.g., `models/sprot_train/fnn/fident`).
+  - `--input_path`: (Required, default: `models/sprot_train`) The base directory containing structured experiment results. The script flexibly searches for `evaluation_results/*_results.png` files under this path, expecting a structure like `.../<model_type>/<param_name>/<embedding_name>/evaluation_results/`. It can handle high-level paths (e.g., `models/sprot_train`) or more specific ones (e.g., `models/sprot_train/fnn/fident`).
   - `--output_dir`: (Optional, default: `out/summary_grids/`) Directory to save the generated grid plots.
 - **Outputs:**
-  - **Grid Plot Files (PNG):** For each combination of `model_type` and `param_name` found, a single PNG file (e.g., `grid_fnn_fident.png`) is generated. This file contains a grid of all the individual true vs. predicted plots for different embeddings, using the latest timestamped result for each embedding. Subplot titles indicate the `embedding_name`.
+  - **Grid Plot Files (PNG):** For each combination of `model_type` and `param_name` found, a single PNG file (e.g., `grid_fnn_fident.png`) is generated. This file contains a grid of all the individual true vs. predicted plots for different embeddings. Subplot titles indicate the `embedding_name`.
 - **Plot Characteristics:**
   - The script arranges the individual `*_results.png` images into a grid.
   - The main title of the grid plot indicates the `model_type` and `param_name`.
