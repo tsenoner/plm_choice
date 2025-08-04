@@ -18,6 +18,23 @@ log = logging.getLogger(__name__)
 matplotlib_general_logger = logging.getLogger("matplotlib")
 matplotlib_general_logger.setLevel(logging.INFO)
 
+# --- Plot Configuration ---
+# Font sizes and visual settings - easily adjustable
+PLOT_CONFIG = {
+    "font_scale": 1.5,  # Base font scale multiplier
+    "title_fontsize": 26,  # Facet titles
+    "label_fontsize": 22,  # Axis labels
+    "tick_fontsize": 18,  # Tick labels
+    "panel_label_fontsize": 32,  # A, B, C labels
+    "legend_title_fontsize": 26,  # Legend titles
+    "legend_fontsize": 22,  # Legend text
+    "marker_size": 200,  # Scatter plot marker size
+    "plot_height": 7,  # Plot height in inches
+    "plot_aspect": 1.1,  # Plot aspect ratio
+    "dpi": 300,  # Output DPI
+    "subplot_spacing": 0.1,  # Space between subplots
+}
+
 # --- Project Constants & Configuration ---
 
 # PLM Parameter Sizes (Update as needed)
@@ -62,25 +79,21 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
     # Add other embeddings here
 }
 
-# Color map for individual embeddings (lowercase stem)
+# Color map for embedding families
+EMBEDDING_FAMILY_COLOR_MAP: Dict[str, str] = {
+    "ProtT5": "#ff1493",
+    "ESM-1": "#4daf4a",
+    "ESM-2": "#ff7f00",
+    "ESM-C": "#1f77b4",
+    "ESM-3": "#984ea3",
+    "Ankh": "#ffd700",
+    "Random": "#808080",
+}
+
+# Assign family color to each embedding
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    "prott5": "#ff1493",  # Deep pink - ProtT5 family base color
-    "prottucker": "#ff69b4",  # Hot pink - Close to prott5
-    "prostt5": "#dc143c",  # Crimson - Close to prott5 family
-    "clean": "#4daf4a",
-    "esm1b": "#5fd35b",
-    "esm2_8m": "#fdae61",
-    "esm2_35m": "#ff7f00",
-    "esm2_150m": "#f46d43",
-    "esm2_650m": "#d73027",
-    "esm2_3b": "#a50026",
-    "esmc_300m": "#17becf",
-    "esmc_600m": "#1f77b4",
-    "esm3_open": "#984ea3",
-    "ankh_base": "#ffd700",
-    "ankh_large": "#a88c01",
-    "random_1024": "#808080",  # Grey for random
-    # Add other embeddings here
+    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
+    for embedding, family in EMBEDDING_FAMILY_MAP.items()
 }
 
 # Marker map for model types
@@ -94,6 +107,13 @@ MODEL_MARKER_MAP: Dict[str, str] = {
 
 # Families for which connecting lines should be drawn in the plot
 FAMILIES_TO_CONNECT: List[str] = ["ProtT5", "ESM-2", "ESM-C", "ESM-3", "Ankh", "ESM-1"]
+
+# Titles for the plot facets
+PARAMETER_TITLES: Dict[str, str] = {
+    "fident": "Sequence - PIDE",
+    "alntmscore": "Structure - alignment TM-score",
+    "hfsp": "Function - HFSP",
+}
 
 
 # --- Data Parsing ---
@@ -247,68 +267,73 @@ def _add_error_bars(
 
 
 def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
-    """Adds connecting lines for specified embedding families for a given metric."""
-    # Group by family and model type. Order is determined by main df sort.
-    for (family, model_type), group in data.groupby(["Embedding Family", "Model Type"]):
-        if family in FAMILIES_TO_CONNECT:
-            # No need to sort here if main df is sorted
-            if len(group) > 1:
-                line_color_key = group.iloc[0]["Embedding Key"]
-                line_color = EMBEDDING_COLOR_MAP.get(line_color_key, "grey")
-                ax.plot(
-                    group["Embedding"],  # Use categorical x
-                    group[y_metric],  # Use specified y metric
-                    marker="",
-                    linestyle="-",
-                    color=line_color,
-                    alpha=0.2,
-                    zorder=2,
-                )
+    """Adds vertical connecting lines between model types for each embedding."""
+    # Group by embedding to draw vertical lines
+    for embedding, group in data.groupby("Embedding"):
+        if len(group) > 1:
+            # Sort by model type to ensure lines are drawn in a consistent order
+            group = group.sort_values(
+                "Model Type",
+                key=lambda s: s.map(
+                    {
+                        "fnn": 0,
+                        "linear": 1,
+                        "linear_distance": 2,
+                        "euclidean": 3,
+                    }
+                ),
+            )
+            ax.plot(
+                group["Embedding"],
+                group[y_metric],
+                marker="",
+                linestyle=":",
+                color=EMBEDDING_COLOR_MAP.get(embedding, "grey"),
+                alpha=0.3,
+                zorder=2,
+            )
 
 
-def _create_embedding_legend(fig: plt.Figure, embeddings: List[str]) -> plt.legend:
-    """Creates and returns the embedding legend (colors)."""
+def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
+    """Creates and returns the embedding family legend (colors)."""
     handles = []
     labels = []
-    log.debug(f"Creating embedding legend for: {sorted(embeddings)}")
 
-    # Group embeddings by family, then sort within each family by size
-    family_groups = {}
-    for embedding_name in embeddings:
-        key = embedding_name.lower()
-        family = EMBEDDING_FAMILY_MAP.get(key, "Unknown")
-        plm_size = PLM_SIZES.get(key, 0)  # Default to 0 if not found
+    # Get unique families and their colors
+    unique_families = df[["Embedding Family", "Embedding Key"]].drop_duplicates()
 
-        if family not in family_groups:
-            family_groups[family] = []
-        family_groups[family].append((embedding_name, plm_size))
+    # Sort families for a consistent legend order
+    sorted_families = sorted(unique_families["Embedding Family"].unique())
 
-    # Sort families alphabetically, and within each family sort by size
-    for family in sorted(family_groups.keys()):
-        # Sort embeddings within family by size, then by name for consistency
-        family_embeddings = sorted(family_groups[family], key=lambda x: (x[1], x[0]))
+    for family in sorted_families:
+        # Find the first embedding key for this family to get the color
+        embedding_key = unique_families[
+            unique_families["Embedding Family"] == family
+        ].iloc[0]["Embedding Key"]
+        color = EMBEDDING_COLOR_MAP.get(embedding_key, "grey")
 
-        for embedding_name, _ in family_embeddings:
-            key = embedding_name.lower()
-            color = EMBEDDING_COLOR_MAP.get(key, "grey")
-            # Use a square marker for the color legend instead of a patch
-            handles.append(
-                mlines.Line2D(
-                    [], [], color=color, marker="s", linestyle="None", markersize=7
-                )
+        handles.append(
+            mlines.Line2D(
+                [],
+                [],
+                color=color,
+                marker="s",
+                linestyle="None",
+                markersize=PLOT_CONFIG["legend_fontsize"],
             )
-            # Use "Random" as label if key is "random_1024", else use original name
-            label = "Random" if key == "random_1024" else embedding_name
-            labels.append(label)
+        )
+        labels.append(family)
 
     return fig.legend(
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.35, 0.2),
+        bbox_to_anchor=(0.4, 0.1),
         frameon=False,
-        title="Embedding",
-        ncol=6,  # Display in multiple columns for better space usage
+        title="pLM Family",
+        title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
+        fontsize=PLOT_CONFIG["legend_fontsize"],
+        ncol=6,  # Adjust number of columns if needed
     )
 
 
@@ -321,7 +346,12 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
         marker = MODEL_MARKER_MAP.get(model_type, "?")
         handles.append(
             mlines.Line2D(
-                [], [], color="black", marker=marker, linestyle="None", markersize=7
+                [],
+                [],
+                color="black",
+                marker=marker,
+                linestyle="None",
+                markersize=PLOT_CONFIG["legend_fontsize"],
             )
         )
         labels.append(model_type)
@@ -330,25 +360,29 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.8, 0.2),
+        bbox_to_anchor=(0.85, 0.1),
         frameon=False,
         title="Model Type",
+        title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
+        fontsize=PLOT_CONFIG["legend_fontsize"],
         ncol=4,  # Display in multiple columns
     )
 
 
 def _human_readable_formatter(x, pos=None):
-    """Custom formatter for large numbers (B, M, K)"""
-    # Input x is expected to be the numerical PLM size
-    if x >= 1e9:
-        return f"{x * 1e-9:.1f}B"
-    elif x >= 1e6:
-        return f"{x * 1e-6:.0f}M"
-    elif x >= 1e3:
-        return f"{x * 1e-3:.0f}K"
-    else:
-        # Handle 0 specifically for the baseline
-        return f"{x:.0f}" if x != 0 else "0"
+    """Formatter for large numbers with SI suffixes (K, M, B, T, etc)."""
+    abs_x = abs(x)
+    units = ["", "K", "M", "B", "T", "P", "E", "Z", "Y"]
+    magnitude = 0
+    while abs_x >= 1000 and magnitude < len(units) - 1:
+        abs_x /= 1000.0
+        magnitude += 1
+    if magnitude == 0:
+        return str(int(x))
+    # Show up to 3 significant digits
+    value_str = f"{abs_x:.3g}"
+    sign = "-" if x < 0 else ""
+    return f"{sign}{value_str}{units[magnitude]}"
 
 
 # --- Main Plotting Function ---
@@ -356,77 +390,100 @@ def generate_metric_plot(
     df: pd.DataFrame, y_metric: str, se_metric: Optional[str], output_file: Path
 ):
     """Generates a summary faceted scatter plot for a specific metric."""
-    sns.set_theme(style="whitegrid")
+    sns.set_theme(style="whitegrid", font_scale=PLOT_CONFIG["font_scale"])
 
-    # --- Sort DataFrame by PLM Size for correct category order ---
-    df_sorted = df.sort_values(by=["PLM Size", "Parameter", "Model Type"])
-    category_order = df_sorted["Embedding"].unique().tolist()
-    log.debug(f"Plotting '{y_metric}'. Using category order: {category_order}")
-
-    # Convert Embedding column to categorical with the desired order
-    df_sorted["Embedding"] = pd.Categorical(
-        df_sorted["Embedding"], categories=category_order, ordered=True
+    # --- Reorder and Prepare DataFrame ---
+    param_order = ["fident", "alntmscore", "hfsp"]
+    df["Parameter"] = pd.Categorical(
+        df["Parameter"], categories=param_order, ordered=True
     )
+    df_sorted = df.sort_values(by=["Parameter", "PLM Size", "Model Type"])
+    category_order = df_sorted["Embedding"].unique().tolist()
 
     # Create the base FacetGrid using relplot (scatter plot)
     g = sns.relplot(
-        data=df_sorted,  # Use sorted data
-        x="Embedding",  # Use Embedding name as x-axis category
-        y=y_metric,  # Use the specified metric for y-axis
-        col="Parameter",  # Facet by parameter
-        hue="Embedding",  # Color by embedding (original name)
+        data=df_sorted,
+        x="Embedding",
+        y=y_metric,
+        col="Parameter",
+        hue="Embedding Family",
         style="Model Type",
-        palette=EMBEDDING_COLOR_MAP,
-        hue_order=sorted(df_sorted["Embedding"].unique()),
+        palette=EMBEDDING_FAMILY_COLOR_MAP,
+        hue_order=sorted(df_sorted["Embedding Family"].unique()),
         style_order=sorted(df_sorted["Model Type"].unique()),
         markers=MODEL_MARKER_MAP,
         kind="scatter",
-        s=100,
-        height=6,  # Make plots taller/more rectangular
-        aspect=0.8,  # Adjust aspect ratio for more rectangular shape
+        s=PLOT_CONFIG["marker_size"],
+        height=PLOT_CONFIG["plot_height"],
+        aspect=PLOT_CONFIG["plot_aspect"],
         facet_kws={"sharey": True, "sharex": False},
         legend=False,
+        col_order=param_order,
         zorder=5,
     )
 
-    # Add manual elements (error bars, lines) to each facet
-    for param, ax in g.axes_dict.items():
-        # Get data for the current facet, respecting the main sort order
+    # Add manual elements and format each facet
+    panel_labels = ["A", "B", "C"]
+    for i, (param, ax) in enumerate(g.axes_dict.items()):
         param_df = df_sorted[df_sorted["Parameter"] == param]
-
         _add_error_bars(ax, param_df, y_metric, se_metric)
         _add_connecting_lines(ax, param_df, y_metric)
 
-        # --- Axis Formatting ---
-        ax.set_xlabel("pLM Parameter Count")
-        ax.set_ylabel(y_metric)  # Set label dynamically
-        ax.set_title(f"Parameter: {param}")
-        ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-        ax.tick_params(axis="x", rotation=45)
+        ax.set_xlabel("pLM Parameter Count", fontsize=PLOT_CONFIG["label_fontsize"])
+        ax.set_ylabel(y_metric, fontsize=PLOT_CONFIG["label_fontsize"])
+        ax.set_title(
+            PARAMETER_TITLES.get(param, param), fontsize=PLOT_CONFIG["title_fontsize"]
+        )
+        ax.grid(True, which="major", axis="y", linestyle="-", linewidth=1, alpha=0.15)
+        ax.grid(False, axis="x")
+        ax.tick_params(axis="x", rotation=45, labelsize=PLOT_CONFIG["tick_fontsize"])
+        ax.tick_params(axis="y", labelsize=PLOT_CONFIG["tick_fontsize"])
 
-        # Set custom labels based on the category order and PLM sizes
-        # category_order holds the embedding names in the correct plot order
-        size_labels = []
-        tick_positions = range(len(category_order))
-        for emb_name in category_order:
-            plm_size = PLM_SIZES.get(emb_name.lower())
-            if plm_size is not None:
-                size_labels.append(_human_readable_formatter(plm_size))
-            else:
-                size_labels.append(emb_name)  # Fallback to name if size missing
-        ax.set_xticks(tick_positions)
+        # Set y-axis to start from 0
+        ax.set_ylim(0, 1)
+
+        # Add panel labels (A, B, C)
+        if i == 0:  # Panel A (leftmost) - position further left
+            x_pos = -0.15
+        else:  # Panels B and C - can be positioned closer
+            x_pos = -0.08
+
+        ax.text(
+            x_pos,
+            1.05,
+            panel_labels[i],
+            transform=ax.transAxes,
+            fontsize=PLOT_CONFIG["panel_label_fontsize"],
+            fontweight="bold",
+            va="top",
+        )
+
+        # Set custom x-axis labels
+        size_labels = [
+            _human_readable_formatter(PLM_SIZES.get(emb.lower()))
+            if emb.lower() in PLM_SIZES
+            else emb
+            for emb in category_order
+        ]
+        ax.set_xticks(range(len(category_order)))
         ax.set_xticklabels(size_labels)
 
     # Create and place custom legends
-    all_embeddings = df["Embedding"].unique().tolist()
-    all_model_types = df["Model Type"].unique().tolist()
-    _create_embedding_legend(g.figure, all_embeddings)
-    _create_model_type_legend(g.figure, all_model_types)
-    plt.tight_layout(rect=[0, 0.2, 1.0, 0.97])
+    _create_embedding_legend(g.figure, df_sorted)
+    _create_model_type_legend(g.figure, df_sorted["Model Type"].unique().tolist())
+
+    # Adjust spacing - use subplots_adjust instead of tight_layout for better control
+    g.figure.subplots_adjust(
+        wspace=PLOT_CONFIG["subplot_spacing"],
+        bottom=0.25,  # Make room for legends
+        top=1,
+        left=0.1,
+        right=1,
+    )
 
     # Save the figure
     try:
-        plt.savefig(output_file, dpi=300, bbox_inches="tight")
+        plt.savefig(output_file, dpi=PLOT_CONFIG["dpi"], bbox_inches="tight")
         log.info(f"Plot saved successfully to {output_file}")
     except Exception as e:
         log.error(f"Failed to save plot to {output_file}: {e}", exc_info=True)

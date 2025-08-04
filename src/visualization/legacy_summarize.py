@@ -7,6 +7,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 import argparse
 import os
+from typing import Dict
 
 # Border style definitions
 STD_BORDER_SPEC = {"val": "single", "sz": "4", "color": "auto"}  # 0.5pt line
@@ -27,6 +28,26 @@ PLM_SIZES = {
     "ankh_base": 450_000_000,
     "ankh_large": 1_150_000_000,
     "random_1024": 0,
+}
+
+EMBEDDING_COLOR_MAP: Dict[str, str] = {
+    "prott5": "#ff1493",  # Deep pink - ProtT5 family base color
+    "prottucker": "#ff69b4",  # Hot pink - Close to prott5
+    "prostt5": "#dc143c",  # Crimson - Close to prott5 family
+    "clean": "#4daf4a",
+    "esm1b": "#5fd35b",
+    "esm2_8m": "#fdae61",
+    "esm2_35m": "#ff7f00",
+    "esm2_150m": "#f46d43",
+    "esm2_650m": "#d73027",
+    "esm2_3b": "#a50026",
+    "esmc_300m": "#17becf",
+    "esmc_600m": "#1f77b4",
+    "esm3_open": "#984ea3",
+    "ankh_base": "#ffd700",
+    "ankh_large": "#a88c01",
+    "random_1024": "#808080",  # Grey for random
+    # Add other embeddings here
 }
 
 
