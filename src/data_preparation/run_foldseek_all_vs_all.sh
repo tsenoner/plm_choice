@@ -172,11 +172,11 @@ if [ ! -f "${RESULT_DB_NAME}.dbtype" ]; then
         -s 7.5 \
         -e 0.001 \
         -a \
+        --alignment-mode 3 \
+        --max-seqs 1000 \
+        --num-iterations 3 \
+        --e-profile 1e-10 \
         --threads "$THREADS"
-        # --alignment-mode 3 \
-        # --max-seqs 1000 \
-        # --num-iterations 3 \
-        # --e-profile 1e-10 \
         # --exhaustive-search 1
     echo "Search completed. Results database: $RESULT_DB_NAME"
 else
