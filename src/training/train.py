@@ -481,8 +481,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_project",
         type=str,
-        default="unknown-unknowns",
-        help="Weights & Biases project name (default: unknown-unknowns).",
+        default="which-plm",
+        help="Weights & Biases project name (default: which-plm).",
     )
     parser.add_argument(
         "--wandb_entity",
