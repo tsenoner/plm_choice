@@ -1,13 +1,13 @@
 # Embedding Distance Computation
 
-This document describes the embedding distance computation script that creates the necessary CSV files for pairwise embedding comparison visualizations.
+This document describes the embedding distance computation script that creates the necessary Parquet files for pairwise embedding comparison visualizations.
 
 ## Overview
 
-The `compute_embedding_distances.py` script computes euclidean distances between protein pairs for all available protein language model (PLM) embeddings. It takes:
+The `distance_computation.py` script computes euclidean distances between protein pairs for all available protein language model (PLM) embeddings. It takes:
 
-- **Input**: CSV file with protein pairs + directory of H5 embedding files
-- **Output**: CSV file with added distance columns for visualization analysis
+- **Input**: Parquet file with protein pairs + directory of H5 embedding files
+- **Output**: Parquet file with added distance columns for visualization analysis
 
 ## 🚀 Quick Start
 
@@ -15,20 +15,20 @@ The `compute_embedding_distances.py` script computes euclidean distances between
 
 ```bash
 # Compute distances for all embeddings
-uv run python scripts/compute_embedding_distances.py \
-    --input_csv data/processed/sprot_train/test.csv \
+uv run python src/data_preparation/distance_computation.py \
+    --input_parquet data/processed/sprot_pre2024_subset/sets/test.parquet \
     --embeddings_dir data/processed/sprot_embs \
-    --output_csv data/processed/sprot_train/test_with_distances.csv
+    --output_parquet data/processed/sprot_pre2024_subset/sets/test_with_distances.parquet
 ```
 
 ### With Options
 
 ```bash
 # Limit to 10,000 pairs and use smaller batches
-uv run python scripts/compute_embedding_distances.py \
-    --input_csv data/processed/sprot_train/test.csv \
+uv run python src/data_preparation/distance_computation.py \
+    --input_parquet data/processed/sprot_pre2024_subset/sets/test.parquet \
     --embeddings_dir data/processed/sprot_embs \
-    --output_csv data/processed/sprot_train/test_with_distances.csv \
+    --output_parquet data/processed/sprot_pre2024_subset/sets/test_with_distances.parquet \
     --sample_size 10000 \
     --batch_size 500 \
     --overwrite
@@ -39,10 +39,10 @@ uv run python scripts/compute_embedding_distances.py \
 ### 1. **Input Validation**
 
 ```python
-# Required CSV columns
+# Required Parquet columns
 required_columns = ['query', 'target']
 
-# Example input CSV:
+# Example input Parquet structure:
 #   query,target,fident,alntmscore,hfsp
 #   protein_001,protein_002,0.85,0.72,45.3
 #   protein_003,protein_004,0.42,0.61,-12.7

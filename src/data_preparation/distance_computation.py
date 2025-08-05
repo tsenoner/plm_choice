@@ -3,21 +3,21 @@
 Compute Embedding Distances Script
 
 This script computes euclidean distances between protein pairs for all available
-protein language model (PLM) embeddings. It takes a CSV file containing protein
-pairs and a directory of H5 embedding files, then outputs a CSV with distance
+protein language model (PLM) embeddings. It takes a Parquet file containing protein
+pairs and a directory of H5 embedding files, then outputs a Parquet file with distance
 columns for use with pairwise embedding comparison visualizations.
 
 Usage:
-    uv run python scripts/compute_embedding_distances.py \
-        --input_csv data/processed/sprot_train/test.csv \
+    uv run python src/data_preparation/distance_computation.py \
+        --input_parquet data/processed/sprot_pre2024_subset/sets/test.parquet \
         --embeddings_dir data/processed/sprot_embs \
-        --output_csv data/processed/sprot_train/test_with_distances.csv
+        --output_parquet data/processed/sprot_pre2024_subset/sets/test_with_distances.parquet
 
     # With options
-    uv run python scripts/compute_embedding_distances.py \
-        --input_csv data/processed/sprot_train/test.csv \
+    uv run python src/data_preparation/distance_computation.py \
+        --input_parquet data/processed/sprot_pre2024_subset/sets/test.parquet \
         --embeddings_dir data/processed/sprot_embs \
-        --output_csv data/processed/sprot_train/test_with_distances.csv \
+        --output_parquet data/processed/sprot_pre2024_subset/sets/test_with_distances.parquet \
         --sample_size 10000 \
         --batch_size 1000
 """
@@ -31,7 +31,7 @@ from typing import Dict, List, Set, Tuple
 
 import h5py
 import numpy as np
-import pandas as pd
+import polars as pl
 from tqdm import tqdm
 
 # Configure logging
@@ -142,7 +142,7 @@ class EmbeddingDistanceComputer:
 
     def _compute_distance_batch(
         self,
-        pairs_batch: pd.DataFrame,
+        pairs_batch: pl.DataFrame,
         embedding_name: str,
         embeddings: Dict[str, np.ndarray],
     ) -> List[float]:
@@ -159,7 +159,7 @@ class EmbeddingDistanceComputer:
         """
         distances = []
 
-        for _, row in pairs_batch.iterrows():
+        for row in pairs_batch.iter_rows(named=True):
             query_id = row["query"]
             target_id = row["target"]
 
@@ -176,8 +176,8 @@ class EmbeddingDistanceComputer:
         return distances
 
     def compute_distances_for_embedding(
-        self, df: pd.DataFrame, embedding_name: str
-    ) -> pd.Series:
+        self, df: pl.DataFrame, embedding_name: str
+    ) -> pl.Series:
         """
         Compute all distances for one embedding type.
 
@@ -191,7 +191,9 @@ class EmbeddingDistanceComputer:
         logger.info(f"Computing distances for {embedding_name}...")
 
         # Get all unique protein IDs
-        all_proteins = set(df["query"].unique()) | set(df["target"].unique())
+        all_proteins = set(df["query"].unique().to_list()) | set(
+            df["target"].unique().to_list()
+        )
         logger.info(f"  Found {len(all_proteins)} unique proteins in dataset")
 
         # Load embeddings for required proteins
@@ -205,11 +207,10 @@ class EmbeddingDistanceComputer:
 
         # Process in batches
         all_distances = []
-        n_batches = (len(df) + self.batch_size - 1) // self.batch_size
 
         with tqdm(total=len(df), desc=f"Computing {embedding_name} distances") as pbar:
             for i in range(0, len(df), self.batch_size):
-                batch = df.iloc[i : i + self.batch_size]
+                batch = df.slice(i, self.batch_size)
                 batch_distances = self._compute_distance_batch(
                     batch, embedding_name, embeddings
                 )
@@ -220,33 +221,35 @@ class EmbeddingDistanceComputer:
         del embeddings
         gc.collect()
 
-        return pd.Series(all_distances, name=f"dist_{embedding_name}")
+        return pl.Series(name=f"dist_{embedding_name}", values=all_distances)
 
-    def compute_all_distances(self, df: pd.DataFrame, output_csv: Path) -> pd.DataFrame:
+    def compute_all_distances(
+        self, df: pl.DataFrame, output_parquet: Path
+    ) -> pl.DataFrame:
         """
-        Compute distances for all embeddings, saving intermediate results to CSV.
+        Compute distances for all embeddings, saving intermediate results to Parquet.
 
         This method processes one embedding at a time and saves results incrementally
         to minimize memory usage and allow resuming interrupted computations.
 
         Args:
             df: Input DataFrame with protein pairs
-            output_csv: Path to output CSV file for incremental saving
+            output_parquet: Path to output Parquet file for incremental saving
 
         Returns:
             DataFrame with all distance columns
         """
         logger.info(f"Computing distances for {len(self.embedding_info)} embeddings...")
         logger.info(f"Processing {len(df)} protein pairs")
-        logger.info(f"Results will be saved incrementally to: {output_csv}")
+        logger.info(f"Results will be saved incrementally to: {output_parquet}")
 
         # Start with input DataFrame
-        result_df = df.copy()
+        result_df = df.clone()
 
         # Load existing results if file exists
-        if output_csv.exists():
-            logger.info(f"Loading existing results from {output_csv}")
-            result_df = pd.read_csv(output_csv)
+        if output_parquet.exists():
+            logger.info(f"Loading existing results from {output_parquet}")
+            result_df = pl.read_parquet(output_parquet)
             logger.info(f"Loaded existing file with {len(result_df.columns)} columns")
 
         for embedding_name in self.embedding_info.keys():
@@ -254,7 +257,7 @@ class EmbeddingDistanceComputer:
 
             # Check if this embedding is already computed
             if dist_col in result_df.columns:
-                existing_valid = result_df[dist_col].notna().sum()
+                existing_valid = result_df[dist_col].drop_nulls().len()
                 logger.info(
                     f"  {embedding_name}: Already computed ({existing_valid} valid distances), skipping..."
                 )
@@ -264,14 +267,14 @@ class EmbeddingDistanceComputer:
 
             try:
                 distances = self.compute_distances_for_embedding(df, embedding_name)
-                result_df[dist_col] = distances
+                result_df = result_df.with_columns(distances)
 
                 # Save intermediate results immediately
-                logger.info(f"  Saving intermediate results to {output_csv}")
-                result_df.to_csv(output_csv, index=False)
+                logger.info(f"  Saving intermediate results to {output_parquet}")
+                result_df.write_parquet(output_parquet)
 
                 # Log statistics
-                valid_distances = distances.dropna()
+                valid_distances = distances.drop_nulls()
                 if len(valid_distances) > 0:
                     logger.info(
                         f"  {embedding_name}: {len(valid_distances)}/{len(distances)} "
@@ -284,34 +287,39 @@ class EmbeddingDistanceComputer:
             except Exception as e:
                 logger.error(f"Error computing distances for {embedding_name}: {e}")
                 # Add column of NaNs to maintain structure
-                result_df[dist_col] = np.nan
+                null_series = pl.Series(name=dist_col, values=[None] * len(result_df))
+                result_df = result_df.with_columns(null_series)
                 # Save even the failed result to maintain consistency
-                result_df.to_csv(output_csv, index=False)
+                result_df.write_parquet(output_parquet)
 
         return result_df
 
 
-def validate_inputs(input_csv: Path, embeddings_dir: Path) -> Tuple[pd.DataFrame, Path]:
+def validate_inputs(
+    input_parquet: Path, embeddings_dir: Path
+) -> Tuple[pl.DataFrame, Path]:
     """
     Validate input files and directories.
 
     Args:
-        input_csv: Path to input CSV file
+        input_parquet: Path to input Parquet file
         embeddings_dir: Path to embeddings directory
 
     Returns:
         Tuple of (loaded DataFrame, validated embeddings directory)
     """
-    # Check input CSV
-    if not input_csv.exists():
-        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
+    # Check input Parquet file
+    if not input_parquet.exists():
+        raise FileNotFoundError(f"Input Parquet file not found: {input_parquet}")
 
-    # Load and validate CSV structure
+    # Load and validate Parquet structure
     try:
-        df = pd.read_csv(input_csv)
-        logger.info(f"Loaded CSV with {len(df)} rows and columns: {list(df.columns)}")
+        df = pl.read_parquet(input_parquet)
+        logger.info(
+            f"Loaded Parquet with {len(df)} rows and columns: {list(df.columns)}"
+        )
     except Exception as e:
-        raise ValueError(f"Error reading CSV file: {e}")
+        raise ValueError(f"Error reading Parquet file: {e}")
 
     # Check for required columns
     required_cols = ["query", "target"]
@@ -341,10 +349,10 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--input_csv",
+        "--input_parquet",
         type=Path,
         required=True,
-        help="Path to CSV file containing protein pairs (must have 'query' and 'target' columns)",
+        help="Path to Parquet file containing protein pairs (must have 'query' and 'target' columns)",
     )
     parser.add_argument(
         "--embeddings_dir",
@@ -353,10 +361,10 @@ def main():
         help="Path to directory containing H5 embedding files",
     )
     parser.add_argument(
-        "--output_csv",
+        "--output_parquet",
         type=Path,
         required=True,
-        help="Path for output CSV file with distance columns",
+        help="Path for output Parquet file with distance columns",
     )
     parser.add_argument(
         "--sample_size",
@@ -378,21 +386,21 @@ def main():
 
     # Validate inputs
     try:
-        df, embeddings_dir = validate_inputs(args.input_csv, args.embeddings_dir)
+        df, embeddings_dir = validate_inputs(args.input_parquet, args.embeddings_dir)
     except (FileNotFoundError, ValueError, NotADirectoryError) as e:
         logger.error(f"Input validation failed: {e}")
         sys.exit(1)
 
     # Check output file - now we support resuming, so only error if overwrite is explicitly disabled
-    if args.output_csv.exists() and not args.overwrite:
+    if args.output_parquet.exists() and not args.overwrite:
         logger.info(
-            f"Output file exists: {args.output_csv}. Will resume computation from existing results."
+            f"Output file exists: {args.output_parquet}. Will resume computation from existing results."
         )
-    elif args.output_csv.exists() and args.overwrite:
+    elif args.output_parquet.exists() and args.overwrite:
         logger.info(
-            f"Output file exists: {args.output_csv}. Will overwrite as requested."
+            f"Output file exists: {args.output_parquet}. Will overwrite as requested."
         )
-        args.output_csv.unlink()  # Remove the file to start fresh
+        args.output_parquet.unlink()  # Remove the file to start fresh
 
     # Sample data if requested
     if args.sample_size:
@@ -401,14 +409,14 @@ def main():
         logger.info(f"Limited dataset to {len(df)} rows (from {original_size})")
 
     # Create output directory
-    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+    args.output_parquet.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)
     logger.info("EMBEDDING DISTANCE COMPUTATION")
     logger.info("=" * 60)
-    logger.info(f"Input CSV: {args.input_csv}")
+    logger.info(f"Input Parquet: {args.input_parquet}")
     logger.info(f"Embeddings directory: {args.embeddings_dir}")
-    logger.info(f"Output CSV: {args.output_csv}")
+    logger.info(f"Output Parquet: {args.output_parquet}")
     logger.info(f"Protein pairs: {len(df)}")
     logger.info(f"Batch size: {args.batch_size}")
 
@@ -419,21 +427,21 @@ def main():
         )
 
         # Compute distances (results are saved incrementally)
-        result_df = computer.compute_all_distances(df, args.output_csv)
+        result_df = computer.compute_all_distances(df, args.output_parquet)
 
         # Summary statistics
         distance_cols = [col for col in result_df.columns if col.startswith("dist_")]
         logger.info("=" * 60)
         logger.info("COMPUTATION COMPLETE")
         logger.info("=" * 60)
-        logger.info(f"Output file: {args.output_csv}")
+        logger.info(f"Output file: {args.output_parquet}")
         logger.info(f"Total columns: {len(result_df.columns)}")
         logger.info(f"Distance columns: {len(distance_cols)}")
         logger.info(f"Distance columns: {distance_cols}")
 
         # Coverage statistics
         for col in distance_cols:
-            valid_count = result_df[col].notna().sum()
+            valid_count = result_df[col].drop_nulls().len()
             coverage = valid_count / len(result_df) * 100
             if valid_count > 0:
                 mean_dist = result_df[col].mean()
@@ -447,9 +455,9 @@ def main():
         logger.info("\nNext steps:")
         logger.info("  Use this file with pairwise embedding comparison:")
         logger.info(
-            "  uv run python scripts/create_pairwise_embedding_visualizations.py \\"
+            "  uv run python src/visualization/pairwise_embedding_comparison.py \\"
         )
-        logger.info(f"    --data_path {args.output_csv} \\")
+        logger.info(f"    --data_path {args.output_parquet} \\")
         logger.info("    --output_dir out/embedding_analysis")
 
     except Exception as e:
