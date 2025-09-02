@@ -50,10 +50,10 @@ class ProteinAnalysisPipeline:
     def _setup_paths(self) -> None:
         """Setup all file paths used in the pipeline."""
         # Base directories
-        self.interm_dir = self.base_data_dir / "interm" / "sprot_pre2024"
+        self.interm_dir = self.base_data_dir / "interm" / "2024_new"
 
         # Input file paths
-        self.mmseqs_tsv = self.interm_dir / "mmseqs" / "sprot_all_vs_all.tsv"
+        self.mmseqs_tsv = self.interm_dir / "mmseqs" / "2024_novelSeqs_all_vs_all.tsv"
         self.foldcomp_plddt_tsv = self.interm_dir / "foldcomp" / "plddt.tsv"
         self.foldseek_tsv = (
             self.interm_dir / "foldseek" / "afdb_swissprot_v4_all_vs_all.tsv"
