@@ -176,17 +176,18 @@ class EmbeddingDistanceComputer:
         return distances
 
     def compute_distances_for_embedding(
-        self, df: pl.DataFrame, embedding_name: str
+        self, df: pl.DataFrame, embedding_name: str, precision: int = 4
     ) -> pl.Series:
         """
-        Compute all distances for one embedding type.
+        Compute all distances for one embedding type, with reduced precision.
 
         Args:
             df: DataFrame with protein pairs
             embedding_name: Name of embedding to process
+            precision: Number of decimal places to round distances to (default: 4)
 
         Returns:
-            Series of distances for all pairs
+            Series of distances for all pairs (rounded to specified precision)
         """
         logger.info(f"Computing distances for {embedding_name}...")
 
@@ -221,7 +222,12 @@ class EmbeddingDistanceComputer:
         del embeddings
         gc.collect()
 
-        return pl.Series(name=f"dist_{embedding_name}", values=all_distances)
+        # Efficiently round all distances at once using numpy, preserving NaNs
+        all_distances_np = np.array(all_distances)
+        # np.round preserves NaN values
+        all_distances_rounded = np.round(all_distances_np, decimals=precision)
+
+        return pl.Series(name=f"dist_{embedding_name}", values=all_distances_rounded)
 
     def compute_all_distances(
         self, df: pl.DataFrame, output_parquet: Path
