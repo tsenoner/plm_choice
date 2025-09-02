@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import polars as pl
 import seaborn as sns
 from scipy import stats
 from scipy.stats import wasserstein_distance
@@ -120,7 +120,7 @@ class EmbeddingComparisonVisualizer:
 
     def __init__(
         self,
-        data_path: Union[str, Path, pd.DataFrame],
+        data_path: Union[str, Path],
         output_dir: Union[str, Path],
         sample_size: Optional[int] = None,
         font_scale: float = 1.0,
@@ -146,15 +146,18 @@ class EmbeddingComparisonVisualizer:
         # Set up matplotlib styling
         self._setup_plotting_style()
 
-    def _load_data(self, data_path: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
-        """Load data from various sources."""
-        if isinstance(data_path, pd.DataFrame):
-            df = data_path.copy()
-            logger.info("Using provided DataFrame")
+    def _load_data(self, data_path: Union[str, Path]) -> pl.DataFrame:
+        """Load data from various sources, returning polars DataFrame."""
+        data_path = Path(data_path)
+        logger.info(f"Loading data from {data_path}")
+
+        # Support both CSV and Parquet files
+        if data_path.suffix.lower() == ".parquet":
+            df = pl.read_parquet(data_path)
+            logger.info(f"Loaded Parquet file with {len(df)} rows")
         else:
-            data_path = Path(data_path)
-            logger.info(f"Loading data from {data_path}")
-            df = pd.read_csv(data_path)
+            df = pl.read_csv(data_path)
+            logger.info(f"Loaded CSV file with {len(df)} rows")
 
         if self.sample_size:
             df = df.head(self.sample_size)
@@ -266,13 +269,14 @@ class EmbeddingComparisonVisualizer:
                     if i == j:
                         continue
 
-                    mask = ~(self.df[col1].isna() | self.df[col2].isna())
+                    mask = ~(self.df[col1].is_nan() | self.df[col2].is_nan())
                     if mask.sum() < 10:
                         pbar.update(1)
                         continue
 
-                    x_data = self.df[col1][mask].values
-                    y_data = self.df[col2][mask].values
+                    filtered_df = self.df.filter(mask)
+                    x_data = filtered_df[col1].to_numpy()
+                    y_data = filtered_df[col2].to_numpy()
 
                     counts, xedges, yedges = np.histogram2d(
                         x_data, y_data, bins=gridsize
@@ -424,13 +428,14 @@ class EmbeddingComparisonVisualizer:
             for i in range(n):
                 for j in range(i, n):
                     mask = ~(
-                        self.df[self.dist_cols[i]].isna()
-                        | self.df[self.dist_cols[j]].isna()
+                        self.df[self.dist_cols[i]].is_nan()
+                        | self.df[self.dist_cols[j]].is_nan()
                     )
                     if mask.sum() > 3:
+                        filtered_df = self.df.filter(mask)
                         correlation, _ = stats.spearmanr(
-                            self.df[self.dist_cols[i]][mask],
-                            self.df[self.dist_cols[j]][mask],
+                            filtered_df[self.dist_cols[i]],
+                            filtered_df[self.dist_cols[j]],
                         )
                         correlations[i, j] = correlations[j, i] = correlation
 
@@ -478,7 +483,9 @@ class EmbeddingComparisonVisualizer:
 
         fig, ax = plt.subplots(figsize=(15 * self.font_scale, 12 * self.font_scale))
 
-        masked_correlations = np.ma.array(correlations, mask=np.isnan(correlations))
+        masked_correlations = np.ma.array(
+            correlations, mask=np.isnan(correlations) | np.eye(n, dtype=bool)
+        )
         im = ax.imshow(masked_correlations, cmap="OrRd", vmin=0, vmax=1)
 
         # Add colorbar
@@ -514,6 +521,7 @@ class EmbeddingComparisonVisualizer:
     ):
         """Add correlation annotations to the heatmap."""
         correlations = np.array(data["correlations"])
+        columns = data["columns"]
 
         if show_ci:
             ci_lower = np.array(data["ci_lower"])
@@ -522,7 +530,26 @@ class EmbeddingComparisonVisualizer:
         with tqdm(total=n * n, desc="Adding correlation annotations") as pbar:
             for i in range(n):
                 for j in range(n):
-                    if not np.isnan(correlations[i, j]):
+                    if i == j:
+                        # Diagonal: show embedding name
+                        embedding_name = columns[i].replace("_", "\n")
+                        if embedding_name == "prottucker":
+                            embedding_name = "prot-\ntucker"
+                        elif embedding_name == "prostt5":
+                            embedding_name = "prost-\nt5"
+                        elif embedding_name == "prott5":
+                            embedding_name = "prot-\nt5"
+                        ax.text(
+                            j,
+                            i,
+                            embedding_name,
+                            ha="center",
+                            va="center",
+                            fontsize=14 * self.font_scale,
+                            weight="bold",
+                            color=self._get_embedding_color(columns[i]),
+                        )
+                    elif not np.isnan(correlations[i, j]):
                         if show_ci:
                             text = f"{correlations[i, j]:.2f}\n[{ci_lower[i, j]:.2f}, {ci_upper[i, j]:.2f}]"
                         else:
@@ -553,14 +580,53 @@ class EmbeddingComparisonVisualizer:
     # --- Wasserstein Distance Analysis ---
 
     @staticmethod
-    def normalize_distribution(x: pd.Series) -> np.ndarray:
+    def normalize_distribution(x: pl.Series) -> np.ndarray:
         """Normalize a distribution to [0,1] range using MinMax scaling."""
-        x = x[~np.isnan(x)]
-        if len(x) == 0:
-            return x
+        # Drop nulls and convert to numpy for compatibility with existing code
+        x_clean = x.drop_nulls().to_numpy()
+        if len(x_clean) == 0:
+            return x_clean
+
+        # Additional check for infinite values
+        x_clean = x_clean[np.isfinite(x_clean)]
+        if len(x_clean) == 0:
+            return x_clean
+
+        # Check if all values are the same (would cause division by zero)
+        if np.all(x_clean == x_clean[0]):
+            # Return array of 0.5s (middle of [0,1] range)
+            return np.full_like(x_clean, 0.5)
 
         scaler = MinMaxScaler()
-        return scaler.fit_transform(x.values.reshape(-1, 1)).ravel()
+        return scaler.fit_transform(x_clean.reshape(-1, 1)).ravel()
+
+    def _compute_wasserstein_pair(self, col1: str, col2: str) -> Tuple[float, int]:
+        """Compute Wasserstein distance between two columns."""
+        # Create a mask for rows where both columns have valid values
+        mask = ~(self.df[col1].is_nan() | self.df[col2].is_nan())
+        valid_df = self.df.filter(mask)
+
+        if len(valid_df) < 10:
+            return np.nan, len(valid_df)
+
+        # Normalize the distributions using only the valid data
+        dist1_normalized = self.normalize_distribution(valid_df[col1])
+        dist2_normalized = self.normalize_distribution(valid_df[col2])
+
+        if len(dist1_normalized) == 0 or len(dist2_normalized) == 0:
+            return np.nan, len(valid_df)
+
+        try:
+            dist = wasserstein_distance(dist1_normalized, dist2_normalized)
+            logger.debug(
+                f"{col1} vs {col2}: {len(valid_df)} samples, distance = {dist:.4f}"
+            )
+            return dist, len(valid_df)
+        except Exception as e:
+            logger.warning(
+                f"Error computing Wasserstein distance for {col1} vs {col2}: {e}"
+            )
+            return np.nan, len(valid_df)
 
     def compute_wasserstein_data(self, save_path: Optional[Path] = None) -> Dict:
         """Compute Wasserstein distances between all pairs of normalized distance distributions."""
@@ -569,24 +635,20 @@ class EmbeddingComparisonVisualizer:
         n = len(self.dist_cols)
         distances = np.zeros((n, n))
 
-        # Pre-compute normalized distributions
-        logger.info("Normalizing distributions...")
-        normalized_dists = {}
-        for col in tqdm(self.dist_cols, desc="Normalizing"):
-            normalized_dists[col] = self.normalize_distribution(self.df[col])
-
         # Compute pairwise distances
         with tqdm(total=(n * (n + 1)) // 2, desc="Computing distances") as pbar:
             for i in range(n):
                 for j in range(i, n):
-                    dist1 = normalized_dists[self.dist_cols[i]]
-                    dist2 = normalized_dists[self.dist_cols[j]]
+                    col1 = self.dist_cols[i]
+                    col2 = self.dist_cols[j]
 
-                    if len(dist1) > 0 and len(dist2) > 0:
-                        dist = wasserstein_distance(dist1, dist2)
-                        distances[i, j] = distances[j, i] = dist
-                    else:
-                        distances[i, j] = distances[j, i] = np.nan
+                    dist, sample_count = self._compute_wasserstein_pair(col1, col2)
+                    distances[i, j] = distances[j, i] = dist
+
+                    if np.isnan(dist) and sample_count < 10:
+                        logger.warning(
+                            f"Insufficient valid samples for {col1} vs {col2}: {sample_count} samples"
+                        )
 
                     pbar.update(1)
 
@@ -700,9 +762,179 @@ class EmbeddingComparisonVisualizer:
                             color="black",
                             fontsize=8 * self.font_scale,
                         )
-                    pbar.update(1)
 
     # --- Distribution Analysis ---
+
+    def plot_ridge_distributions(
+        self,
+        distribution_data: Optional[Dict] = None,
+        show_median: bool = True,
+        alpha: float = 0.8,
+        save_path: Optional[Path] = None,
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """Create a ridge plot using pre-computed distribution data for much faster rendering."""
+        if distribution_data is None:
+            distribution_data = self.compute_distribution_data(normalize=True)
+
+        logger.info(
+            "Creating optimized ridge plot using pre-computed distribution data..."
+        )
+
+        # Extract PLM names in the same order as dist_cols
+        plm_names = [col.replace("dist_", "") for col in self.dist_cols]
+
+        # Set style for ridge plot
+        sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+
+        # Calculate median values for each PLM if needed
+        median_data = {}
+        if show_median:
+            logger.info("Computing medians from original data...")
+            for col in tqdm(self.dist_cols, desc="Computing medians"):
+                col_series = self.df.select(col).drop_nulls().get_column(col)
+                if len(col_series) > 0:
+                    # Get raw values and remove any remaining NaNs
+                    raw_values = col_series.to_numpy()
+                    raw_values = raw_values[~np.isnan(raw_values)]
+
+                    if len(raw_values) > 0:
+                        # Normalize manually with proper NaN handling
+                        min_val = np.min(raw_values)
+                        max_val = np.max(raw_values)
+
+                        if max_val > min_val:  # Avoid division by zero
+                            normalized_values = (raw_values - min_val) / (
+                                max_val - min_val
+                            )
+                            median_val = np.median(normalized_values)
+
+                            # Only store if not NaN
+                            if not np.isnan(median_val):
+                                median_data[col.replace("dist_", "")] = median_val
+                            else:
+                                logger.warning(
+                                    f"Median is NaN for {col} after normalization, skipping median line"
+                                )
+                        else:
+                            # All values are the same, median should be 0.5 in normalized space
+                            median_data[col.replace("dist_", "")] = 0.5
+                            logger.info(
+                                f"All values identical for {col}, setting median to 0.5"
+                            )
+                    else:
+                        logger.warning(f"No valid values for {col} after removing NaNs")
+
+        # Set up the figure - use a single large figure and manually position subplots
+        fig = plt.figure(
+            figsize=(15 * self.font_scale, len(plm_names) * self.font_scale)
+        )
+
+        # Create subplots with controlled spacing
+        gs = fig.add_gridspec(len(plm_names), 1, hspace=-0.25)  # Small positive spacing
+
+        axes = []
+        for i, plm_name in enumerate(plm_names):
+            # Create subplot
+            ax = fig.add_subplot(gs[i])
+            axes.append(ax)
+
+            col = f"dist_{plm_name}"
+
+            if col not in distribution_data["distributions"]:
+                logger.warning(f"No distribution data found for {col}")
+                ax.axis("off")
+                continue
+
+            dist_data = distribution_data["distributions"][col]
+            x_range = np.array(dist_data["x_range"])
+            density = np.array(dist_data["density"])
+            color = self._get_embedding_color(col)
+
+            # Plot the distribution - key insight: plot normally, let overlap create ridge effect
+            ax.fill_between(x_range, density, alpha=alpha, color=color)
+            ax.plot(x_range, density, color="white", linewidth=2, zorder=2)
+
+            # Draw baseline at y=0
+            ax.axhline(y=0, color="black", linewidth=2, clip_on=False)
+
+            # Add median line if requested
+            if show_median and plm_name in median_data:
+                median_val = median_data[plm_name]
+                # Only proceed if median_val is valid
+                if not np.isnan(median_val) and 0 <= median_val <= 1:
+                    # Interpolate to find the height at median
+                    median_y = np.interp(median_val, x_range, density)
+                    # Only draw if interpolated y is valid
+                    if not np.isnan(median_y) and median_y >= 0:
+                        ax.plot(
+                            [median_val, median_val],
+                            [0, median_y],
+                            color="black",
+                            linestyle="--",
+                            linewidth=2,
+                            alpha=0.7,
+                            clip_on=False,
+                            zorder=1,
+                        )
+
+            # Add PLM label on the left
+            ax.text(
+                -0.02,
+                0.1,
+                plm_name,
+                fontweight="bold",
+                color=color,
+                ha="right",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=int(22 * self.font_scale),
+            )
+
+            # Style the subplot
+            ax.set_xlim(0, 1)
+            ax.set_ylim(bottom=0)  # Start y-axis at 0
+
+            # Remove y-axis elements
+            ax.set_yticks([])
+            ax.set_ylabel("")
+
+            # Remove unnecessary spines
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_visible(False)
+
+            # X-axis: only show on bottom subplot
+            if i == len(plm_names) - 1:
+                # Bottom subplot: full x-axis
+                ax.spines["bottom"].set_visible(True)
+                ax.set_xticks(np.arange(0, 1.1, 0.2))
+                ax.set_xlabel(
+                    "Normalized Distance",
+                    fontsize=int(22 * self.font_scale),
+                    labelpad=15,
+                )
+                ax.tick_params(
+                    axis="x", which="major", labelsize=int(20 * self.font_scale)
+                )
+            else:
+                # Other subplots: no x-axis
+                ax.spines["bottom"].set_visible(False)
+                ax.set_xticks([])
+                ax.tick_params(axis="x", which="both", length=0, labelbottom=False)
+
+        # Add overall title
+        fig.suptitle(
+            "Normalized Pairwise All-vs-All Distance Distributions",
+            fontsize=int(32 * self.font_scale),
+            fontweight="bold",
+            y=0.92,
+        )
+
+        if save_path:
+            fig.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
+            logger.info(f"Optimized ridge plot saved to {save_path}")
+
+        return fig, axes
 
     def compute_distribution_data(
         self, normalize: bool = False, save_path: Optional[Path] = None
@@ -713,17 +945,29 @@ class EmbeddingComparisonVisualizer:
         distribution_data = {"metadata": {"normalized": normalize}, "distributions": {}}
 
         for col in tqdm(self.dist_cols, desc="Processing distributions"):
-            data = self.df[col].dropna().values
+            # Get data using polars operations
+            col_series = self.df.select(col).drop_nulls().get_column(col)
+            data = col_series.to_numpy()
 
             if normalize:
-                data = self.normalize_distribution(self.df[col])
-                x_range = np.linspace(0, 1, 200)
+                # Use normalized data for KDE
+                data_normalized = self.normalize_distribution(col_series)
+                data_clean = (
+                    data_normalized[np.isfinite(data_normalized)]
+                    if len(data_normalized) > 0
+                    else np.array([])
+                )
+                x_range = np.linspace(0, 1, 500)
             else:
-                x_range = np.linspace(data.min(), data.max(), 200)
+                # Use original data for KDE
+                data_clean = data[np.isfinite(data)] if len(data) > 0 else np.array([])
+                if len(data_clean) > 0:
+                    x_range = np.linspace(data_clean.min(), data_clean.max(), 500)
+                else:
+                    x_range = np.linspace(0, 1, 500)
 
-            # Calculate KDE
-            if len(data) > 0:
-                kernel = stats.gaussian_kde(data)
+            if len(data_clean) > 1:  # Need at least 2 points for KDE
+                kernel = stats.gaussian_kde(data_clean)
                 density = kernel(x_range)
                 peak_idx = np.argmax(density)
                 peak_x = float(x_range[peak_idx])
@@ -737,8 +981,8 @@ class EmbeddingComparisonVisualizer:
                 "density": density.tolist(),
                 "peak_x": peak_x,
                 "peak_y": peak_y,
-                "min": float(data.min()) if len(data) > 0 else 0.0,
-                "max": float(data.max()) if len(data) > 0 else 0.0,
+                "min": float(data_clean.min()) if len(data_clean) > 0 else 0.0,
+                "max": float(data_clean.max()) if len(data_clean) > 0 else 0.0,
             }
 
         if save_path:
@@ -1087,11 +1331,15 @@ class EmbeddingComparisonVisualizer:
         df_sample = self.df.head(sample_size) if len(self.df) > sample_size else self.df
 
         # Normalize data
-        normalized_data = pd.DataFrame()
+        # Build normalized data using with_columns
+        normalized_data = df_sample
         for col in tqdm(self.dist_cols, desc="Normalizing for violin plots"):
-            if not df_sample[col].isna().all():
-                normalized_data[col] = (df_sample[col] - df_sample[col].min()) / (
+            if not df_sample[col].is_nan().all():
+                normalized_col = (df_sample[col] - df_sample[col].min()) / (
                     df_sample[col].max() - df_sample[col].min()
+                )
+                normalized_data = normalized_data.with_columns(
+                    normalized_col.alias(col)
                 )
 
         n_models = len(self.dist_cols)
@@ -1120,7 +1368,7 @@ class EmbeddingComparisonVisualizer:
         return fig, axes
 
     def _compute_violin_data(
-        self, normalized_data: pd.DataFrame, n_models: int
+        self, normalized_data: pl.DataFrame, n_models: int
     ) -> Tuple[Dict, Dict, float, float]:
         """Compute differences and statistics for violin plots."""
         all_medians = []
@@ -1138,7 +1386,7 @@ class EmbeddingComparisonVisualizer:
                             normalized_data[self.dist_cols[i]]
                             - normalized_data[self.dist_cols[j]]
                         )
-                        row_diffs.extend(diff.dropna().values)
+                        row_diffs.extend(diff.drop_nulls().to_numpy())
                         if i < j:
                             median = diff.median()
                             all_medians.append(median)
@@ -1218,13 +1466,13 @@ class EmbeddingComparisonVisualizer:
     def _create_single_violin_plot(
         self,
         ax: plt.Axes,
-        diff: pd.Series,
+        diff: pl.Series,
         median: float,
         gray_val: float,
         ylim: Optional[Tuple[float, float]],
     ):
         """Create a single violin plot with consistent styling."""
-        sns.violinplot(y=diff.dropna(), ax=ax, inner="box", color=str(gray_val))
+        sns.violinplot(y=diff.drop_nulls(), ax=ax, inner="box", color=str(gray_val))
         if ylim:
             ax.set_ylim(ylim)
         ax.text(
@@ -1325,6 +1573,16 @@ class EmbeddingComparisonVisualizer:
                     data, save_path=output_paths.get("temp_path")
                 ),
             },
+            {
+                "name": "distribution_comparison_normalized_ridge",
+                "description": "normalized distribution ridge plot",
+                "cache_file": "distribution_normalized_data.json",
+                "output_file": "distribution_comparison_normalized_ridge.png",
+                "compute_func": lambda: self.compute_distribution_data(normalize=True),
+                "plot_func": lambda data: self.plot_ridge_distributions(
+                    data, alpha=0.8, save_path=output_paths.get("temp_path")
+                ),
+            },
         ]
 
         # Generate cacheable visualizations
@@ -1364,6 +1622,178 @@ class EmbeddingComparisonVisualizer:
             logger.info(f"{viz_type}: {path}")
 
         return output_paths
+
+    def plot_combined_hexagonal_correlation(
+        self,
+        hexbin_data: Optional[Dict] = None,
+        correlation_data: Optional[Dict] = None,
+        gridsize: int = 50,
+        save_path: Optional[Path] = None,
+    ) -> Tuple[plt.Figure, np.ndarray]:
+        """Create a combined plot with hexagonal comparison (upper triangle),
+        model names (diagonal), and correlation values (lower triangle)."""
+
+        # Data should be provided by the caller (from viz_map)
+        if hexbin_data is None or correlation_data is None:
+            raise ValueError("Both hexbin_data and correlation_data must be provided")
+
+        logger.info("Creating combined hexagonal-correlation plot...")
+
+        dist_cols = hexbin_data["metadata"]["dist_cols"]
+        correlations = np.array(correlation_data["correlations"])
+        n = len(dist_cols)
+        vmax = hexbin_data["metadata"]["max_count"]
+
+        # Create figure with space for two colorbars
+        fig = plt.figure(figsize=(24 * self.font_scale, 18 * self.font_scale))
+
+        # Create grid with space for colorbars on the right
+        gs = fig.add_gridspec(
+            n + 2,
+            n + 2,
+            width_ratios=[1] * n + [0.2, 0.2],
+            height_ratios=[0.1] + [1] * n + [0.1],
+        )
+
+        # Create axes for the main plot
+        axes = np.empty((n, n), dtype=object)
+        for i in range(n):
+            for j in range(n):
+                axes[i, j] = fig.add_subplot(gs[i + 1, j])
+
+        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+
+        with tqdm(total=n * n, desc="Creating combined plot") as pbar:
+            for i, col1 in enumerate(dist_cols):
+                for j, col2 in enumerate(dist_cols):
+                    ax = axes[i, j]
+
+                    if i == j:
+                        # Diagonal: show embedding name
+                        embedding_name = col1.replace("dist_", "").replace("_", "\n")
+                        if embedding_name == "prottucker":
+                            embedding_name = "prot-\ntucker"
+                        elif embedding_name == "prostt5":
+                            embedding_name = "prost-\nt5"
+                        elif embedding_name == "prott5":
+                            embedding_name = "prot-\nt5"
+                        ax.text(
+                            0.5,
+                            0.5,
+                            embedding_name,
+                            ha="center",
+                            va="center",
+                            fontsize=16 * self.font_scale,
+                            weight="bold",
+                            color=self._get_embedding_color(col1),
+                            transform=ax.transAxes,
+                        )
+                        ax.axis("off")
+                    elif i < j:
+                        # Upper triangle: hexagonal plots
+                        key = f"{col1}_vs_{col2}"
+                        if key in hexbin_data:
+                            self._plot_hexbin_pair(ax, hexbin_data[key], vmax)
+                        else:
+                            ax.text(
+                                0.5,
+                                0.5,
+                                "No Data",
+                                ha="center",
+                                va="center",
+                                transform=ax.transAxes,
+                            )
+                            ax.axis("off")
+                    else:
+                        # Lower triangle: correlation values with proper heatmap
+                        if not np.isnan(correlations[i, j]):
+                            correlation_val = correlations[i, j]
+                            # Create a small heatmap cell
+                            ax.imshow([[correlation_val]], cmap="OrRd", vmin=0, vmax=1)
+                            ax.set_xticks([])
+                            ax.set_yticks([])
+                            # Add text
+                            text_color = "white" if correlation_val > 0.5 else "black"
+                            ax.text(
+                                0.5,
+                                0.5,
+                                f"{correlation_val:.2f}",
+                                ha="center",
+                                va="center",
+                                color=text_color,
+                                fontsize=16 * self.font_scale,
+                                weight="bold",
+                                transform=ax.transAxes,
+                            )
+                        else:
+                            ax.set_facecolor("lightgray")
+                            ax.text(
+                                0.5,
+                                0.5,
+                                "NA",
+                                ha="center",
+                                va="center",
+                                color="black",
+                                fontsize=16 * self.font_scale,
+                                transform=ax.transAxes,
+                            )
+                            ax.axis("off")
+
+                    # Add labels for edge plots
+                    if i == n - 1:
+                        ax.set_xlabel(
+                            col2.replace("dist_", ""),
+                            rotation=45,
+                            ha="right",
+                            fontsize=16 * self.font_scale,
+                        )
+                    if j == 0:
+                        ax.set_ylabel(
+                            col1.replace("dist_", ""),
+                            rotation=0,
+                            ha="right",
+                            fontsize=16 * self.font_scale,
+                        )
+
+                    pbar.update(1)
+
+        # Add title
+        fig.suptitle(
+            "Combined Pairwise Comparison\n(Upper: Hexagonal, Diagonal: Models, Lower: Correlations)",
+            x=0.5,
+            y=0.95,
+            fontsize=22 * self.font_scale,
+            weight="bold",
+        )
+
+        # Create a sub-grid for the right column to split it into two equal parts
+        gs_right = gs[1:-1, -1].subgridspec(2, 1, height_ratios=[1, 1], hspace=0.1)
+
+        # Add colorbar for hexagonal plots (top half)
+        cbar_hex = fig.add_subplot(gs_right[0])
+        im_hex = plt.cm.ScalarMappable(
+            cmap="pink", norm=plt.Normalize(vmin=1, vmax=vmax)
+        )
+        cbar_hex = plt.colorbar(
+            im_hex, cax=cbar_hex, orientation="vertical", label="Count"
+        )
+        cbar_hex.ax.tick_params(labelsize=14 * self.font_scale)
+        cbar_hex.set_label("Hexagonal Count", fontsize=16 * self.font_scale)
+
+        # Add colorbar for correlations (bottom half)
+        cbar_corr = fig.add_subplot(gs_right[1])
+        im_corr = plt.cm.ScalarMappable(cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=1))
+        cbar_corr = plt.colorbar(
+            im_corr, cax=cbar_corr, orientation="vertical", label="Correlation"
+        )
+        cbar_corr.ax.tick_params(labelsize=14 * self.font_scale)
+        cbar_corr.set_label("Spearman Correlation", fontsize=16 * self.font_scale)
+
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
+            logger.info(f"Combined hexagonal-correlation plot saved to {save_path}")
+
+        return fig, axes
 
 
 def main():
@@ -1412,7 +1842,9 @@ def main():
             "wasserstein",
             "distribution",
             "distribution_normalized",
+            "distribution_normalized_ridge",
             "violin",
+            "combined",
             "all",
         ],
         default=["all"],
@@ -1470,11 +1902,23 @@ def main():
                 "distribution_normalized_data.json",
                 "distribution_comparison_normalized.png",
             ),
+            "distribution_normalized_ridge": (
+                lambda: visualizer.compute_distribution_data(normalize=True),
+                visualizer.plot_ridge_distributions,
+                "distribution_normalized_data.json",
+                "distribution_comparison_normalized_ridge.png",
+            ),
             "violin": (
                 None,
                 visualizer.create_violin_plot_comparison,
                 None,
                 "violin_plot_comparison.png",
+            ),
+            "combined": (
+                [visualizer.compute_correlation_data, visualizer.compute_hexbin_data],
+                visualizer.plot_combined_hexagonal_correlation,
+                ["correlation_data.json", "hexbin_data.json"],
+                "combined_hexagonal_correlation.png",
             ),
         }
 
@@ -1485,7 +1929,30 @@ def main():
 
                 logger.info(f"Generating {viz_type}...")
 
-                if cache_file and compute_func:
+                if isinstance(compute_func, list):
+                    # Handle combined plot with multiple compute functions
+                    data_list = []
+                    for i, (func, cache_file) in enumerate(
+                        zip(compute_func, cache_file)
+                    ):
+                        cache_path = cache_dir / cache_file
+                        data = visualizer._load_cached_data(
+                            cache_path, args.force_recompute
+                        )
+                        if data is None:
+                            data = func()
+                            visualizer._save_json_data(
+                                data, cache_path, f"{viz_type.title()} data {i + 1}"
+                            )
+                        data_list.append(data)
+
+                    # Pass data to plot function
+                    plot_func(
+                        hexbin_data=data_list[1],
+                        correlation_data=data_list[0],
+                        save_path=output_path,
+                    )
+                elif cache_file and compute_func:
                     cache_path = cache_dir / cache_file
                     data = visualizer._load_cached_data(
                         cache_path, args.force_recompute
