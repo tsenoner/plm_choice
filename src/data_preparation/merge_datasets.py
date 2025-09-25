@@ -40,30 +40,62 @@ class ProteinAnalysisPipeline:
     """Main pipeline class for protein similarity analysis."""
 
     def __init__(
-        self, base_data_dir: str | Path = "data", output_dir: str | Path = "out"
+        self,
+        base_data_dir: str | Path = "data",
+        output_dir: str | Path = "out",
+        dataset: str = "2024_new",
     ):
-        """Initialize pipeline with base directories."""
+        """Initialize pipeline with base directories and dataset type.
+
+        Args:
+            base_data_dir: Base data directory path
+            output_dir: Output directory path
+            dataset: Dataset type - either "sprot_pre2024" or "2024_new"
+        """
         self.base_data_dir = Path(base_data_dir)
         self.output_dir = Path(output_dir)
+        self.dataset = dataset
+
+        # Validate dataset parameter
+        if dataset not in ["sprot_pre2024", "2024_new"]:
+            raise ValueError(
+                f"Dataset must be 'sprot_pre2024' or '2024_new', got '{dataset}'"
+            )
+
         self._setup_paths()
 
     def _setup_paths(self) -> None:
         """Setup all file paths used in the pipeline."""
         # Base directories
-        self.interm_dir = self.base_data_dir / "interm" / "2024_new"
+        self.interm_dir = self.base_data_dir / "interm" / self.dataset
+
+        # Dataset-specific file configurations
+        if self.dataset == "2024_new":
+            mmseqs_filename = "2024_novelSeqs_all_vs_all.tsv"
+            foldseek_filename = "pdb_all_vs_all.tsv"
+        elif self.dataset == "sprot_pre2024":
+            mmseqs_filename = "sprot_all_vs_all.tsv"
+            foldseek_filename = "afdb_swissprot_v4_all_vs_all.tsv"
 
         # Input file paths
-        self.mmseqs_tsv = self.interm_dir / "mmseqs" / "2024_novelSeqs_all_vs_all.tsv"
-        self.foldcomp_plddt_tsv = self.interm_dir / "foldcomp" / "plddt.tsv"
-        self.foldseek_tsv = (
-            self.interm_dir / "foldseek" / "afdb_swissprot_v4_all_vs_all.tsv"
-        )
+        self.mmseqs_tsv = self.interm_dir / "mmseqs" / mmseqs_filename
 
-        # Intermediate files
-        self.foldcomp_low_plddt_ids = self.interm_dir / "foldcomp" / "ids_below_70.txt"
+        # pLDDT file location depends on dataset type
+        if self.dataset == "2024_new":
+            self.foldcomp_plddt_tsv = self.interm_dir / "colabfold" / "plddt.tsv"
+            self.foldcomp_low_plddt_ids = (
+                self.interm_dir / "colabfold" / "ids_below_70.txt"
+            )
+        else:  # sprot_pre2024
+            self.foldcomp_plddt_tsv = self.interm_dir / "foldcomp" / "plddt.tsv"
+            self.foldcomp_low_plddt_ids = (
+                self.interm_dir / "foldcomp" / "ids_below_70.txt"
+            )
 
-        # Output directories
-        self.plots_dir = self.output_dir / "data_analysis"
+        self.foldseek_tsv = self.interm_dir / "foldseek" / foldseek_filename
+
+        # Output directories - dataset-specific
+        self.plots_dir = self.output_dir / f"data_analysis_{self.dataset}"
 
     def get_file_paths(self, test_mode: bool = False) -> dict[str, Path]:
         """Get file paths, with test mode suffixes if needed."""
@@ -306,32 +338,45 @@ class ProteinAnalysisPipeline:
         )
 
     def _extract_protein_ids(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Extract protein IDs from AlphaFold format strings."""
-        return df.with_columns(
-            [
-                pl.col(col).str.extract(r"AF-(.*?)-F1-model_v4", 1)
-                for col in ["query", "target"]
-            ]
-        )
+        """Extract protein IDs from format strings."""
+        if self.dataset == "2024_new":
+            # For 2024_new dataset with ColabFold data, IDs are already in simple format
+            return df
+        else:
+            # For sprot_pre2024, extract from AlphaFold format (AF-{ID}-F1-model_v4)
+            return df.with_columns(
+                [
+                    pl.col(col).str.extract(r"AF-(.*?)-F1-model_v4", 1)
+                    for col in ["query", "target"]
+                ]
+            )
 
     def _save_low_plddt_ids(self, foldcomp_df: pl.DataFrame) -> None:
         """Save protein IDs with low confidence scores."""
         print("\n💾 Saving low confidence protein IDs...")
 
-        # Filter and extract IDs with pLDDT < 70
-        low_confidence_ids = (
-            foldcomp_df.filter(pl.col("avg_plddt") < 70)
-            .select("id")
-            .with_columns(
-                [
-                    pl.col("id")
-                    .str.extract(r"AF-(.*?)-F1-model_v4", 1)
-                    .alias("parsed_id")
-                ]
+        # Filter IDs with pLDDT < 70
+        low_confidence_df = foldcomp_df.filter(pl.col("avg_plddt") < 70).select("id")
+
+        # Extract protein IDs based on dataset type
+        if self.dataset == "2024_new":
+            # For ColabFold data, IDs are already in simple format
+            low_confidence_ids = low_confidence_df.select(
+                pl.col("id").alias("parsed_id")
             )
-            .select("parsed_id")
-            .drop_nulls()
-        )
+        else:
+            # For AlphaFold data, extract from AF-{ID}-F1-model_v4 format
+            low_confidence_ids = (
+                low_confidence_df.with_columns(
+                    [
+                        pl.col("id")
+                        .str.extract(r"AF-(.*?)-F1-model_v4", 1)
+                        .alias("parsed_id")
+                    ]
+                )
+                .select("parsed_id")
+                .drop_nulls()
+            )
 
         # Save to file
         self.foldcomp_low_plddt_ids.parent.mkdir(parents=True, exist_ok=True)
@@ -698,8 +743,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python merge_datasets.py              # Run full analysis
-  python merge_datasets.py --test       # Run test mode (100K rows per dataset)
+  python merge_datasets.py                                    # Run full analysis (2024_new dataset)
+  python merge_datasets.py --test                             # Run test mode (2024_new dataset, 100K rows)
+  python merge_datasets.py --dataset sprot_pre2024           # Run full analysis (sprot_pre2024 dataset)
+  python merge_datasets.py --dataset sprot_pre2024 --test    # Run test mode (sprot_pre2024 dataset, 100K rows)
         """,
     )
 
@@ -723,18 +770,26 @@ Examples:
         help="Output directory for plots (default: out)",
     )
 
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="2024_new",
+        choices=["sprot_pre2024", "2024_new"],
+        help="Dataset to process: 'sprot_pre2024' or '2024_new' (default: 2024_new)",
+    )
+
     args = parser.parse_args()
 
     print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
     print("=" * 50)
 
     if args.test:
-        print("🧪 TEST MODE: Processing 100K rows per dataset")
-        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir)
+        print(f"🧪 TEST MODE: Processing 100K rows per dataset ({args.dataset})")
+        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir, args.dataset)
         result_df = pipeline.run(test_mode=True, test_size=100_000)
     else:
-        print("🚀 FULL MODE: Processing complete datasets")
-        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir)
+        print(f"🚀 FULL MODE: Processing complete datasets ({args.dataset})")
+        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir, args.dataset)
         result_df = pipeline.run(test_mode=False)
 
     print("✅ Pipeline completed successfully!")
