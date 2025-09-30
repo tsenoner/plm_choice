@@ -1623,50 +1623,88 @@ class EmbeddingComparisonVisualizer:
 
         return output_paths
 
-    def plot_combined_hexagonal_correlation(
+    def plot_combined_wasserstein_correlation(
         self,
-        hexbin_data: Optional[Dict] = None,
+        wasserstein_data: Optional[Dict] = None,
         correlation_data: Optional[Dict] = None,
         gridsize: int = 50,
         save_path: Optional[Path] = None,
     ) -> Tuple[plt.Figure, np.ndarray]:
-        """Create a combined plot with hexagonal comparison (upper triangle),
+        """Create a combined plot with Wasserstein distance (upper triangle),
         model names (diagonal), and correlation values (lower triangle)."""
 
         # Data should be provided by the caller (from viz_map)
-        if hexbin_data is None or correlation_data is None:
-            raise ValueError("Both hexbin_data and correlation_data must be provided")
+        if wasserstein_data is None or correlation_data is None:
+            raise ValueError("Both wasserstein_data and correlation_data must be provided")
 
-        logger.info("Creating combined hexagonal-correlation plot...")
+        logger.info("Creating combined Wasserstein-correlation plot...")
 
-        dist_cols = hexbin_data["metadata"]["dist_cols"]
+        dist_cols = [f"dist_{col}" for col in wasserstein_data["columns"]]
         correlations = np.array(correlation_data["correlations"])
+        wasserstein_distances = np.array(wasserstein_data["distances"])
         n = len(dist_cols)
-        vmax = hexbin_data["metadata"]["max_count"]
 
-        # Create figure with space for two colorbars
-        fig = plt.figure(figsize=(24 * self.font_scale, 18 * self.font_scale))
+        # Calculate figure size to ensure square cells
+        # Base size per cell to ensure readability
+        cell_size = 1.5 * self.font_scale
+        grid_size = n * cell_size
+        cbar_width = 0.8 * self.font_scale  # Reduced colorbar width
+        spacing = 1.0 * self.font_scale  # Extra spacing between grid and colorbars
+
+        # Total figure dimensions
+        fig_width = grid_size + spacing + cbar_width
+        fig_height = grid_size
+
+        # Create figure
+        fig = plt.figure(figsize=(fig_width, fig_height))
+
+        # Calculate margins to keep grid square
+        left_margin = 0.08
+        right_margin = 0.02
+        top_margin = 0.08
+        bottom_margin = 0.08
+
+        # Available space for grid + spacing + colorbar
+        available_width = 1 - left_margin - right_margin
+        available_height = 1 - top_margin - bottom_margin
+
+        # Fraction of figure width for grid, spacing, and colorbar
+        grid_frac = grid_size / fig_width
+        spacing_frac = spacing / fig_width
+        cbar_frac = cbar_width / fig_width
 
         # Create grid with space for colorbars on the right
+        # Add a spacing column between grid and colorbars
         gs = fig.add_gridspec(
-            n + 2,
-            n + 2,
-            width_ratios=[1] * n + [0.2, 0.2],
-            height_ratios=[0.1] + [1] * n + [0.1],
+            n,
+            n + 2,  # n for grid, 1 for spacing, 1 for colorbar
+            width_ratios=[1] * n + [spacing_frac / grid_frac * n, cbar_frac / grid_frac * n],
+            wspace=0,
+            hspace=0,
+            left=left_margin,
+            right=left_margin + grid_frac + spacing_frac + cbar_frac,
+            top=1 - top_margin,
+            bottom=bottom_margin
         )
 
         # Create axes for the main plot
         axes = np.empty((n, n), dtype=object)
         for i in range(n):
             for j in range(n):
-                axes[i, j] = fig.add_subplot(gs[i + 1, j])
-
-        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+                axes[i, j] = fig.add_subplot(gs[i, j])
 
         with tqdm(total=n * n, desc="Creating combined plot") as pbar:
             for i, col1 in enumerate(dist_cols):
                 for j, col2 in enumerate(dist_cols):
                     ax = axes[i, j]
+
+                    # Remove all ticks and spines for cleaner look
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    ax.set_xlim(0, 1)
+                    ax.set_ylim(0, 1)
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
 
                     if i == j:
                         # Diagonal: show embedding name
@@ -1674,54 +1712,44 @@ class EmbeddingComparisonVisualizer:
                         if embedding_name == "prottucker":
                             embedding_name = "prot-\ntucker"
                         elif embedding_name == "prostt5":
-                            embedding_name = "prost-\nt5"
+                            embedding_name = "prost-\nT5"
                         elif embedding_name == "prott5":
-                            embedding_name = "prot-\nt5"
+                            embedding_name = "prot-\nT5"
                         ax.text(
                             0.5,
                             0.5,
                             embedding_name,
                             ha="center",
                             va="center",
-                            fontsize=16 * self.font_scale,
+                            fontsize=24 * self.font_scale,
                             weight="bold",
                             color=self._get_embedding_color(col1),
                             transform=ax.transAxes,
                         )
-                        ax.axis("off")
                     elif i < j:
-                        # Upper triangle: hexagonal plots
-                        key = f"{col1}_vs_{col2}"
-                        if key in hexbin_data:
-                            self._plot_hexbin_pair(ax, hexbin_data[key], vmax)
-                        else:
-                            ax.text(
-                                0.5,
-                                0.5,
-                                "No Data",
-                                ha="center",
-                                va="center",
-                                transform=ax.transAxes,
+                        # Upper triangle: Wasserstein distance
+                        if not np.isnan(wasserstein_distances[i, j]):
+                            wasserstein_val = wasserstein_distances[i, j]
+                            # Create a heatmap cell with proper extent
+                            im = ax.imshow(
+                                [[wasserstein_val]],
+                                cmap="Blues",
+                                vmin=0,
+                                vmax=np.nanmax(wasserstein_distances),
+                                aspect='auto',
+                                extent=[0, 1, 0, 1]
                             )
-                            ax.axis("off")
-                    else:
-                        # Lower triangle: correlation values with proper heatmap
-                        if not np.isnan(correlations[i, j]):
-                            correlation_val = correlations[i, j]
-                            # Create a small heatmap cell
-                            ax.imshow([[correlation_val]], cmap="OrRd", vmin=0, vmax=1)
-                            ax.set_xticks([])
-                            ax.set_yticks([])
-                            # Add text
-                            text_color = "white" if correlation_val > 0.5 else "black"
+                            # Determine text color based on background
+                            normalized_val = wasserstein_val / np.nanmax(wasserstein_distances)
+                            text_color = "white" if normalized_val > 0.5 else "black"
                             ax.text(
                                 0.5,
                                 0.5,
-                                f"{correlation_val:.2f}",
+                                f"{wasserstein_val:.2f}",
                                 ha="center",
                                 va="center",
                                 color=text_color,
-                                fontsize=16 * self.font_scale,
+                                fontsize=24 * self.font_scale,
                                 weight="bold",
                                 transform=ax.transAxes,
                             )
@@ -1734,64 +1762,105 @@ class EmbeddingComparisonVisualizer:
                                 ha="center",
                                 va="center",
                                 color="black",
-                                fontsize=16 * self.font_scale,
+                                fontsize=24 * self.font_scale,
                                 transform=ax.transAxes,
                             )
-                            ax.axis("off")
-
-                    # Add labels for edge plots
-                    if i == n - 1:
-                        ax.set_xlabel(
-                            col2.replace("dist_", ""),
-                            rotation=45,
-                            ha="right",
-                            fontsize=16 * self.font_scale,
-                        )
-                    if j == 0:
-                        ax.set_ylabel(
-                            col1.replace("dist_", ""),
-                            rotation=0,
-                            ha="right",
-                            fontsize=16 * self.font_scale,
-                        )
+                    else:
+                        # Lower triangle: correlation values
+                        if not np.isnan(correlations[i, j]):
+                            correlation_val = correlations[i, j]
+                            # Create a heatmap cell with proper extent
+                            im = ax.imshow(
+                                [[correlation_val]],
+                                cmap="OrRd",
+                                vmin=0,
+                                vmax=1,
+                                aspect='auto',
+                                extent=[0, 1, 0, 1]
+                            )
+                            text_color = "white" if correlation_val > 0.5 else "black"
+                            ax.text(
+                                0.5,
+                                0.5,
+                                f"{correlation_val:.2f}",
+                                ha="center",
+                                va="center",
+                                color=text_color,
+                                fontsize=24 * self.font_scale,
+                                weight="bold",
+                                transform=ax.transAxes,
+                            )
+                        else:
+                            ax.set_facecolor("lightgray")
+                            ax.text(
+                                0.5,
+                                0.5,
+                                "NA",
+                                ha="center",
+                                va="center",
+                                color="black",
+                                fontsize=24 * self.font_scale,
+                                transform=ax.transAxes,
+                            )
 
                     pbar.update(1)
 
+        # Add row and column labels outside the grid
+        for i, col in enumerate(dist_cols):
+            label = col.replace("dist_", "")
+            # Y-axis labels (left side)
+            axes[i, 0].set_ylabel(
+                label,
+                rotation=0,
+                ha="right",
+                va="center",
+                fontsize=26 * self.font_scale,
+                labelpad=10
+            )
+            # X-axis labels (bottom)
+            axes[-1, i].set_xlabel(
+                label,
+                rotation=45,
+                ha="right",
+                va="top",
+                fontsize=26 * self.font_scale,
+                labelpad=5
+            )
+
         # Add title
         fig.suptitle(
-            "Combined Pairwise Comparison\n(Upper: Hexagonal, Diagonal: Models, Lower: Correlations)",
-            x=0.5,
-            y=0.95,
-            fontsize=22 * self.font_scale,
+            "Combined Pairwise Comparison\n(Upper: Wasserstein Distance, Diagonal: Models, Lower: Correlations)",
+            fontsize=32 * self.font_scale,
             weight="bold",
+            y=0.98
         )
 
-        # Create a sub-grid for the right column to split it into two equal parts
-        gs_right = gs[1:-1, -1].subgridspec(2, 1, height_ratios=[1, 1], hspace=0.1)
+        # Create a sub-grid for the colorbar column (rightmost) to split it into two equal parts
+        gs_right = gs[:, -1].subgridspec(2, 1, height_ratios=[1, 1], hspace=0.2)
 
-        # Add colorbar for hexagonal plots (top half)
-        cbar_hex = fig.add_subplot(gs_right[0])
-        im_hex = plt.cm.ScalarMappable(
-            cmap="pink", norm=plt.Normalize(vmin=1, vmax=vmax)
+        # Add colorbar for Wasserstein distances (top half)
+        cbar_wass_ax = fig.add_subplot(gs_right[0])
+        im_wass = plt.cm.ScalarMappable(
+            cmap="Blues", norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances))
         )
-        cbar_hex = plt.colorbar(
-            im_hex, cax=cbar_hex, orientation="vertical", label="Count"
+        cbar_wass = plt.colorbar(
+            im_wass, cax=cbar_wass_ax, orientation="vertical"
         )
-        cbar_hex.ax.tick_params(labelsize=14 * self.font_scale)
-        cbar_hex.set_label("Hexagonal Count", fontsize=16 * self.font_scale)
+        cbar_wass.ax.tick_params(labelsize=24 * self.font_scale)
+        cbar_wass.set_label("Wasserstein Distance", fontsize=26 * self.font_scale)
 
         # Add colorbar for correlations (bottom half)
-        cbar_corr = fig.add_subplot(gs_right[1])
+        cbar_corr_ax = fig.add_subplot(gs_right[1])
         im_corr = plt.cm.ScalarMappable(cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=1))
         cbar_corr = plt.colorbar(
-            im_corr, cax=cbar_corr, orientation="vertical", label="Correlation"
+            im_corr, cax=cbar_corr_ax, orientation="vertical"
         )
-        cbar_corr.ax.tick_params(labelsize=14 * self.font_scale)
-        cbar_corr.set_label("Spearman Correlation", fontsize=16 * self.font_scale)
+        cbar_corr.ax.tick_params(labelsize=24 * self.font_scale)
+        cbar_corr.set_label("Spearman Correlation", fontsize=26 * self.font_scale)
 
         if save_path:
             plt.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
-            logger.info(f"Combined hexagonal-correlation plot saved to {save_path}")
+            logger.info(f"Combined Wasserstein-correlation plot saved to {save_path}")
 
         return fig, axes
 
@@ -1915,10 +1984,10 @@ def main():
                 "violin_plot_comparison.png",
             ),
             "combined": (
-                [visualizer.compute_correlation_data, visualizer.compute_hexbin_data],
-                visualizer.plot_combined_hexagonal_correlation,
-                ["correlation_data.json", "hexbin_data.json"],
-                "combined_hexagonal_correlation.png",
+                [visualizer.compute_correlation_data, visualizer.compute_wasserstein_data],
+                visualizer.plot_combined_wasserstein_correlation,
+                ["correlation_data.json", "wasserstein_data.json"],
+                "combined_wasserstein_correlation.png",
             ),
         }
 
@@ -1948,7 +2017,7 @@ def main():
 
                     # Pass data to plot function
                     plot_func(
-                        hexbin_data=data_list[1],
+                        wasserstein_data=data_list[1],
                         correlation_data=data_list[0],
                         save_path=output_path,
                     )
