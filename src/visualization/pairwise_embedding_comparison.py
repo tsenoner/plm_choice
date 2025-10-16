@@ -1639,7 +1639,9 @@ class EmbeddingComparisonVisualizer:
 
         # Data should be provided by the caller (from viz_map)
         if wasserstein_data is None or correlation_data is None:
-            raise ValueError("Both wasserstein_data and correlation_data must be provided")
+            raise ValueError(
+                "Both wasserstein_data and correlation_data must be provided"
+            )
 
         logger.info("Creating combined Wasserstein-correlation plot...")
 
@@ -1682,13 +1684,14 @@ class EmbeddingComparisonVisualizer:
         gs = fig.add_gridspec(
             n,
             n + 2,  # n for grid, 1 for spacing, 1 for colorbar
-            width_ratios=[1] * n + [spacing_frac / grid_frac * n, cbar_frac / grid_frac * n],
+            width_ratios=[1] * n
+            + [spacing_frac / grid_frac * n, cbar_frac / grid_frac * n],
             wspace=0,
             hspace=0,
             left=left_margin,
             right=left_margin + grid_frac + spacing_frac + cbar_frac,
             top=1 - top_margin,
-            bottom=bottom_margin
+            bottom=bottom_margin,
         )
 
         # Create axes for the main plot
@@ -1740,11 +1743,13 @@ class EmbeddingComparisonVisualizer:
                                 cmap="Blues",
                                 vmin=0,
                                 vmax=np.nanmax(wasserstein_distances),
-                                aspect='auto',
-                                extent=[0, 1, 0, 1]
+                                aspect="auto",
+                                extent=[0, 1, 0, 1],
                             )
                             # Determine text color based on background
-                            normalized_val = wasserstein_val / np.nanmax(wasserstein_distances)
+                            normalized_val = wasserstein_val / np.nanmax(
+                                wasserstein_distances
+                            )
                             text_color = "white" if normalized_val > 0.5 else "black"
                             ax.text(
                                 0.5,
@@ -1779,8 +1784,8 @@ class EmbeddingComparisonVisualizer:
                                 cmap="OrRd",
                                 vmin=0,
                                 vmax=1,
-                                aspect='auto',
-                                extent=[0, 1, 0, 1]
+                                aspect="auto",
+                                extent=[0, 1, 0, 1],
                             )
                             text_color = "white" if correlation_val > 0.5 else "black"
                             ax.text(
@@ -1819,7 +1824,7 @@ class EmbeddingComparisonVisualizer:
                 ha="right",
                 va="center",
                 fontsize=26 * self.font_scale,
-                labelpad=10
+                labelpad=10,
             )
             # X-axis labels (bottom)
             axes[-1, i].set_xlabel(
@@ -1828,7 +1833,7 @@ class EmbeddingComparisonVisualizer:
                 ha="right",
                 va="top",
                 fontsize=26 * self.font_scale,
-                labelpad=5
+                labelpad=5,
             )
 
         # Add title
@@ -1836,7 +1841,7 @@ class EmbeddingComparisonVisualizer:
             "Combined Pairwise Comparison\n(Upper: Wasserstein Distance, Diagonal: Models, Lower: Correlations)",
             fontsize=32 * self.font_scale,
             weight="bold",
-            y=0.98
+            y=0.98,
         )
 
         # Create a sub-grid for the colorbar column (rightmost) to split it into two equal parts
@@ -1845,20 +1850,17 @@ class EmbeddingComparisonVisualizer:
         # Add colorbar for Wasserstein distances (top half)
         cbar_wass_ax = fig.add_subplot(gs_right[0])
         im_wass = plt.cm.ScalarMappable(
-            cmap="Blues", norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances))
+            cmap="Blues",
+            norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances)),
         )
-        cbar_wass = plt.colorbar(
-            im_wass, cax=cbar_wass_ax, orientation="vertical"
-        )
+        cbar_wass = plt.colorbar(im_wass, cax=cbar_wass_ax, orientation="vertical")
         cbar_wass.ax.tick_params(labelsize=24 * self.font_scale)
         cbar_wass.set_label("Wasserstein Distance", fontsize=26 * self.font_scale)
 
         # Add colorbar for correlations (bottom half)
         cbar_corr_ax = fig.add_subplot(gs_right[1])
         im_corr = plt.cm.ScalarMappable(cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=1))
-        cbar_corr = plt.colorbar(
-            im_corr, cax=cbar_corr_ax, orientation="vertical"
-        )
+        cbar_corr = plt.colorbar(im_corr, cax=cbar_corr_ax, orientation="vertical")
         cbar_corr.ax.tick_params(labelsize=24 * self.font_scale)
         cbar_corr.set_label("Spearman Correlation", fontsize=26 * self.font_scale)
 
@@ -1988,7 +1990,10 @@ def main():
                 "violin_plot_comparison.png",
             ),
             "combined": (
-                [visualizer.compute_correlation_data, visualizer.compute_wasserstein_data],
+                [
+                    visualizer.compute_correlation_data,
+                    visualizer.compute_wasserstein_data,
+                ],
                 visualizer.plot_combined_wasserstein_correlation,
                 ["correlation_data.json", "wasserstein_data.json"],
                 "combined_wasserstein_correlation.png",
