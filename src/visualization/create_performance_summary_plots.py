@@ -590,10 +590,20 @@ def main():
             )
             return
 
+    # --- Add absolute Spearman correlation ---
+    if "Spearman" in results_df.columns:
+        results_df["Absolute Spearman"] = results_df["Spearman"].abs()
+        log.info("Added 'Absolute Spearman' column to the dataset")
+
     # --- Define plots to generate ---
     plots_to_generate = [
         {"y": "Pearson R2", "se": "Pearson R2 SE", "suffix": "pearson_r2"},
         {"y": "Spearman", "se": "Spearman SE", "suffix": "spearman_rho"},
+        {
+            "y": "Absolute Spearman",
+            "se": "Spearman SE",
+            "suffix": "absolute_spearman_rho",
+        },
         {"y": "MAE", "se": None, "suffix": "mae"},
         {"y": "R2", "se": None, "suffix": "r2"},
     ]
