@@ -25,9 +25,31 @@ PLM_SIZES = {
     "esm2_150m": 150_000_000,
     "esm2_650m": 650_000_000,
     "esm2_3b": 3_000_000_000,
+    "esmc_300m": 300_000_000,
+    "esmc_600m": 600_000_000,
+    "esm3_open": 1_400_000_000,
     "ankh_base": 450_000_000,
     "ankh_large": 1_150_000_000,
     "random_1024": 0,
+}
+
+EMBEDDING_FAMILY_MAP: Dict[str, str] = {
+    "prott5": "ProtT5",
+    "prottucker": "ProtT5",
+    "prostt5": "ProtT5",
+    "clean": "ESM-1",
+    "esm1b": "ESM-1",
+    "esm2_8m": "ESM-2",
+    "esm2_35m": "ESM-2",
+    "esm2_150m": "ESM-2",
+    "esm2_650m": "ESM-2",
+    "esm2_3b": "ESM-2",
+    "esmc_300m": "ESM-C",
+    "esmc_600m": "ESM-C",
+    "esm3_open": "ESM-3",
+    "ankh_base": "Ankh",
+    "ankh_large": "Ankh",
+    "random_1024": "Random",
 }
 
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
@@ -48,6 +70,43 @@ EMBEDDING_COLOR_MAP: Dict[str, str] = {
     "ankh_large": "#a88c01",
     "random_1024": "#808080",  # Grey for random
     # Add other embeddings here
+}
+
+# Parameter display name mapping
+PARAMETER_DISPLAY_NAMES: Dict[str, str] = {
+    "fident": "PIDE",
+    "alntmscore": "TM-score",
+    "hfsp": "HFSP",
+}
+
+# Parameter ordering (for display in tables)
+PARAMETER_ORDER = ["fident", "alntmscore", "hfsp"]
+
+# Model type display name mapping
+MODEL_TYPE_DISPLAY_NAMES: Dict[str, str] = {
+    "euclidean": "Euclidean",
+    "fnn": "FNN",
+    "linear": "Linear",
+}
+
+# Embedding display name mapping
+EMBEDDING_DISPLAY_NAMES: Dict[str, str] = {
+    "ankh_base": "Ankh Base",
+    "ankh_large": "Ankh Large",
+    "clean": "CLEAN",
+    "esm1b": "ESM1b",
+    "esm2_8m": "ESM2-8M",
+    "esm2_35m": "ESM2-35M",
+    "esm2_150m": "ESM2-150M",
+    "esm2_650m": "ESM2-650M",
+    "esm2_3b": "ESM2-3B",
+    "esm3_open": "ESM3",
+    "esmc_300m": "ESM C-300M",
+    "esmc_600m": "ESM C-600M",
+    "prostt5": "ProstT5",
+    "prott5": "ProtT5",
+    "prottucker": "ProtTucker",
+    "random_1024": "Random",
 }
 
 
@@ -120,21 +179,35 @@ def create_word_metric_tables(
     doc.add_heading("Metrics Summary Tables", level=0)
 
     metrics_to_tabulate = ["Pearson R2", "MAE", "Spearman", "R2"]
-    # Sort model types by their parameter size
+
+    # Sort model types by PLM family first, then by parameter size
+    def get_model_sort_key(model_name: str) -> tuple:
+        model_lower = model_name.lower()
+        family = EMBEDDING_FAMILY_MAP.get(model_lower, "Unknown")
+        plm_size = PLM_SIZES.get(model_lower, float("inf"))
+        return (family, plm_size, model_lower)
+
     model_type_columns = sorted(
         df["Model Type"].unique(),
-        key=lambda x: PLM_SIZES.get(
-            x.lower(), float("inf")
-        ),  # Use model size for sorting, default to inf if unknown
+        key=get_model_sort_key,
     )
-    parameter_names = sorted(df["Parameter"].unique())
+
+    # Order parameters according to PARAMETER_ORDER
+    all_params = df["Parameter"].unique()
+    parameter_names = [p for p in PARAMETER_ORDER if p in all_params]
+    # Add any parameters not in PARAMETER_ORDER (for robustness)
+    parameter_names += sorted([p for p in all_params if p not in PARAMETER_ORDER])
 
     table_style_to_apply = "Table Grid"
 
     for metric_name in metrics_to_tabulate:
         doc.add_heading(f"Metric: {metric_name}", level=1)
 
-        header_labels = ["Parameter", "Embedding"] + model_type_columns
+        # Create header labels with display names for model types
+        model_type_display_labels = [
+            MODEL_TYPE_DISPLAY_NAMES.get(mt.lower(), mt) for mt in model_type_columns
+        ]
+        header_labels = ["Parameter", "Embedding"] + model_type_display_labels
         table = doc.add_table(rows=1, cols=len(header_labels))
         table.style = table_style_to_apply
 
@@ -176,12 +249,20 @@ def create_word_metric_tables(
                 scores = relevant_data[metric_name].dropna().astype(float).tolist()
                 best_s, second_best_s = None, None
                 if scores:
-                    unique_scores = sorted(list(set(scores)))
-                    if metric_name != "MAE":
-                        unique_scores.reverse()
-                    best_s = unique_scores[0] if len(unique_scores) > 0 else None
-                    if len(unique_scores) > 1:
-                        second_best_s = unique_scores[1]
+                    if metric_name == "Spearman":
+                        # For Spearman, sort by absolute value (higher absolute value is better)
+                        unique_scores = sorted(list(set(scores)), key=abs, reverse=True)
+                        best_s = unique_scores[0] if len(unique_scores) > 0 else None
+                        if len(unique_scores) > 1:
+                            second_best_s = unique_scores[1]
+                    else:
+                        # For other metrics
+                        unique_scores = sorted(list(set(scores)))
+                        if metric_name != "MAE":
+                            unique_scores.reverse()
+                        best_s = unique_scores[0] if len(unique_scores) > 0 else None
+                        if len(unique_scores) > 1:
+                            second_best_s = unique_scores[1]
                 styling_refs[(mt_col, param_group)] = {
                     "best": best_s,
                     "second_best": second_best_s,
@@ -191,12 +272,16 @@ def create_word_metric_tables(
         data_row_counter_for_banding = 0
 
         for param_name in parameter_names:
-            # Get embeddings for this parameter and sort them by model size
+            # Get embeddings for this parameter and sort them by PLM family, then by size
+            def get_sort_key(embedding_name: str) -> tuple:
+                embedding_lower = embedding_name.lower()
+                family = EMBEDDING_FAMILY_MAP.get(embedding_lower, "Unknown")
+                plm_size = PLM_SIZES.get(embedding_lower, float("inf"))
+                return (family, plm_size, embedding_lower)
+
             embeddings_for_param = sorted(
                 df[df["Parameter"] == param_name]["Embedding"].unique(),
-                key=lambda x: PLM_SIZES.get(
-                    x.lower(), float("inf")
-                ),  # Sort by model size
+                key=get_sort_key,
             )
             if not embeddings_for_param:
                 continue
@@ -222,7 +307,14 @@ def create_word_metric_tables(
                 if embed_idx == 0:
                     pass
 
-                row_cells[1].text = str(embed_name)
+                # Use display name for embedding
+                embed_display_name = EMBEDDING_DISPLAY_NAMES.get(
+                    embed_name.lower(), embed_name
+                )
+                p_embed = row_cells[1].paragraphs[0]
+                p_embed.clear()
+                p_embed.add_run(str(embed_display_name))
+                p_embed.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
                 for cell_in_row in row_cells:
                     _set_cell_border(
@@ -260,19 +352,36 @@ def create_word_metric_tables(
                     best_score = styling_refs.get(ref_key, {}).get("best")
                     second_best_score = styling_refs.get(ref_key, {}).get("second_best")
 
-                    is_best = (
-                        numeric_val is not None
-                        and best_score is not None
-                        and numeric_val == best_score
-                    )
-                    is_second_best = False
-                    if (
-                        not is_best
-                        and numeric_val is not None
-                        and second_best_score is not None
-                        and numeric_val == second_best_score
-                    ):
-                        is_second_best = True
+                    # For Spearman, compare absolute values
+                    if metric_name == "Spearman":
+                        is_best = (
+                            numeric_val is not None
+                            and best_score is not None
+                            and abs(numeric_val) == abs(best_score)
+                        )
+                        is_second_best = False
+                        if (
+                            not is_best
+                            and numeric_val is not None
+                            and second_best_score is not None
+                            and abs(numeric_val) == abs(second_best_score)
+                        ):
+                            is_second_best = True
+                    else:
+                        # For other metrics, use direct comparison
+                        is_best = (
+                            numeric_val is not None
+                            and best_score is not None
+                            and numeric_val == best_score
+                        )
+                        is_second_best = False
+                        if (
+                            not is_best
+                            and numeric_val is not None
+                            and second_best_score is not None
+                            and numeric_val == second_best_score
+                        ):
+                            is_second_best = True
 
                     table_col_idx = model_col_idx + 2
                     p = row_cells[table_col_idx].paragraphs[0]
@@ -286,7 +395,9 @@ def create_word_metric_tables(
                 )
                 p_merged = merged_cell.paragraphs[0]
                 p_merged.clear()
-                run_merged = p_merged.add_run(str(param_name))
+                # Use display name for parameter
+                param_display_name = PARAMETER_DISPLAY_NAMES.get(param_name, param_name)
+                run_merged = p_merged.add_run(str(param_display_name))
                 run_merged.italic = True
 
                 p_merged.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -298,7 +409,9 @@ def create_word_metric_tables(
                 cell_to_format = table.cell(param_block_start_row_abs_idx, 0)
                 p_single = cell_to_format.paragraphs[0]
                 p_single.clear()
-                run_single = p_single.add_run(str(param_name))
+                # Use display name for parameter
+                param_display_name = PARAMETER_DISPLAY_NAMES.get(param_name, param_name)
+                run_single = p_single.add_run(str(param_display_name))
                 run_single.italic = True
 
                 p_single.alignment = WD_ALIGN_PARAGRAPH.CENTER
