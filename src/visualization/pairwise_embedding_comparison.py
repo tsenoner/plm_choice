@@ -342,7 +342,11 @@ class EmbeddingComparisonVisualizer:
                             transform=ax.transAxes,
                         )
                         ax.axis("off")
+                    elif i < j:
+                        # Upper triangle: turn off (show only lower triangle)
+                        ax.axis("off")
                     else:
+                        # Lower triangle: show hexbin plots
                         key = f"{col1}_vs_{col2}"
                         if key in hexbin_data:
                             self._plot_hexbin_pair(ax, hexbin_data[key], vmax)
