@@ -80,23 +80,40 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
     "random_1024": "Random",
 }
 
+# Color map for embedding families (consistent with create_performance_summary_plots.py)
+EMBEDDING_FAMILY_COLOR_MAP: Dict[str, str] = {
+    "ProtT5": "#ff1493",
+    "ESM-1": "#4daf4a",
+    "ESM-2": "#ff7f00",
+    "ESM-C": "#1f77b4",
+    "ESM-3": "#984ea3",
+    "Ankh": "#ffd700",
+    "Random": "#808080",
+}
+
+# Assign family color to each embedding
 EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    "prott5": "#ff75be",
-    "prottucker": "#ff69b4",
-    "prostt5": "#ffc1e2",
-    "clean": "#4daf4a",
-    "esm1b": "#5fd35b",
-    "esm2_8m": "#fdae61",
-    "esm2_35m": "#ff7f00",
-    "esm2_150m": "#f46d43",
-    "esm2_650m": "#d73027",
-    "esm2_3b": "#a50026",
-    "esmc_300m": "#17becf",
-    "esmc_600m": "#1f77b4",
-    "esm3_open": "#984ea3",
-    "ankh_base": "#ffd700",
-    "ankh_large": "#a88c01",
-    "random_1024": "#808080",
+    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
+    for embedding, family in EMBEDDING_FAMILY_MAP.items()
+}
+
+EMBEDDING_DISPLAY_NAMES: Dict[str, str] = {
+    "ankh_base": "Ankh Base",
+    "ankh_large": "Ankh Large",
+    "clean": "CLEAN",
+    "esm1b": "ESM1b",
+    "esm2_8m": "ESM2-8M",
+    "esm2_35m": "ESM2-35M",
+    "esm2_150m": "ESM2-150M",
+    "esm2_650m": "ESM2-650M",
+    "esm2_3b": "ESM2-3B",
+    "esm3_open": "ESM3",
+    "esmc_300m": "ESM C-300M",
+    "esmc_600m": "ESM C-600M",
+    "prostt5": "ProstT5",
+    "prott5": "ProtT5",
+    "prottucker": "ProtTucker",
+    "random_1024": "Random",
 }
 
 DEFAULT_STYLE = {
@@ -775,6 +792,7 @@ class EmbeddingComparisonVisualizer:
         show_median: bool = True,
         alpha: float = 0.8,
         save_path: Optional[Path] = None,
+        ranking_csv: Optional[Path] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Create a ridge plot using pre-computed distribution data for much faster rendering."""
         if distribution_data is None:
@@ -784,49 +802,96 @@ class EmbeddingComparisonVisualizer:
             "Creating optimized ridge plot using pre-computed distribution data..."
         )
 
-        # Extract PLM names in the same order as dist_cols
+        # Extract PLM names and optionally sort by ranking
         plm_names = [col.replace("dist_", "") for col in self.dist_cols]
+
+        # Sort by performance ranking if provided
+        if ranking_csv is not None and ranking_csv.exists():
+            logger.info(f"Loading PLM ranking from {ranking_csv}")
+            ranking_df = pl.read_csv(ranking_csv)
+            # Create mapping from embedding name to rank
+            rank_map = {
+                row["Embedding"]: row["Final_Rank"]
+                for row in ranking_df.iter_rows(named=True)
+            }
+            # Sort plm_names by rank (lower rank = better, so put at top)
+            plm_names = sorted(
+                plm_names,
+                key=lambda x: rank_map.get(x, 999),  # Unranked goes to bottom
+                reverse=False,  # Best (rank 1) is at top
+            )
+            logger.info("Sorted PLMs by performance ranking (best at top)")
+        else:
+            logger.info("No ranking CSV provided, using default order")
 
         # Set style for ridge plot
         sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
 
-        # Calculate median values for each PLM if needed
-        median_data = {}
+        # Extract or estimate percentile values from pre-computed distribution data
+        percentile_data = {}
         if show_median:
-            logger.info("Computing medians from original data...")
-            for col in tqdm(self.dist_cols, desc="Computing medians"):
-                col_series = self.df.select(col).drop_nulls().get_column(col)
-                if len(col_series) > 0:
-                    # Get raw values and remove any remaining NaNs
-                    raw_values = col_series.to_numpy()
-                    raw_values = raw_values[~np.isnan(raw_values)]
+            logger.info(
+                "Extracting/estimating percentiles from precomputed distribution data..."
+            )
+            for col in self.dist_cols:
+                plm_name = col.replace("dist_", "")
+                if col in distribution_data["distributions"]:
+                    dist_data = distribution_data["distributions"][col]
 
-                    if len(raw_values) > 0:
-                        # Normalize manually with proper NaN handling
-                        min_val = np.min(raw_values)
-                        max_val = np.max(raw_values)
+                    # First try to get precomputed median
+                    median_val = dist_data.get("median")
 
-                        if max_val > min_val:  # Avoid division by zero
-                            normalized_values = (raw_values - min_val) / (
-                                max_val - min_val
-                            )
-                            median_val = np.median(normalized_values)
+                    # Estimate percentiles from KDE
+                    x_range = np.array(dist_data["x_range"])
+                    density = np.array(dist_data["density"])
 
-                            # Only store if not NaN
-                            if not np.isnan(median_val):
-                                median_data[col.replace("dist_", "")] = median_val
+                    if len(x_range) > 1 and len(density) > 1:
+                        # Normalize density to integrate to 1
+                        dx = x_range[1] - x_range[0]
+                        density_normalized = density / (np.sum(density) * dx)
+
+                        # Compute cumulative distribution
+                        cumulative = np.cumsum(density_normalized) * dx
+
+                        # Estimate percentiles
+                        percentiles = {}
+                        for p_name, p_val in [
+                            ("q25", 0.25),
+                            ("median", 0.5),
+                            ("q75", 0.75),
+                        ]:
+                            # Use precomputed median if available
+                            if (
+                                p_name == "median"
+                                and median_val is not None
+                                and not np.isnan(median_val)
+                            ):
+                                percentiles[p_name] = median_val
                             else:
-                                logger.warning(
-                                    f"Median is NaN for {col} after normalization, skipping median line"
-                                )
+                                p_idx = np.searchsorted(cumulative, p_val)
+                                if p_idx < len(x_range):
+                                    percentiles[p_name] = float(x_range[p_idx])
+                                else:
+                                    percentiles[p_name] = None
+
+                        if all(v is not None for v in percentiles.values()):
+                            percentile_data[plm_name] = percentiles
+                            logger.debug(
+                                f"Estimated percentiles for {col}: "
+                                f"Q25={percentiles['q25']:.4f}, "
+                                f"Median={percentiles['median']:.4f}, "
+                                f"Q75={percentiles['q75']:.4f}"
+                            )
                         else:
-                            # All values are the same, median should be 0.5 in normalized space
-                            median_data[col.replace("dist_", "")] = 0.5
-                            logger.info(
-                                f"All values identical for {col}, setting median to 0.5"
+                            logger.debug(
+                                f"Could not estimate all percentiles for {col}"
                             )
                     else:
-                        logger.warning(f"No valid values for {col} after removing NaNs")
+                        logger.warning(
+                            f"Insufficient data to estimate percentiles for {col}"
+                        )
+                else:
+                    logger.warning(f"No distribution data found for {col}")
 
         # Set up the figure - use a single large figure and manually position subplots
         fig = plt.figure(
@@ -861,37 +926,62 @@ class EmbeddingComparisonVisualizer:
             # Draw baseline at y=0
             ax.axhline(y=0, color="black", linewidth=2, clip_on=False)
 
-            # Add median line if requested
-            if show_median and plm_name in median_data:
-                median_val = median_data[plm_name]
-                # Only proceed if median_val is valid
-                if not np.isnan(median_val) and 0 <= median_val <= 1:
-                    # Interpolate to find the height at median
-                    median_y = np.interp(median_val, x_range, density)
-                    # Only draw if interpolated y is valid
-                    if not np.isnan(median_y) and median_y >= 0:
-                        ax.plot(
-                            [median_val, median_val],
-                            [0, median_y],
-                            color="black",
-                            linestyle="--",
-                            linewidth=2,
-                            alpha=0.7,
-                            clip_on=False,
-                            zorder=1,
-                        )
+            # Add percentile lines if requested
+            if show_median and plm_name in percentile_data:
+                percentiles = percentile_data[plm_name]
+
+                # Define line styles for each percentile
+                percentile_styles = {
+                    "q25": {
+                        "color": "0.3",
+                        "linestyle": ":",
+                        "linewidth": 3,
+                        "alpha": 0.7,
+                    },
+                    "median": {
+                        "color": "black",
+                        "linestyle": "--",
+                        "linewidth": 3,
+                        "alpha": 0.8,
+                    },
+                    "q75": {
+                        "color": "0.3",
+                        "linestyle": ":",
+                        "linewidth": 3,
+                        "alpha": 0.7,
+                    },
+                }
+
+                for p_name, p_val in percentiles.items():
+                    if p_val is not None and not np.isnan(p_val) and 0 <= p_val <= 1:
+                        # Interpolate to find the height at this percentile
+                        p_y = np.interp(p_val, x_range, density)
+                        # Only draw if interpolated y is valid
+                        if not np.isnan(p_y) and p_y >= 0:
+                            style = percentile_styles[p_name]
+                            ax.plot(
+                                [p_val, p_val],
+                                [0, p_y],
+                                color=style["color"],
+                                linestyle=style["linestyle"],
+                                linewidth=style["linewidth"],
+                                alpha=style["alpha"],
+                                clip_on=False,
+                                zorder=1,
+                            )
 
             # Add PLM label on the left
+            plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name)
             ax.text(
                 -0.02,
                 0.1,
-                plm_name,
+                plm_display_name,
                 fontweight="bold",
                 color=color,
                 ha="right",
                 va="center",
                 transform=ax.transAxes,
-                fontsize=int(22 * self.font_scale),
+                fontsize=int(26 * self.font_scale),
             )
 
             # Style the subplot
@@ -913,8 +1003,8 @@ class EmbeddingComparisonVisualizer:
                 ax.spines["bottom"].set_visible(True)
                 ax.set_xticks(np.arange(0, 1.1, 0.2))
                 ax.set_xlabel(
-                    "Normalized Distance",
-                    fontsize=int(22 * self.font_scale),
+                    "Min-Max Normalized Distances",
+                    fontsize=int(28 * self.font_scale),
                     labelpad=15,
                 )
                 ax.tick_params(
@@ -925,6 +1015,17 @@ class EmbeddingComparisonVisualizer:
                 ax.spines["bottom"].set_visible(False)
                 ax.set_xticks([])
                 ax.tick_params(axis="x", which="both", length=0, labelbottom=False)
+
+        # Add y-axis label on the left side (figure-level)
+        fig.text(
+            -0.075,  # x position - far left
+            0.5,  # y position - middle
+            "pLM Models",
+            fontsize=int(28 * self.font_scale),
+            va="center",
+            ha="left",
+            rotation=90,
+        )
 
         # Add overall title
         fig.suptitle(
@@ -937,6 +1038,28 @@ class EmbeddingComparisonVisualizer:
         if save_path:
             fig.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
             logger.info(f"Optimized ridge plot saved to {save_path}")
+
+            # Save percentile statistics to CSV
+            if percentile_data:
+                stats_path = save_path.parent / f"{save_path.stem}_statistics.csv"
+
+                # Convert nested dict to flat structure for CSV
+                rows = []
+                for plm_name, percentiles in percentile_data.items():
+                    plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name)
+                    rows.append(
+                        {
+                            "plm_name": plm_display_name,
+                            "q25": percentiles["q25"],
+                            "median": percentiles["median"],
+                            "q75": percentiles["q75"],
+                        }
+                    )
+
+                # Create DataFrame and save to CSV
+                stats_df = pl.DataFrame(rows)
+                stats_df.write_csv(stats_path)
+                logger.info(f"Ridge plot percentile statistics saved to {stats_path}")
 
         return fig, axes
 
@@ -980,6 +1103,15 @@ class EmbeddingComparisonVisualizer:
                 density = np.zeros_like(x_range)
                 peak_x = peak_y = 0.0
 
+            # Compute median for normalized data
+            if normalize and len(data_clean) > 0:
+                median_val = float(np.median(data_clean))
+            elif not normalize and len(data_clean) > 0:
+                # For non-normalized, we still compute it but it won't be used in ridge plots
+                median_val = float(np.median(data_clean))
+            else:
+                median_val = None
+
             distribution_data["distributions"][col] = {
                 "x_range": x_range.tolist(),
                 "density": density.tolist(),
@@ -987,6 +1119,7 @@ class EmbeddingComparisonVisualizer:
                 "peak_y": peak_y,
                 "min": float(data_clean.min()) if len(data_clean) > 0 else 0.0,
                 "max": float(data_clean.max()) if len(data_clean) > 0 else 0.0,
+                "median": median_val,
             }
 
         if save_path:
@@ -1925,6 +2058,12 @@ def main():
         default=["all"],
         help="Specific visualizations to generate.",
     )
+    parser.add_argument(
+        "--ranking_csv",
+        type=Path,
+        default=None,
+        help="Path to PLM ranking CSV to sort ridge plot by performance (e.g., plm_ranking_by_spearman.csv).",
+    )
 
     args = parser.parse_args()
 
@@ -2040,7 +2179,13 @@ def main():
                         visualizer._save_json_data(
                             data, cache_path, f"{viz_type.title()} data"
                         )
-                    plot_func(data, save_path=output_path)
+                    # Special handling for ridge plot to pass ranking_csv
+                    if viz_type == "distribution_normalized_ridge":
+                        plot_func(
+                            data, save_path=output_path, ranking_csv=args.ranking_csv
+                        )
+                    else:
+                        plot_func(data, save_path=output_path)
                 else:
                     plot_func(save_path=output_path)
 
