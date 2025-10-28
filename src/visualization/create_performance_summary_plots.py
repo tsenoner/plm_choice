@@ -7,16 +7,12 @@ import argparse
 import logging
 import matplotlib.lines as mlines
 from typing import Dict, List, Optional
+import numpy as np
+from scipy import stats
 
 # --- Logging Configuration ---
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Default level will be set in main() based on verbose flag
 log = logging.getLogger(__name__)
-
-# Suppress matplotlib DEBUG messages
-matplotlib_general_logger = logging.getLogger("matplotlib")
-matplotlib_general_logger.setLevel(logging.INFO)
 
 # --- Plot Configuration ---
 # Font sizes and visual settings - easily adjustable
@@ -55,7 +51,6 @@ PLM_SIZES: Dict[str, int] = {
     "ankh_base": 450_000_000,
     "ankh_large": 1_150_000_000,
     "random_1024": 0,
-    # Add other embeddings here
 }
 
 # Mapping from embedding name (lowercase stem) to family
@@ -76,7 +71,6 @@ EMBEDDING_FAMILY_MAP: Dict[str, str] = {
     "ankh_base": "Ankh",
     "ankh_large": "Ankh",
     "random_1024": "Random",
-    # Add other embeddings here
 }
 
 # Color map for embedding families
@@ -102,11 +96,7 @@ MODEL_MARKER_MAP: Dict[str, str] = {
     "linear": "s",  # Square
     "linear_distance": "^",  # Triangle up
     "euclidean": "X",  # X
-    # Add other model types here
 }
-
-# Families for which connecting lines should be drawn in the plot
-FAMILIES_TO_CONNECT: List[str] = ["ProtT5", "ESM-2", "ESM-C", "ESM-3", "Ankh", "ESM-1"]
 
 # Titles for the plot facets
 PARAMETER_TITLES: Dict[str, str] = {
@@ -118,7 +108,14 @@ PARAMETER_TITLES: Dict[str, str] = {
 
 # --- Data Parsing ---
 def parse_metrics_file(filepath: Path) -> Dict[str, float]:
-    """Parses a metrics file to extract key performance metrics."""
+    """Parses a metrics file to extract key performance metrics.
+
+    Args:
+        filepath: Path to the metrics text file
+
+    Returns:
+        Dictionary mapping metric names to their values (NaN if not found)
+    """
     # Regex to match floats/scientific notation or 'nan'
     float_pattern = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?|nan)"
     # Define the metrics we want to extract and their prefixes in the file
@@ -146,8 +143,7 @@ def parse_metrics_file(filepath: Path) -> Dict[str, float]:
                             )
                             break  # Move to next line once metric is found
 
-        # Check if any essential metrics are missing (optional, depending on requirements)
-        # For now, we allow missing metrics, they will be NaN in the DataFrame
+        # Warn if any metrics are missing
         missing = [k for k, v in metrics.items() if v is None]
         if missing:
             log.warning(f"Metrics not found in {filepath}: {', '.join(missing)}")
@@ -164,7 +160,14 @@ def parse_metrics_file(filepath: Path) -> Dict[str, float]:
 
 
 def load_results_data(base_dir: Path) -> pd.DataFrame:
-    """Parses metrics files from model directories and returns results as a DataFrame."""
+    """Parses metrics files from model directories and returns results as a DataFrame.
+
+    Args:
+        base_dir: Base directory containing model evaluation results
+
+    Returns:
+        DataFrame with parsed metrics and metadata for each model/embedding combination
+    """
     results = []
     log.info(f"Searching recursively for '*_metrics.txt' files under: {base_dir}")
 
@@ -225,8 +228,7 @@ def load_results_data(base_dir: Path) -> pd.DataFrame:
 
     results_df = pd.DataFrame(results)
 
-    # This part was causing the UnboundLocalError when no files were parsed.
-    # We get the keys from the first valid parsed metric file.
+    # Convert metric columns to numeric types
     if results:
         numeric_cols = metrics.keys()
         for col in numeric_cols:
@@ -245,7 +247,14 @@ def load_results_data(base_dir: Path) -> pd.DataFrame:
 def _add_error_bars(
     ax: plt.Axes, data: pd.DataFrame, y_metric: str, se_metric: Optional[str]
 ):
-    """Adds error bars for a given metric to the plot axes."""
+    """Adds error bars for a given metric to the plot axes.
+
+    Args:
+        ax: Matplotlib axes to add error bars to
+        data: DataFrame containing the data
+        y_metric: Name of the metric column for y-values
+        se_metric: Name of the standard error column (optional)
+    """
     if not se_metric or se_metric not in data.columns:
         return  # No SE column provided or found
 
@@ -267,7 +276,13 @@ def _add_error_bars(
 
 
 def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
-    """Adds vertical connecting lines between model types for each embedding."""
+    """Adds vertical connecting lines between model types for each embedding.
+
+    Args:
+        ax: Matplotlib axes to add lines to
+        data: DataFrame containing the data
+        y_metric: Name of the metric column for y-values
+    """
     # Group by embedding to draw vertical lines
     for embedding, group in data.groupby("Embedding"):
         if len(group) > 1:
@@ -294,8 +309,130 @@ def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
             )
 
 
+def _add_trendlines(
+    ax: plt.Axes,
+    data: pd.DataFrame,
+    y_metric: str,
+    category_order: List[str],
+    parameter: str,
+):
+    """Adds straight trendlines for each model type based on PLM size vs metric.
+
+    Args:
+        ax: The matplotlib axes to plot on
+        data: DataFrame containing the data for this facet
+        y_metric: The metric column name to use for y-axis
+        category_order: The ordered list of embedding names for x-axis positioning
+        parameter: The parameter name (e.g., 'fident', 'alntmscore', 'hfsp')
+
+    Returns:
+        List of dicts containing trend statistics for each model type
+    """
+    # Define line styles for different model types
+    model_type_linestyles = {
+        "fnn": "--",  # Dashed
+        "linear": "-",  # Solid
+        "linear_distance": ":",  # Dotted
+        "euclidean": "-.",  # Dash-dot
+    }
+
+    trend_stats = []  # Collect statistics for CSV export
+
+    # Group by model type and fit trendlines
+    for model_type, group in data.groupby("Model Type"):
+        # Filter out rows with NaN values in PLM Size or y_metric
+        valid_group = group.dropna(subset=["PLM Size", y_metric])
+
+        # Exclude esm2_3b from FNN trendline
+        if model_type == "fnn":
+            valid_group = valid_group[valid_group["Embedding Key"] != "esm2_3b"]
+            log.debug(f"Excluding esm2_3b from {model_type} trendline")
+
+        if len(valid_group) < 2:
+            log.debug(f"Skipping trendline for {model_type}: insufficient data points")
+            continue
+
+        # Get numeric x (PLM sizes) and y (metric) values
+        x_numeric = valid_group["PLM Size"].values
+        y_values = valid_group[y_metric].values
+
+        # Skip if we have zero or negative PLM sizes (like random_1024)
+        if np.any(x_numeric <= 0):
+            log.debug(
+                f"Skipping trendline for {model_type}: contains zero or negative PLM sizes"
+            )
+            continue
+
+        # Fit linear regression
+        try:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                x_numeric, y_values
+            )
+
+            # Calculate y values at the min and max PLM sizes
+            x_min = x_numeric.min()
+            x_max = x_numeric.max()
+            y_min = slope * x_min + intercept
+            y_max = slope * x_max + intercept
+
+            # Map these to categorical positions
+            # Find positions of min and max PLM sizes in the category order
+            size_to_pos = {}
+            for i, emb_name in enumerate(category_order):
+                emb_key = emb_name.lower()
+                if emb_key in PLM_SIZES:
+                    size_to_pos[PLM_SIZES[emb_key]] = i
+
+            # Get the positions for min and max sizes
+            if x_min in size_to_pos and x_max in size_to_pos:
+                pos_min = size_to_pos[x_min]
+                pos_max = size_to_pos[x_max]
+
+                # Draw straight line from leftmost to rightmost point
+                linestyle = model_type_linestyles.get(model_type, "-")
+                ax.plot(
+                    [pos_min, pos_max],
+                    [y_min, y_max],
+                    linestyle=linestyle,
+                    color="black",
+                    linewidth=2.5,
+                    alpha=0.7,
+                    zorder=3,
+                )
+
+                # Store statistics for CSV export
+                # Scale slope to "per 1B" with 2 significant figures
+                slope_per_1b = slope * 1e9
+                trend_stats.append(
+                    {
+                        "parameter": parameter,
+                        "model_type": model_type,
+                        "slope_per_1b": slope_per_1b,
+                        "r2": r_value**2,
+                        "p_value": p_value,
+                    }
+                )
+
+                log.debug(
+                    f"Added trendline for {model_type}: slope={slope_per_1b:.2g} per 1B, R²={r_value**2:.3f}, p={p_value:.3e}"
+                )
+
+        except Exception as e:
+            log.warning(f"Failed to fit trendline for {model_type}: {e}")
+
+    return trend_stats
+
+
 def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
-    """Creates and returns the embedding family legend (colors)."""
+    """Creates and returns the embedding family legend (colors).
+
+    Args:
+        fig: Matplotlib figure to add legend to
+        df: DataFrame containing the data
+
+    Returns:
+        The created legend object
+    """
     handles = []
     labels = []
 
@@ -328,7 +465,7 @@ def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.4, 0.1),
+        bbox_to_anchor=(0.35, 0.1),
         frameon=False,
         title="pLM Family",
         title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
@@ -338,7 +475,15 @@ def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
 
 
 def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.legend:
-    """Creates and returns the model type legend (markers)."""
+    """Creates and returns the model type legend (markers).
+
+    Args:
+        fig: Matplotlib figure to add legend to
+        model_types: List of model type names
+
+    Returns:
+        The created legend object
+    """
     handles = []
     labels = []
     # Sort model types alphabetically for the legend
@@ -370,7 +515,15 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
 
 
 def _human_readable_formatter(x, pos=None):
-    """Formatter for large numbers with SI suffixes (K, M, B, T, etc)."""
+    """Formatter for large numbers with SI suffixes (K, M, B, T, etc).
+
+    Args:
+        x: Number to format
+        pos: Position (unused, for matplotlib compatibility)
+
+    Returns:
+        Formatted string with appropriate SI suffix
+    """
     abs_x = abs(x)
     units = ["", "K", "M", "B", "T", "P", "E", "Z", "Y"]
     magnitude = 0
@@ -389,8 +542,21 @@ def _human_readable_formatter(x, pos=None):
 def generate_metric_plot(
     df: pd.DataFrame, y_metric: str, se_metric: Optional[str], output_file: Path
 ):
-    """Generates a summary faceted scatter plot for a specific metric."""
+    """Generates a summary faceted scatter plot for a specific metric.
+
+    Args:
+        df: DataFrame containing the data
+        y_metric: Name of the metric column to plot
+        se_metric: Name of the standard error column (optional)
+        output_file: Path to save the output plot
+
+    Returns:
+        List of dicts containing trend statistics for all facets
+    """
     sns.set_theme(style="whitegrid", font_scale=PLOT_CONFIG["font_scale"])
+
+    # Collect trend statistics across all facets
+    all_trend_stats = []
 
     # --- Reorder and Prepare DataFrame ---
     param_order = ["fident", "alntmscore", "hfsp"]
@@ -428,6 +594,8 @@ def generate_metric_plot(
         param_df = df_sorted[df_sorted["Parameter"] == param]
         _add_error_bars(ax, param_df, y_metric, se_metric)
         _add_connecting_lines(ax, param_df, y_metric)
+        trend_stats = _add_trendlines(ax, param_df, y_metric, category_order, param)
+        all_trend_stats.extend(trend_stats)
 
         ax.set_xlabel("pLM Parameter Count", fontsize=PLOT_CONFIG["label_fontsize"])
         ax.set_ylabel(y_metric, fontsize=PLOT_CONFIG["label_fontsize"])
@@ -490,10 +658,12 @@ def generate_metric_plot(
     finally:
         plt.close(g.figure)
 
+    return all_trend_stats
+
 
 # --- Main Execution ---
 def main():
-    """Main function to parse arguments, load data, and generate the plot."""
+    """Main function to parse arguments, load data, and generate plots."""
     parser = argparse.ArgumentParser(
         description="Parse model evaluation results and generate a summary plot.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -529,7 +699,26 @@ def main():
         default=None,
         help="Space-separated list of pLM names (embedding names) to exclude from the plots.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose debug output.",
+    )
     args = parser.parse_args()
+
+    # Configure logging based on verbose flag
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+
+    # Suppress matplotlib DEBUG messages
+    matplotlib_general_logger = logging.getLogger("matplotlib")
+    matplotlib_general_logger.setLevel(logging.INFO)
 
     # --- Load Data ---
     results_df = load_results_data(args.results_dir)
@@ -538,11 +727,10 @@ def main():
         return
 
     # --- Save Full Dataframe ---
-    output_dir = args.output  # Get output directory from args
+    output_dir = args.output
     csv_filename = "parsed_metrics_all.csv"
     csv_output_path = output_dir / csv_filename
     try:
-        # Ensure directory exists (redundant if plot generation runs, but safe)
         output_dir.mkdir(parents=True, exist_ok=True)
         results_df.to_csv(csv_output_path, index=False)
         log.info(f"Full parsed data saved to {csv_output_path}")
@@ -609,6 +797,8 @@ def main():
     ]
 
     # --- Generate Plots ---
+    all_trendline_stats = []  # Collect all trendline stats across all plots
+
     for plot_config in plots_to_generate:
         y_metric = plot_config["y"]
         se_metric = plot_config["se"]
@@ -624,12 +814,49 @@ def main():
             )
             se_metric = None  # Don't attempt to plot missing SE
 
-        # Construct output filename within the specified directory
-        output_filename = f"{suffix}.png"  # Filename based only on suffix
-        output_path = output_dir / output_filename  # Join with output directory
+        # Construct output path
+        output_filename = f"{suffix}.png"
+        output_path = output_dir / output_filename
         log.info(f"--- Generating plot for {y_metric} -> {output_path} ---")
 
-        generate_metric_plot(results_df, y_metric, se_metric, output_path)
+        trend_stats = generate_metric_plot(results_df, y_metric, se_metric, output_path)
+
+        # Add metric name to each stat and collect
+        for stat in trend_stats:
+            stat["metric"] = y_metric
+            all_trendline_stats.append(stat)
+
+    # --- Save Trendline Statistics to CSV ---
+    if all_trendline_stats:
+        trendline_csv_path = output_dir / "trendline_statistics.csv"
+        trendline_df = pd.DataFrame(all_trendline_stats)
+
+        # Reorder columns for better readability
+        column_order = [
+            "metric",
+            "parameter",
+            "model_type",
+            "slope_per_1b",
+            "r2",
+            "p_value",
+        ]
+        trendline_df = trendline_df[column_order]
+
+        # Format slope_per_1b to 2 significant figures
+        trendline_df["slope_per_1b"] = trendline_df["slope_per_1b"].apply(
+            lambda x: f"{x:.2g}"
+        )
+
+        try:
+            trendline_df.to_csv(trendline_csv_path, index=False)
+            log.info(f"Trendline statistics saved to {trendline_csv_path}")
+        except Exception as e:
+            log.error(
+                f"Failed to save trendline statistics to {trendline_csv_path}: {e}",
+                exc_info=True,
+            )
+    else:
+        log.warning("No trendline statistics collected")
 
     log.info("--- Plot generation complete ---")
 
