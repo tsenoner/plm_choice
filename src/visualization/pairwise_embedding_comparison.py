@@ -21,6 +21,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
@@ -98,21 +100,21 @@ EMBEDDING_COLOR_MAP: Dict[str, str] = {
 }
 
 EMBEDDING_DISPLAY_NAMES: Dict[str, str] = {
-    "ankh_base": "Ankh Base",
-    "ankh_large": "Ankh Large",
+    "ankh_base": "Ankh\nBase",
+    "ankh_large": "Ankh\nLarge",
     "clean": "CLEAN",
-    "esm1b": "ESM1b",
-    "esm2_8m": "ESM2-8M",
-    "esm2_35m": "ESM2-35M",
-    "esm2_150m": "ESM2-150M",
-    "esm2_650m": "ESM2-650M",
-    "esm2_3b": "ESM2-3B",
+    "esm1b": "ESM\n1b",
+    "esm2_8m": "ESM2\n8M",
+    "esm2_35m": "ESM2\n35M",
+    "esm2_150m": "ESM2\n150M",
+    "esm2_650m": "ESM2\n650M",
+    "esm2_3b": "ESM2\n3B",
     "esm3_open": "ESM3",
-    "esmc_300m": "ESM C-300M",
-    "esmc_600m": "ESM C-600M",
-    "prostt5": "ProstT5",
-    "prott5": "ProtT5",
-    "prottucker": "ProtTucker",
+    "esmc_300m": "ESM C\n300M",
+    "esmc_600m": "ESM C\n600M",
+    "prostt5": "Prost\nT5",
+    "prott5": "Prot\nT5",
+    "prottucker": "Prot\nTucker",
     "random_1024": "Random",
 }
 
@@ -191,11 +193,13 @@ class EmbeddingComparisonVisualizer:
             if col.startswith("dist_") and not col.startswith("pca_")
         ]
 
-        # Filter out random embeddings
+        # Filter out random embeddings and temporarily exclude prostt5
         dist_cols = [
             col
             for col in all_dist_cols
             if not col.replace("dist_", "").lower().startswith("random")
+            and not col.replace("dist_", "").lower()
+            == "prostt5"  # TEMPORARY: Remove this line to re-include prostt5
         ]
 
         # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
@@ -244,6 +248,23 @@ class EmbeddingComparisonVisualizer:
         """Get color for a distance column based on embedding name."""
         embedding_name = dist_col.replace("dist_", "").lower()
         return EMBEDDING_COLOR_MAP.get(embedding_name, "#808080")
+
+    def _get_embedding_family(self, dist_col: str) -> str:
+        """Get family name for a distance column based on embedding name."""
+        embedding_name = dist_col.replace("dist_", "").lower()
+        return EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown")
+
+    def _get_family_boundaries(self, dist_cols: List[str]) -> List[int]:
+        """Get indices where family changes occur."""
+        boundaries = [0]
+        prev_family = None
+        for i, col in enumerate(dist_cols):
+            family = self._get_embedding_family(col)
+            if prev_family is not None and family != prev_family:
+                boundaries.append(i)
+            prev_family = family
+        boundaries.append(len(dist_cols))
+        return boundaries
 
     def _save_json_data(self, data: Dict, save_path: Path, description: str):
         """Helper method to save JSON data with consistent logging."""
@@ -342,11 +363,11 @@ class EmbeddingComparisonVisualizer:
                     ax = axes[i, j]
 
                     if i == j:
-                        # Diagonal: show embedding name
-                        embedding_name = col1.replace("dist_", "")
-                        embedding_name = embedding_name.replace("_", "\n")
-                        if embedding_name == "prottucker":
-                            embedding_name = "prot-\ntucker"
+                        # Diagonal: show embedding name with proper display name
+                        embedding_key = col1.replace("dist_", "")
+                        embedding_name = EMBEDDING_DISPLAY_NAMES.get(
+                            embedding_key, embedding_key
+                        )
                         ax.text(
                             0.5,
                             0.5,
@@ -378,17 +399,25 @@ class EmbeddingComparisonVisualizer:
                             )
                             ax.axis("off")
 
-                    # Add labels for edge plots
+                    # Add labels for edge plots with proper display names
                     if i == n - 1:
+                        embedding_key = col2.replace("dist_", "")
+                        label = EMBEDDING_DISPLAY_NAMES.get(
+                            embedding_key, embedding_key
+                        )
                         ax.set_xlabel(
-                            col2.replace("dist_", ""),
-                            rotation=45,
-                            ha="right",
+                            label,
+                            rotation=0,
+                            ha="center",
                             fontsize=16 * self.font_scale,
                         )
                     if j == 0:
+                        embedding_key = col1.replace("dist_", "")
+                        label = EMBEDDING_DISPLAY_NAMES.get(
+                            embedding_key, embedding_key
+                        )
                         ax.set_ylabel(
-                            col1.replace("dist_", ""),
+                            label,
                             rotation=0,
                             ha="right",
                             fontsize=16 * self.font_scale,
@@ -802,10 +831,11 @@ class EmbeddingComparisonVisualizer:
             "Creating optimized ridge plot using pre-computed distribution data..."
         )
 
-        # Extract PLM names and optionally sort by ranking
+        # Extract PLM names - default order is by family and parameter size
+        # (from _identify_distance_columns sorting)
         plm_names = [col.replace("dist_", "") for col in self.dist_cols]
 
-        # Sort by performance ranking if provided
+        # Optionally sort by performance ranking if provided
         if ranking_csv is not None and ranking_csv.exists():
             logger.info(f"Loading PLM ranking from {ranking_csv}")
             ranking_df = pl.read_csv(ranking_csv)
@@ -822,7 +852,9 @@ class EmbeddingComparisonVisualizer:
             )
             logger.info("Sorted PLMs by performance ranking (best at top)")
         else:
-            logger.info("No ranking CSV provided, using default order")
+            logger.info(
+                "No ranking CSV provided, using default order (sorted by PLM family, then parameter size)"
+            )
 
         # Set style for ridge plot
         sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
@@ -895,7 +927,7 @@ class EmbeddingComparisonVisualizer:
 
         # Set up the figure - use a single large figure and manually position subplots
         fig = plt.figure(
-            figsize=(15 * self.font_scale, len(plm_names) * self.font_scale)
+            figsize=(20 * self.font_scale, len(plm_names) * self.font_scale)
         )
 
         # Create subplots with controlled spacing
@@ -970,8 +1002,10 @@ class EmbeddingComparisonVisualizer:
                                 zorder=1,
                             )
 
-            # Add PLM label on the left
-            plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name)
+            # Add PLM label on the left (remove \n for ridge plot)
+            plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name).replace(
+                "\n", " "
+            )
             ax.text(
                 -0.02,
                 0.1,
@@ -1847,23 +1881,20 @@ class EmbeddingComparisonVisualizer:
                         spine.set_visible(False)
 
                     if i == j:
-                        # Diagonal: show embedding name
-                        embedding_name = col1.replace("dist_", "").replace("_", "\n")
-                        if embedding_name == "prottucker":
-                            embedding_name = "prot-\ntucker"
-                        elif embedding_name == "prostt5":
-                            embedding_name = "prost-\nT5"
-                        elif embedding_name == "prott5":
-                            embedding_name = "prot-\nT5"
+                        # Diagonal: show embedding name with proper display name
+                        embedding_key = col1.replace("dist_", "")
+                        embedding_name = EMBEDDING_DISPLAY_NAMES.get(
+                            embedding_key, embedding_key
+                        )
                         ax.text(
                             0.5,
                             0.5,
                             embedding_name,
                             ha="center",
                             va="center",
-                            fontsize=24 * self.font_scale,
+                            fontsize=28 * self.font_scale,
                             weight="bold",
-                            color=self._get_embedding_color(col1),
+                            color="black",  # All diagonal text in black
                             transform=ax.transAxes,
                         )
                     elif i < j:
@@ -1884,14 +1915,15 @@ class EmbeddingComparisonVisualizer:
                                 wasserstein_distances
                             )
                             text_color = "white" if normalized_val > 0.5 else "black"
+                            # Display value multiplied by 100 (no "0." prefix, no decimal)
                             ax.text(
                                 0.5,
                                 0.5,
-                                f"{wasserstein_val:.2f}",
+                                f"{wasserstein_val * 100:.0f}",
                                 ha="center",
                                 va="center",
                                 color=text_color,
-                                fontsize=24 * self.font_scale,
+                                fontsize=32 * self.font_scale,
                                 weight="bold",
                                 transform=ax.transAxes,
                             )
@@ -1904,7 +1936,7 @@ class EmbeddingComparisonVisualizer:
                                 ha="center",
                                 va="center",
                                 color="black",
-                                fontsize=24 * self.font_scale,
+                                fontsize=32 * self.font_scale,
                                 transform=ax.transAxes,
                             )
                     else:
@@ -1921,14 +1953,15 @@ class EmbeddingComparisonVisualizer:
                                 extent=[0, 1, 0, 1],
                             )
                             text_color = "white" if correlation_val > 0.5 else "black"
+                            # Display value multiplied by 100 (no "0." prefix, no decimal)
                             ax.text(
                                 0.5,
                                 0.5,
-                                f"{correlation_val:.2f}",
+                                f"{correlation_val * 100:.0f}",
                                 ha="center",
                                 va="center",
                                 color=text_color,
-                                fontsize=24 * self.font_scale,
+                                fontsize=32 * self.font_scale,
                                 weight="bold",
                                 transform=ax.transAxes,
                             )
@@ -1941,37 +1974,41 @@ class EmbeddingComparisonVisualizer:
                                 ha="center",
                                 va="center",
                                 color="black",
-                                fontsize=24 * self.font_scale,
+                                fontsize=32 * self.font_scale,
                                 transform=ax.transAxes,
                             )
 
                     pbar.update(1)
 
-        # Add row and column labels outside the grid
+        # Add row and column labels outside the grid with proper display names
         for i, col in enumerate(dist_cols):
-            label = col.replace("dist_", "")
+            embedding_key = col.replace("dist_", "")
+            label = EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key)
             # Y-axis labels (left side)
             axes[i, 0].set_ylabel(
                 label,
                 rotation=0,
                 ha="right",
                 va="center",
-                fontsize=26 * self.font_scale,
+                fontsize=30 * self.font_scale,
                 labelpad=10,
             )
             # X-axis labels (bottom)
             axes[-1, i].set_xlabel(
                 label,
-                rotation=45,
-                ha="right",
+                rotation=0,
+                ha="center",
                 va="top",
-                fontsize=26 * self.font_scale,
+                fontsize=30 * self.font_scale,
                 labelpad=5,
             )
 
+        # Add family grouping
+        self._add_family_grouping_combined(fig, axes, dist_cols)
+
         # Add title
         fig.suptitle(
-            "Combined Pairwise Comparison\n(Upper: Wasserstein Distance, Diagonal: Models, Lower: Correlations)",
+            "Combined Pairwise Comparison (values ×100)\n(Upper: Wasserstein Distance, Diagonal: Models, Lower: Spearman Correlation)",
             fontsize=32 * self.font_scale,
             weight="bold",
             y=0.98,
@@ -1984,24 +2021,105 @@ class EmbeddingComparisonVisualizer:
         cbar_wass_ax = fig.add_subplot(gs_right[0])
         im_wass = plt.cm.ScalarMappable(
             cmap="Blues",
-            norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances)),
+            norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances) * 100),
         )
         cbar_wass = plt.colorbar(im_wass, cax=cbar_wass_ax, orientation="vertical")
-        cbar_wass.ax.tick_params(labelsize=24 * self.font_scale)
-        cbar_wass.set_label("Wasserstein Distance", fontsize=26 * self.font_scale)
+        cbar_wass.ax.tick_params(labelsize=32 * self.font_scale)
+        cbar_wass.set_label(
+            "Wasserstein Distance (×100)", fontsize=36 * self.font_scale, labelpad=30
+        )
 
         # Add colorbar for correlations (bottom half)
         cbar_corr_ax = fig.add_subplot(gs_right[1])
-        im_corr = plt.cm.ScalarMappable(cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=1))
+        im_corr = plt.cm.ScalarMappable(
+            cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=100)
+        )
         cbar_corr = plt.colorbar(im_corr, cax=cbar_corr_ax, orientation="vertical")
-        cbar_corr.ax.tick_params(labelsize=24 * self.font_scale)
-        cbar_corr.set_label("Spearman Correlation", fontsize=26 * self.font_scale)
+        cbar_corr.ax.tick_params(labelsize=32 * self.font_scale)
+        cbar_corr.set_label(
+            "Spearman Correlation (×100)", fontsize=36 * self.font_scale, labelpad=30
+        )
 
         if save_path:
             plt.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
             logger.info(f"Combined Wasserstein-correlation plot saved to {save_path}")
 
         return fig, axes
+
+    def _add_family_grouping_combined(
+        self, fig: plt.Figure, axes: np.ndarray, dist_cols: List[str]
+    ):
+        """Add thick black frames around PLM families (2+ members only) in combined plot."""
+        boundaries = self._get_family_boundaries(dist_cols)
+        n = len(dist_cols)
+
+        # Configuration
+        border_color = "black"
+        border_width = 10
+
+        # First, hide all internal borders
+        for i in range(n):
+            for j in range(n):
+                ax = axes[i, j]
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+
+        # Draw thick frames around family blocks (only families with 2+ members)
+        for idx in range(len(boundaries) - 1):
+            start = boundaries[idx]
+            end = boundaries[idx + 1]
+            family_size = end - start
+
+            # Skip families with only 1 member
+            if family_size < 2:
+                continue
+
+            # Get family color for subtle background tint
+            family = self._get_embedding_family(dist_cols[start])
+            color = EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
+            rgb = mcolors.to_rgb(color)
+            light_color = tuple(0.97 + 0.03 * c for c in rgb)  # Very subtle tint
+
+            # Add subtle background color to family block
+            for row in range(start, end):
+                for col in range(start, end):
+                    axes[row, col].set_facecolor(light_color)
+
+            # Draw frame using Rectangle patch in figure coordinates
+            # Get the bounding box of the family block
+            # Use the first and last axes to determine the extent
+            ax_first = axes[start, start]
+            ax_last = axes[end - 1, end - 1]
+
+            # Get positions in figure coordinates
+            bbox_first = ax_first.get_position()
+            bbox_last = ax_last.get_position()
+
+            # Calculate rectangle position and size in figure coordinates
+            # Left edge of leftmost axes
+            rect_x = bbox_first.x0
+            # Bottom edge of bottom axes
+            rect_y = bbox_last.y0
+            # Width spans from left of first to right of last
+            rect_width = bbox_last.x1 - bbox_first.x0
+            # Height spans from bottom of last to top of first
+            rect_height = bbox_first.y1 - bbox_last.y0
+
+            # Create rectangle patch (hollow, just the border)
+            rect = mpatches.Rectangle(
+                (rect_x, rect_y),
+                rect_width,
+                rect_height,
+                linewidth=border_width,
+                edgecolor=border_color,
+                facecolor="none",
+                transform=fig.transFigure,
+                zorder=1000,  # Draw on top of everything
+                clip_on=False,
+            )
+
+            # Add rectangle to figure
+            fig.patches.append(rect)
 
 
 def main():

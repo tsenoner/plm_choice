@@ -101,7 +101,7 @@ MODEL_MARKER_MAP: Dict[str, str] = {
 # Titles for the plot facets
 PARAMETER_TITLES: Dict[str, str] = {
     "fident": "Sequence - PIDE",
-    "alntmscore": "Structure - alignment TM-score",
+    "alntmscore": "Structure - TM-score",
     "hfsp": "Function - HFSP",
 }
 
@@ -465,7 +465,7 @@ def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.35, 0.1),
+        bbox_to_anchor=(0.4, 0.1),
         frameon=False,
         title="pLM Family",
         title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
