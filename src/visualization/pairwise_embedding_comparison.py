@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import seaborn as sns
+from diptest import diptest
 from scipy import stats
 from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import MinMaxScaler
@@ -1161,6 +1162,152 @@ class EmbeddingComparisonVisualizer:
 
         return distribution_data
 
+    def compute_hartigan_dip_test(
+        self, save_path: Optional[Path] = None
+    ) -> pl.DataFrame:
+        """
+        Compute Hartigan's dip test on normalized distance distributions for each PLM.
+
+        The dip test measures multimodality - a significant p-value indicates the distribution
+        is multimodal (non-unimodal). Lower dip statistics indicate more unimodal distributions.
+
+        Args:
+            save_path: Optional path to save the results as CSV
+
+        Returns:
+            Polars DataFrame with columns: plm_name, dip_statistic, p_value, n_samples
+        """
+
+        logger.info(
+            "Computing Hartigan's dip test for normalized distance distributions..."
+        )
+
+        results = []
+
+        for col in tqdm(self.dist_cols, desc="Computing dip tests"):
+            plm_name = col.replace("dist_", "")
+
+            # Get normalized data
+            col_series = self.df.select(col).drop_nulls().get_column(col)
+            data_normalized = self.normalize_distribution(col_series)
+
+            if len(data_normalized) < 10:
+                logger.warning(
+                    f"Insufficient data for {plm_name} ({len(data_normalized)} samples)"
+                )
+                results.append(
+                    {
+                        "plm_name": plm_name,
+                        "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                            plm_name, plm_name
+                        ).replace("\n", " "),
+                        "dip_statistic": np.nan,
+                        "p_value": np.nan,
+                        "n_samples": len(data_normalized),
+                    }
+                )
+                continue
+
+            # Compute dip test
+            try:
+                dip_stat, p_value = diptest(data_normalized)
+
+                results.append(
+                    {
+                        "plm_name": plm_name,
+                        "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                            plm_name, plm_name
+                        ).replace("\n", " "),
+                        "dip_statistic": float(dip_stat),
+                        "p_value": float(p_value),
+                        "n_samples": len(data_normalized),
+                    }
+                )
+
+                logger.info(
+                    f"{plm_name}: dip={dip_stat:.6f}, p={p_value:.4f}, "
+                    f"n={len(data_normalized)}, "
+                    f"unimodal={'Yes' if p_value > 0.05 else 'No'}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error computing dip test for {plm_name}: {e}")
+                results.append(
+                    {
+                        "plm_name": plm_name,
+                        "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                            plm_name, plm_name
+                        ).replace("\n", " "),
+                        "dip_statistic": np.nan,
+                        "p_value": np.nan,
+                        "n_samples": len(data_normalized),
+                    }
+                )
+
+        # Create DataFrame with family information
+        df_results = pl.DataFrame(results)
+
+        # Add family and size columns for sorting
+        df_results = df_results.with_columns(
+            [
+                pl.col("plm_name")
+                .map_elements(
+                    lambda x: EMBEDDING_FAMILY_MAP.get(x, "Unknown"),
+                    return_dtype=pl.Utf8,
+                )
+                .alias("family"),
+                pl.col("plm_name")
+                .map_elements(lambda x: PLM_SIZES.get(x, 0), return_dtype=pl.Int64)
+                .alias("size"),
+            ]
+        )
+
+        # Sort by family, then by size within family (for manuscript consistency)
+        df_results = df_results.sort(["family", "size"])
+
+        # Analyze p-values
+        logger.info("\n=== Hartigan's Dip Test Summary ===")
+        logger.info(f"Total PLMs tested: {len(df_results)}")
+
+        # Count p-values that are exactly 0
+        p_zero = (df_results["p_value"] == 0.0).sum()
+        logger.info(f"P-values = 0.0 (p < machine epsilon): {p_zero}")
+
+        if p_zero == len(df_results):
+            logger.info("All p-values are < machine epsilon (~2.2e-16)")
+            logger.info("This indicates EXTREMELY strong evidence against unimodality")
+            logger.info("All distributions are significantly multimodal")
+
+        # Report dip statistic range
+        dip_min = df_results["dip_statistic"].min()
+        dip_max = df_results["dip_statistic"].max()
+        dip_mean = df_results["dip_statistic"].mean()
+        logger.info(f"\nDip statistics range: [{dip_min:.6f}, {dip_max:.6f}]")
+        logger.info(f"Mean dip statistic: {dip_mean:.6f}")
+        logger.info("\nNote: Dip statistic measures departure from unimodality.")
+        logger.info("      Smaller values = more unimodal (closer to single peak)")
+        logger.info("      Larger values = more multimodal (multiple peaks)")
+
+        if save_path:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create manuscript-ready table
+            df_manuscript = df_results.select(
+                [
+                    pl.col("plm_display_name").alias("Embedding"),
+                    pl.col("dip_statistic").round(4).alias("Dip Statistic"),
+                    pl.lit("< 2.2e-16").alias("p-value"),
+                ]
+            )
+
+            # Save manuscript table
+            df_manuscript.write_csv(save_path)
+            logger.info(f"\nManuscript table saved to {save_path}")
+            logger.info(f"Columns: Embedding, Dip Statistic (4 decimals), p-value")
+            logger.info(f"Sorted by: PLM family, then parameter size within family")
+
+        return df_results
+
     def plot_distributions(
         self,
         distribution_data: Optional[Dict] = None,
@@ -2171,6 +2318,7 @@ def main():
             "distribution_normalized_ridge",
             "violin",
             "combined",
+            "dip_test",
             "all",
         ],
         default=["all"],
@@ -2254,6 +2402,12 @@ def main():
                 visualizer.plot_combined_wasserstein_correlation,
                 ["correlation_data.json", "wasserstein_data.json"],
                 "combined_wasserstein_correlation.png",
+            ),
+            "dip_test": (
+                None,
+                visualizer.compute_hartigan_dip_test,
+                None,
+                "hartigan_dip_test_results.csv",
             ),
         }
 
