@@ -24,6 +24,21 @@ New scripts for paper revision. See `docs/superpowers/specs/2026-03-19-ivan-infr
   - Needs: TMalign binary on PATH
   - Output: tmscore_exp column in parquet
 
+### Evaluation & validation infrastructure (added 2026-03-19, batch 2)
+- [ ] EC-number hierarchy distances: `src/data_preparation/ec_hierarchy_distance.py`
+  - Needs: EC annotations TSV (protein_id, ec_number)
+  - Output: ec_dist_min/max/mean columns in parquet
+- [ ] BRENDA/HFSP validation: `src/data_preparation/brenda_hfsp_validation.py`
+  - Auto-fetches enzyme annotations from UniProt REST API
+  - Default: beta-lactamases (EC 3.5.2.6), generalizable to any EC
+  - Output: JSON validation report + statistics
+- [ ] Recall-at-first-false-positive + AUROC: `src/evaluation/retrieval_metrics.py`
+  - Standalone functions, also used by classification_eval.py
+  - Tests: `tests/test_retrieval_metrics.py` (8 tests, all passing)
+- [ ] SCOP/ECOD classification evaluation: `src/evaluation/classification_eval.py`
+  - Needs: classification parquet (protein_id + fold_id/sf_id/fa_id columns)
+  - Output: summary table (parquet + CSV) with AUROC + recall per embedding per level
+
 ### Code improvements (already applied)
 - [x] Vectorized distance computation in distance_computation.py (~2-3x speedup)
 - [x] Fixed drop_nulls().len() -> null_count() in distance_computation.py
