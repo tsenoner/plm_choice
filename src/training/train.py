@@ -413,12 +413,16 @@ if __name__ == "__main__":
         required=True,
         help="Absolute path to the directory containing train/val/test files (CSV or parquet format).",
     )
+    # --- Ivan infrastructure (2026-03-19): removed choices whitelist ---
+    # Previously restricted to ["fident", "alntmscore", "hfsp"].
+    # Now accepts any param name; validation happens at runtime when the
+    # parquet is loaded (datasets.py raises if column doesn't exist).
+    # New params: go_wang_mfo, go_wang_bpo, go_wang_cco, tmscore_exp.
     parser.add_argument(
         "--param_name",
         type=str,
         required=True,
-        choices=["fident", "alntmscore", "hfsp"],
-        help="Target parameter name to train the model for.",
+        help="Target parameter name to train the model for (column in parquet).",
     )
 
     # --- Output Location ---

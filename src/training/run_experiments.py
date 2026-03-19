@@ -131,6 +131,15 @@ def main(args):
                 run_count += 1
 
                 # Base command
+                # --- Hyperparameter documentation (Ivan infrastructure 2026-03-19) ---
+                # num_workers=10: DataLoader workers; tuned for multi-core servers.
+                #   On laptop/fewer cores, reduce to cpu_count()-1.
+                # batch_size=1024: sweet spot for embedding-pair regression.
+                #   Smaller datasets may need 256-512 to avoid underfitting.
+                # learning_rate=1e-4: Adam default, works well for FNN/linear heads.
+                # max_epochs=100: upper bound; early stopping handles actual convergence.
+                # early_stopping_patience=5: stop after 5 val checks without improvement.
+                #   With val_check_interval=0.2, that's 1 full epoch of patience.
                 train_command = [
                     "uv",
                     "run",
@@ -157,7 +166,7 @@ def main(args):
                     "--early_stopping_patience",
                     "5",
                     "--val_check_interval",
-                    str(args.val_check_interval),  # Use the provided val_check_interval
+                    str(args.val_check_interval),
                 ]
 
                 # Add wandb configuration
@@ -282,12 +291,15 @@ if __name__ == "__main__":
         choices=["fnn", "linear", "euclidean", "linear_distance"],
         help="List of model types to run (e.g., fnn linear euclidean linear_distance).",
     )
+    # --- Ivan infrastructure (2026-03-19): removed choices whitelist ---
+    # Previously restricted to ["fident", "alntmscore", "hfsp"].
+    # Now accepts any param name present in the parquet files.
+    # New params: go_wang_mfo, go_wang_bpo, go_wang_cco, tmscore_exp.
     parser.add_argument(
         "--target_params",
         nargs="+",
         default=["fident", "alntmscore", "hfsp"],
-        choices=["fident", "alntmscore", "hfsp"],
-        help="List of target parameters to run.",
+        help="List of target parameters to run (must be columns in parquet files).",
     )
     parser.add_argument(
         "--wandb_project",
