@@ -24,6 +24,15 @@ Usage:
         --obo_path data/reference/go-basic.obo
 
 Created: 2026-03-19 (Ivan infrastructure for pLM Choice revision)
+
+Changes (2026-03-20):
+- Added term-pair similarity cache (_pair_cache) to WangSimilarity.
+  The same GO term pairs recur across thousands of protein pairs (e.g.
+  GO:0005515 "protein binding" annotates ~40% of SwissProt). Without
+  caching, term_similarity() recomputes set intersection + summation
+  every time. Cache uses canonical key order so sim(A,B) == sim(B,A)
+  shares one entry.  On a typical SwissProt dataset this reduces
+  term_similarity calls from O(pairs * terms^2) to O(unique_term_pairs).
 """
 
 import argparse
@@ -178,6 +187,11 @@ class WangSimilarity:
         self.go_terms = go_terms
         # Cache: go_id -> {ancestor_id: s_value}
         self._s_value_cache: Dict[str, Dict[str, float]] = {}
+        # Cache: (term_a, term_b) -> similarity.  The same GO term pairs recur
+        # across thousands of protein pairs (e.g. GO:0005515 "protein binding"
+        # appears in ~40% of SwissProt).  Caching term-pair similarity avoids
+        # redundant set intersection + summation on every protein pair.
+        self._pair_cache: Dict[Tuple[str, str], float] = {}
 
     def _compute_s_values(self, term_id: str) -> Dict[str, float]:
         """
@@ -216,7 +230,13 @@ class WangSimilarity:
         return s_values
 
     def term_similarity(self, term_a: str, term_b: str) -> float:
-        """Compute Wang similarity between two GO terms."""
+        """Compute Wang similarity between two GO terms (cached)."""
+        # Canonical key order so (a,b) and (b,a) share one cache entry
+        key = (term_a, term_b) if term_a <= term_b else (term_b, term_a)
+        cached = self._pair_cache.get(key)
+        if cached is not None:
+            return cached
+
         s_a = self._compute_s_values(term_a)
         s_b = self._compute_s_values(term_b)
 
@@ -224,13 +244,16 @@ class WangSimilarity:
         sv_b = sum(s_b.values())
 
         if sv_a + sv_b == 0:
+            self._pair_cache[key] = 0.0
             return 0.0
 
         # Sum contributions from shared ancestors
         shared_ancestors = set(s_a.keys()) & set(s_b.keys())
         numerator = sum(s_a[t] + s_b[t] for t in shared_ancestors)
 
-        return numerator / (sv_a + sv_b)
+        sim = numerator / (sv_a + sv_b)
+        self._pair_cache[key] = sim
+        return sim
 
     def protein_similarity_bma(
         self,
@@ -517,7 +540,10 @@ def main():
         else:
             logger.info(f"  {col_name}: no valid values")
 
-    logger.info(f"\nS-value cache size: {len(wang._s_value_cache)} terms")
+    logger.info(
+        f"\nCache stats: {len(wang._s_value_cache)} S-value entries, "
+        f"{len(wang._pair_cache)} term-pair similarities"
+    )
 
 
 if __name__ == "__main__":

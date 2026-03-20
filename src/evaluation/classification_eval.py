@@ -25,6 +25,14 @@ Usage:
 Created: 2026-03-19 (Ivan infrastructure for pLM Choice revision)
 """
 # --- Ivan infrastructure (2026-03-19) ---
+#
+# Changes (2026-03-20):
+# - Removed local copies of recall_at_first_fp() and auroc_at_level().
+#   These were duplicated from retrieval_metrics.py; now imported from
+#   the single canonical source to prevent implementation drift.
+# - Vectorized build_same_level_labels() using polars joins instead of
+#   a Python for-loop. Identical results, but O(n) hash join instead of
+#   O(n) dict lookups with Python overhead per row.
 
 import argparse
 import logging
@@ -36,91 +44,14 @@ import numpy as np
 import polars as pl
 from tqdm import tqdm
 
+# Reuse the canonical implementations from retrieval_metrics.py to avoid
+# duplicated code that could silently diverge during maintenance.
+from .retrieval_metrics import auroc_at_level, recall_at_first_fp
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------------------------------- #
-#                     CORE CLASSIFICATION EVALUATION
-# --------------------------------------------------------------------------- #
-
-
-def recall_at_first_fp(
-    distances: np.ndarray,
-    labels: np.ndarray,
-    lower_is_similar: bool = True,
-) -> Dict[str, float]:
-    """
-    Recall at first false positive.
-
-    Sort pairs by predicted distance, scan until first false positive,
-    report fraction of true positives retrieved.
-
-    Args:
-        distances: predicted distances (lower = more similar by default)
-        labels: boolean array (True = same class, False = different class)
-        lower_is_similar: if True, sort ascending; if False, sort descending
-
-    Returns:
-        dict with recall_at_first_fp, n_retrieved, n_positives
-    """
-    n_positives = int(labels.sum())
-
-    if n_positives == 0:
-        return {"recall_at_first_fp": 0.0, "n_retrieved": 0, "n_positives": 0}
-
-    if (~labels).sum() == 0:
-        # No negatives — all pairs are positive, recall = 1
-        return {"recall_at_first_fp": 1.0, "n_retrieved": n_positives, "n_positives": n_positives}
-
-    # Sort by distance
-    order = np.argsort(distances) if lower_is_similar else np.argsort(-distances)
-    sorted_labels = labels[order]
-
-    # Scan until first false positive
-    n_retrieved = 0
-    for label in sorted_labels:
-        if not label:
-            break
-        n_retrieved += 1
-
-    return {
-        "recall_at_first_fp": n_retrieved / n_positives,
-        "n_retrieved": n_retrieved,
-        "n_positives": n_positives,
-    }
-
-
-def auroc_at_level(
-    distances: np.ndarray,
-    labels: np.ndarray,
-    lower_is_similar: bool = True,
-) -> float:
-    """
-    AUROC for binary classification: same class vs different class.
-
-    Args:
-        distances: predicted distances
-        labels: boolean array (True = same class)
-        lower_is_similar: if True, negate distances for sklearn (higher score = more similar)
-
-    Returns:
-        AUROC score, or NaN if only one class present
-    """
-    from sklearn.metrics import roc_auc_score
-
-    if len(np.unique(labels)) < 2:
-        return np.nan
-
-    # sklearn expects higher scores for positive class
-    scores = -distances if lower_is_similar else distances
-
-    try:
-        return float(roc_auc_score(labels.astype(int), scores))
-    except ValueError:
-        return np.nan
 
 
 # --------------------------------------------------------------------------- #
@@ -135,6 +66,9 @@ def build_same_level_labels(
     """
     Build boolean labels: True if both proteins share the same classification.
 
+    Uses polars Series.map_elements for vectorized lookup instead of a Python
+    loop, which matters when datasets have millions of pairs.
+
     Args:
         pairs_df: DataFrame with 'query' and 'target' columns
         protein_classifications: dict mapping protein_id -> class label
@@ -142,19 +76,31 @@ def build_same_level_labels(
     Returns:
         boolean numpy array (True = same class, False = different or unknown)
     """
-    queries = pairs_df["query"].to_list()
-    targets = pairs_df["target"].to_list()
+    # Map protein IDs to class labels via polars replace (vectorized hash lookup)
+    class_series = pl.Series(
+        name="_cls",
+        values=list(protein_classifications.values()),
+    )
+    id_series = pl.Series(
+        name="_id",
+        values=list(protein_classifications.keys()),
+    )
+    mapping_df = pl.DataFrame({"_id": id_series, "_cls": class_series})
 
-    labels = np.full(len(queries), False)
+    q_classes = (
+        pairs_df.select("query")
+        .join(mapping_df, left_on="query", right_on="_id", how="left")["_cls"]
+    )
+    t_classes = (
+        pairs_df.select("target")
+        .join(mapping_df, left_on="target", right_on="_id", how="left")["_cls"]
+    )
 
-    for i, (q, t) in enumerate(zip(queries, targets)):
-        q_class = protein_classifications.get(q)
-        t_class = protein_classifications.get(t)
+    # Both must be non-null AND equal
+    both_known = q_classes.is_not_null() & t_classes.is_not_null()
+    same_class = (q_classes == t_classes) & both_known
 
-        if q_class is not None and t_class is not None:
-            labels[i] = (q_class == t_class)
-
-    return labels
+    return same_class.to_numpy()
 
 
 def evaluate_at_hierarchy_levels(

@@ -1,3 +1,11 @@
+# Changes (2026-03-20):
+# - Added --delta_baseline flag for Sup. Fig. 4 revision.
+#   Accepts a baseline parsed_metrics_all.csv; subtracts baseline metric
+#   values per (Embedding, Parameter, Model Type) tuple so the plot shows
+#   improvement/degradation relative to Figure 1's reference dataset.
+#   Y-axis auto-centers at 0 with symmetric limits.  When the flag is not
+#   used, all existing behavior is unchanged.
+
 import re
 import pandas as pd
 import seaborn as sns
@@ -540,7 +548,11 @@ def _human_readable_formatter(x, pos=None):
 
 # --- Main Plotting Function ---
 def generate_metric_plot(
-    df: pd.DataFrame, y_metric: str, se_metric: Optional[str], output_file: Path
+    df: pd.DataFrame,
+    y_metric: str,
+    se_metric: Optional[str],
+    output_file: Path,
+    delta_mode: bool = False,
 ):
     """Generates a summary faceted scatter plot for a specific metric.
 
@@ -549,6 +561,7 @@ def generate_metric_plot(
         y_metric: Name of the metric column to plot
         se_metric: Name of the standard error column (optional)
         output_file: Path to save the output plot
+        delta_mode: If True, y-axis is centered at 0 (for baseline-subtracted values)
 
     Returns:
         List of dicts containing trend statistics for all facets
@@ -607,8 +620,13 @@ def generate_metric_plot(
         ax.tick_params(axis="x", rotation=45, labelsize=PLOT_CONFIG["tick_fontsize"])
         ax.tick_params(axis="y", labelsize=PLOT_CONFIG["tick_fontsize"])
 
-        # Set y-axis to start from 0
-        ax.set_ylim(0, 1)
+        # In delta mode, center y-axis at 0; otherwise start from 0
+        if delta_mode:
+            y_abs_max = max(abs(df_sorted[y_metric].min()), abs(df_sorted[y_metric].max()), 0.1)
+            ax.set_ylim(-y_abs_max * 1.1, y_abs_max * 1.1)
+            ax.axhline(y=0, color="black", linewidth=0.8, linestyle="-", alpha=0.4)
+        else:
+            ax.set_ylim(0, 1)
 
         # Add panel labels (A, B, C)
         if i == 0:  # Panel A (leftmost) - position further left
@@ -700,6 +718,17 @@ def main():
         help="Space-separated list of pLM names (embedding names) to exclude from the plots.",
     )
     parser.add_argument(
+        "--delta_baseline",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a baseline metrics CSV (same format as parsed_metrics_all.csv). "
+            "When provided, plots show the DIFFERENCE (current - baseline) using a "
+            "diverging colormap centered at 0. Useful for Sup. Fig. 4: showing how "
+            "a new dataset's results differ from Figure 1's reference values."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose debug output.",
@@ -778,6 +807,41 @@ def main():
             )
             return
 
+    # --- Delta mode: subtract baseline values (for Sup. Fig. 4 revision) ---
+    # When --delta_baseline is provided, each metric becomes (current - baseline)
+    # so the plots show improvement/degradation relative to a reference dataset.
+    if args.delta_baseline:
+        if not args.delta_baseline.exists():
+            log.error(f"Delta baseline file not found: {args.delta_baseline}")
+            return
+
+        baseline_df = pd.read_csv(args.delta_baseline)
+        log.info(
+            f"Loaded delta baseline with {len(baseline_df)} rows from {args.delta_baseline}"
+        )
+
+        # Join on (Embedding, Parameter, Model Type) — the natural key for a run
+        join_cols = ["Embedding", "Parameter", "Model Type"]
+        metric_cols = ["Pearson R2", "Spearman", "MAE", "R2"]
+
+        # Rename baseline metric columns to avoid collision
+        baseline_rename = {col: f"_baseline_{col}" for col in metric_cols if col in baseline_df.columns}
+        baseline_subset = baseline_df[join_cols + list(baseline_rename.keys())].rename(columns=baseline_rename)
+
+        before_len = len(results_df)
+        results_df = results_df.merge(baseline_subset, on=join_cols, how="left")
+
+        for col in metric_cols:
+            bl_col = f"_baseline_{col}"
+            if bl_col in results_df.columns and col in results_df.columns:
+                results_df[col] = results_df[col] - results_df[bl_col]
+                results_df.drop(columns=[bl_col], inplace=True)
+
+        log.info(
+            f"Delta mode: subtracted baseline values. "
+            f"Matched {results_df[metric_cols[0]].notna().sum()}/{before_len} rows."
+        )
+
     # --- Add absolute Spearman correlation ---
     if "Spearman" in results_df.columns:
         results_df["Absolute Spearman"] = results_df["Spearman"].abs()
@@ -819,7 +883,10 @@ def main():
         output_path = output_dir / output_filename
         log.info(f"--- Generating plot for {y_metric} -> {output_path} ---")
 
-        trend_stats = generate_metric_plot(results_df, y_metric, se_metric, output_path)
+        trend_stats = generate_metric_plot(
+            results_df, y_metric, se_metric, output_path,
+            delta_mode=args.delta_baseline is not None,
+        )
 
         # Add metric name to each stat and collect
         for stat in trend_stats:

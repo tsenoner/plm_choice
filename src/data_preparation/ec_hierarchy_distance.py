@@ -1,5 +1,5 @@
-# --- Ivan infrastructure (2026-03-19) ---
 #!/usr/bin/env python3
+# --- Ivan infrastructure (2026-03-19) ---
 """
 EC-Number Hierarchy Distance
 

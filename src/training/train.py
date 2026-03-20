@@ -454,7 +454,7 @@ if __name__ == "__main__":
         "--early_stopping_patience",
         type=int,
         default=3,
-        help="Patience for early stopping (default: 5)",
+        help="Patience for early stopping (default: 3)",
     )
     parser.add_argument(
         "--val_check_interval",

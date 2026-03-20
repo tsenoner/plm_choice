@@ -174,6 +174,12 @@ def extract_chain_pdb(cif_path: Path, chain_id: str, output_path: Path) -> bool:
     TMalign works best with PDB format. We extract ATOM records for the
     specified chain. This is a simple extraction — no renumbering or
     modification.
+
+    LIMITATION: This writes space-delimited mmCIF ATOM lines directly to
+    the output file, which is NOT valid PDB fixed-width format. TMalign
+    tolerates this for most structures, but may fail on entries with
+    unusual column layouts. For production use, consider converting via
+    gemmi (``gemmi convert --to pdb``) or BioPython's MMCIF2Dict.
     """
     try:
         atoms_written = 0
@@ -189,7 +195,14 @@ def extract_chain_pdb(cif_path: Path, chain_id: str, output_path: Path) -> bool:
                     in_atom_site = True
                     continue
 
-                if in_atom_site and line.startswith("ATOM") or line.startswith("HETATM"):
+                # BUG FIX (2026-03-20): original expression was:
+                #   in_atom_site and line.startswith("ATOM") or line.startswith("HETATM")
+                # Python operator precedence evaluates this as:
+                #   (in_atom_site and ATOM) or HETATM
+                # which writes HETATM lines regardless of whether we're inside
+                # an _atom_site block, corrupting the output PDB with header
+                # or loop data that happens to start with "HETATM".
+                if in_atom_site and (line.startswith("ATOM") or line.startswith("HETATM")):
                     parts = line.split()
                     # Check chain
                     chain_col = col_map.get("auth_asym_id", col_map.get("label_asym_id"))

@@ -1,3 +1,12 @@
+# Changes (2026-03-20):
+# - Fixed _bootstrap_stat() parallel/sequential control flow.  Previously the
+#   sequential branch used `if not use_parallel or n_bootstrap < 100` which
+#   could re-execute sequential sampling even after parallel completed
+#   successfully (use_parallel was mutated only on failure, but the `or`
+#   clause fired unconditionally for small n_bootstrap).  Now uses a
+#   `bootstrap_stat_values = None` sentinel: parallel sets it on success,
+#   sequential runs only if it's still None.
+
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -58,12 +67,12 @@ def _bootstrap_stat(
     ci_upper_key = f"{key_base}_{int(confidence_level * 100)}{ci_key_suffix_upper}"
     results = {se_key: np.nan, ci_lower_key: np.nan, ci_upper_key: np.nan}
 
-    # Use parallel processing for large bootstrap samples
+    # Try parallel first for large n_bootstrap, fall back to sequential.
+    bootstrap_stat_values = None
+
     if use_parallel and n_bootstrap >= 100:
         try:
-            n_processes = min(cpu_count(), 8)  # Limit to 8 processes max
-
-            # Prepare arguments for parallel processing
+            n_processes = min(cpu_count(), 8)
             seeds = rng.integers(0, 2**31, n_bootstrap)
             worker_args = [
                 (targets, predictions, stat_func, value_transform, seed)
@@ -71,26 +80,23 @@ def _bootstrap_stat(
             ]
 
             with Pool(processes=n_processes) as pool:
-                bootstrap_stat_values = list(
+                bootstrap_stat_values = np.array(list(
                     tqdm(
                         pool.imap(_bootstrap_worker, worker_args),
                         total=n_bootstrap,
                         desc=f"Bootstrap {stat_name} (parallel)",
                         unit="sample",
                     )
-                )
-
-            bootstrap_stat_values = np.array(bootstrap_stat_values)
+                ))
 
         except Exception as e:
             print(f"Parallel bootstrap failed ({e}), falling back to sequential...")
-            use_parallel = False
+            bootstrap_stat_values = None
 
-    # Sequential processing (fallback or for small n_bootstrap)
-    if not use_parallel or n_bootstrap < 100:
+    # Sequential: used for small n_bootstrap or as fallback if parallel failed
+    if bootstrap_stat_values is None:
         bootstrap_stat_values = np.empty(n_bootstrap)
 
-        # Bootstrap sampling with progress bar
         for i in tqdm(range(n_bootstrap), desc=f"Bootstrap {stat_name}", unit="sample"):
             indices = rng.integers(0, n_samples, size=n_samples)
             targets_boot, predictions_boot = targets[indices], predictions[indices]

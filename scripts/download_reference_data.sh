@@ -173,24 +173,61 @@ else
     # Paginated via Link header; we use a simple curl loop.
     UNIPROT_URL="https://rest.uniprot.org/uniprotkb/search?query=(ec:*)%20AND%20(reviewed:true)&format=tsv&fields=accession,ec&size=500"
 
-    # First request — get header + first page
+    # Paginated download — UniProt REST API returns a Link header with the
+    # next-page URL.  We follow it until there's no more data.
     TEMP_FILE=$(mktemp)
-    HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" \
+    NEXT_URL="${UNIPROT_URL}"
+    PAGE=0
+
+    # First page — includes the TSV header line
+    HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" -D - \
         -H "User-Agent: plm_choice/1.0 (reference download)" \
-        "${UNIPROT_URL}")
+        "${NEXT_URL}" 2>/dev/null | head -1 | tr -d '\r\n' | tail -c 3)
+    # Proper approach: capture headers separately
+    HEADER_FILE=$(mktemp)
+    HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" \
+        -D "${HEADER_FILE}" \
+        -H "User-Agent: plm_choice/1.0 (reference download)" \
+        "${NEXT_URL}")
 
     if [[ "$HTTP_CODE" != "200" ]]; then
         echo "  FAIL: UniProt API returned HTTP ${HTTP_CODE}" >&2
-        rm -f "${TEMP_FILE}"
+        rm -f "${TEMP_FILE}" "${HEADER_FILE}"
     else
         cp "${TEMP_FILE}" "${EC_OUTPUT}"
-        rm -f "${TEMP_FILE}"
+        PAGE=1
+        echo "  Page ${PAGE} downloaded..."
+
+        # Follow pagination via Link header
+        while true; do
+            NEXT_URL=$(grep -i '^Link:' "${HEADER_FILE}" | sed 's/.*<\(.*\)>.*/\1/' | tr -d '\r\n')
+            if [[ -z "$NEXT_URL" ]]; then
+                break
+            fi
+
+            rm -f "${HEADER_FILE}"
+            HEADER_FILE=$(mktemp)
+            HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" \
+                -D "${HEADER_FILE}" \
+                -H "User-Agent: plm_choice/1.0 (reference download)" \
+                "${NEXT_URL}")
+
+            if [[ "$HTTP_CODE" != "200" ]]; then
+                echo "  WARN: Page $((PAGE+1)) returned HTTP ${HTTP_CODE}, stopping pagination." >&2
+                break
+            fi
+
+            # Append data lines (skip header if UniProt repeats it)
+            tail -n +2 "${TEMP_FILE}" >> "${EC_OUTPUT}"
+            PAGE=$((PAGE + 1))
+            echo "  Page ${PAGE} downloaded..."
+        done
+
+        rm -f "${TEMP_FILE}" "${HEADER_FILE}"
 
         local_lines=$(wc -l < "${EC_OUTPUT}" | tr -d ' ')
         local_size=$(du -h "${EC_OUTPUT}" | cut -f1)
-        echo "  OK: ${EC_OUTPUT} (${local_lines} lines, ${local_size})"
-        echo "  Note: This is the first page (500 entries). For the full dataset,"
-        echo "  use the Python script or add pagination to this download."
+        echo "  OK: ${EC_OUTPUT} (${local_lines} lines, ${local_size}, ${PAGE} pages)"
     fi
 fi
 echo ""
