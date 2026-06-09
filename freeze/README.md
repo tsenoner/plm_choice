@@ -47,8 +47,9 @@ python -m evaluation.canonical_set \
 ```
 
 A correct re-run reproduces `canonical_content_sha256 = e27dbdb4…` exactly. The writer is
-atomic (`shared.atomic_io.atomic_write`, B7) and defaults to `mode="timestamp"`, so it never
-clobbers an existing freeze.
+atomic (`shared.atomic_io.atomic_write`, B7), always lands at the canonical path (never a
+timestamped sibling), and **refuses to clobber an existing freeze unless `--overwrite` is
+passed** — so a stale freeze can never be silently left behind a "regenerated" one.
 
 ## The NEW-3 decision (`esm1b_paired_policy`) — LOCKED
 
