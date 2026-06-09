@@ -6,9 +6,29 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 
-def _square_transform(r: float) -> float:
-    """Transform function to square the correlation coefficient."""
-    return r**2
+def _r2_ci_from_r_bounds(r_lower: float, r_upper: float) -> tuple[float, float]:
+    """Map a confidence interval on the signed correlation r to one on R².
+
+    Squaring is monotone only on |r|, so the R² interval is derived
+    carefully from the r interval ``[r_lower, r_upper]``:
+
+      * upper = max(r_lower², r_upper²)
+      * lower = 0 if the r interval brackets 0 (R² can be 0 inside it),
+        else min(r_lower², r_upper²)
+
+    This is the coherent alternative to squaring r *inside* each bootstrap
+    resample, which makes the resampled R² pile against the 0 boundary when
+    the true r is near zero and yields a positive-artifact lower bound.
+    """
+    r2_upper = max(r_lower * r_lower, r_upper * r_upper)
+    if r_lower <= 0.0 <= r_upper:
+        r2_lower = 0.0
+    else:
+        r2_lower = min(r_lower * r_lower, r_upper * r_upper)
+    # Guard against floating-point spill outside [0, 1].
+    r2_lower = max(0.0, min(1.0, r2_lower))
+    r2_upper = max(0.0, min(1.0, r2_upper))
+    return r2_lower, r2_upper
 
 
 def _bootstrap_worker(args):
@@ -43,14 +63,23 @@ def _bootstrap_stat(
     stat_func: Callable[[np.ndarray, np.ndarray], tuple[float, float]],
     stat_name: str,
     value_transform: Optional[Callable[[float], float]] = None,
+    square_after_ci: bool = False,
     se_key_suffix: str = "_SE",
     ci_key_suffix_lower: str = "_CI_lower",
     ci_key_suffix_upper: str = "_CI_upper",
     use_parallel: bool = True,
+    seed: Optional[int] = None,
 ) -> Dict[str, float]:
-    """Helper: Performs bootstrapping for a given statistic with optional parallel processing."""
+    """Helper: Performs bootstrapping for a given statistic with optional parallel processing.
+
+    When ``square_after_ci`` is True the resampled statistic is the signed
+    correlation r; the percentile CI is computed on r and then mapped to an
+    R² CI via :func:`_r2_ci_from_r_bounds` (instead of squaring r inside each
+    resample). ``seed`` makes both the parallel and sequential resampling
+    reproducible.
+    """
     n_samples = len(targets)
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
 
     key_base = stat_name
     se_key = f"{key_base}{se_key_suffix}"
@@ -117,10 +146,19 @@ def _bootstrap_stat(
         )
 
     if num_valid > 1:
-        se = np.std(valid_bootstrap_stats, ddof=1)
         alpha = (1.0 - confidence_level) / 2.0
-        ci_lower = np.percentile(valid_bootstrap_stats, alpha * 100)
-        ci_upper = np.percentile(valid_bootstrap_stats, (1 - alpha) * 100)
+        if square_after_ci:
+            # ``valid_bootstrap_stats`` are signed r values. Take the percentile
+            # CI on r, then map it to an R² CI (zero-crossing aware). SE is the
+            # spread of the squared samples, kept only as a descriptor.
+            r_lower = np.percentile(valid_bootstrap_stats, alpha * 100)
+            r_upper = np.percentile(valid_bootstrap_stats, (1 - alpha) * 100)
+            ci_lower, ci_upper = _r2_ci_from_r_bounds(float(r_lower), float(r_upper))
+            se = float(np.std(valid_bootstrap_stats**2, ddof=1))
+        else:
+            se = float(np.std(valid_bootstrap_stats, ddof=1))
+            ci_lower = float(np.percentile(valid_bootstrap_stats, alpha * 100))
+            ci_upper = float(np.percentile(valid_bootstrap_stats, (1 - alpha) * 100))
         results[se_key] = se
         results[ci_lower_key] = ci_lower
         results[ci_upper_key] = ci_upper
@@ -138,8 +176,14 @@ def calculate_regression_metrics(
     predictions: np.ndarray,
     n_bootstrap: Optional[int] = 1000,
     confidence_level: float = 0.95,
+    seed: Optional[int] = None,
 ) -> Dict[str, float]:
-    """Calculates regression metrics, optionally bootstrapping correlation stats."""
+    """Calculates regression metrics, optionally bootstrapping correlation stats.
+
+    Pass ``seed`` to make the bootstrap SE/CIs reproducible. The Pearson R² CI
+    is obtained by bootstrapping the signed r and mapping the r-interval to R²
+    (see :func:`_r2_ci_from_r_bounds`), not by squaring r inside each resample.
+    """
     if len(targets) != len(predictions):
         raise ValueError("Targets and predictions must have the same length.")
 
@@ -159,7 +203,7 @@ def calculate_regression_metrics(
         {
             "stat_func": pearsonr,
             "stat_name": "Pearson_r2",
-            "value_transform": _square_transform,
+            "square_after_ci": True,
         },
         {"stat_func": spearmanr, "stat_name": "Spearman", "value_transform": None},
     ]
@@ -220,6 +264,7 @@ def calculate_regression_metrics(
                 predictions=predictions,
                 n_bootstrap=n_bootstrap,
                 confidence_level=confidence_level,
+                seed=seed,
                 **config,
             )
             metrics.update(bootstrap_results)
