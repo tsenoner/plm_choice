@@ -40,6 +40,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+VALID_METRICS = ("euclidean", "cosine", "manhattan")
+
+
+def pairwise_distance(a: np.ndarray, b: np.ndarray, metric: str = "euclidean") -> float:
+    """Distance between two protein-level embedding vectors.
+
+    Args:
+        a, b: 1-D embedding vectors of equal length.
+        metric: One of ``"euclidean"`` (L2), ``"manhattan"`` (L1), or
+            ``"cosine"`` (1 - cosine similarity, in ``[0, 2]``).
+
+    Returns:
+        The distance as a float. For cosine, a zero-norm vector makes the
+        similarity undefined and returns ``nan``.
+
+    Raises:
+        ValueError: if ``metric`` is not one of :data:`VALID_METRICS`.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if metric == "euclidean":
+        return float(np.linalg.norm(a - b))
+    if metric == "manhattan":
+        return float(np.sum(np.abs(a - b)))
+    if metric == "cosine":
+        norm_a = float(np.linalg.norm(a))
+        norm_b = float(np.linalg.norm(b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return float("nan")
+        cos_sim = float(np.dot(a, b) / (norm_a * norm_b))
+        # Clip for floating-point spill outside [-1, 1].
+        cos_sim = max(-1.0, min(1.0, cos_sim))
+        return 1.0 - cos_sim
+    raise ValueError(
+        f"unknown metric: {metric!r} (expected one of {VALID_METRICS})"
+    )
+
+
+def distance_column_name(embedding_name: str, metric: str = "euclidean") -> str:
+    """Output column name for a distance series.
+
+    Euclidean keeps the legacy ``dist_<name>`` name for backward compatibility;
+    other metrics are namespaced as ``dist_<metric>_<name>``.
+    """
+    if metric == "euclidean":
+        return f"dist_{embedding_name}"
+    return f"dist_{metric}_{embedding_name}"
+
 
 class EmbeddingDistanceComputer:
     """
@@ -49,16 +97,28 @@ class EmbeddingDistanceComputer:
     and managing memory efficiently for large datasets.
     """
 
-    def __init__(self, embeddings_dir: Path, batch_size: int = 1000):
+    def __init__(
+        self,
+        embeddings_dir: Path,
+        batch_size: int = 1000,
+        metric: str = "euclidean",
+    ):
         """
         Initialize the distance computer.
 
         Args:
             embeddings_dir: Directory containing H5 embedding files
             batch_size: Number of protein pairs to process in each batch
+            metric: Distance metric — one of ``euclidean`` (default), ``cosine``,
+                or ``manhattan``.
         """
+        if metric not in VALID_METRICS:
+            raise ValueError(
+                f"unknown metric: {metric!r} (expected one of {VALID_METRICS})"
+            )
         self.embeddings_dir = Path(embeddings_dir)
         self.batch_size = batch_size
+        self.metric = metric
         self.embedding_files = self._discover_embedding_files()
         self.embedding_info = self._get_embedding_info()
 
@@ -167,8 +227,7 @@ class EmbeddingDistanceComputer:
                 query_emb = embeddings[query_id]
                 target_emb = embeddings[target_id]
 
-                # Compute euclidean distance
-                distance = np.linalg.norm(query_emb - target_emb)
+                distance = pairwise_distance(query_emb, target_emb, self.metric)
                 distances.append(float(distance))
             else:
                 distances.append(np.nan)
@@ -227,7 +286,10 @@ class EmbeddingDistanceComputer:
         # np.round preserves NaN values
         all_distances_rounded = np.round(all_distances_np, decimals=precision)
 
-        return pl.Series(name=f"dist_{embedding_name}", values=all_distances_rounded)
+        return pl.Series(
+            name=distance_column_name(embedding_name, self.metric),
+            values=all_distances_rounded,
+        )
 
     def compute_all_distances(
         self, df: pl.DataFrame, output_parquet: Path
@@ -259,7 +321,7 @@ class EmbeddingDistanceComputer:
             logger.info(f"Loaded existing file with {len(result_df.columns)} columns")
 
         for embedding_name in self.embedding_info.keys():
-            dist_col = f"dist_{embedding_name}"
+            dist_col = distance_column_name(embedding_name, self.metric)
 
             # Check if this embedding is already computed
             if dist_col in result_df.columns:
@@ -387,6 +449,13 @@ def main():
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output file if it exists"
     )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="euclidean",
+        choices=VALID_METRICS,
+        help="Distance metric to compute (default: euclidean)",
+    )
 
     args = parser.parse_args()
 
@@ -425,11 +494,14 @@ def main():
     logger.info(f"Output Parquet: {args.output_parquet}")
     logger.info(f"Protein pairs: {len(df)}")
     logger.info(f"Batch size: {args.batch_size}")
+    logger.info(f"Metric: {args.metric}")
 
     try:
         # Initialize distance computer
         computer = EmbeddingDistanceComputer(
-            embeddings_dir=args.embeddings_dir, batch_size=args.batch_size
+            embeddings_dir=args.embeddings_dir,
+            batch_size=args.batch_size,
+            metric=args.metric,
         )
 
         # Compute distances (results are saved incrementally)
