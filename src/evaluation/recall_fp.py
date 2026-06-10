@@ -37,6 +37,11 @@ _DISTANCE_METRIC_MAP = {
 }
 
 
+def _is_null_label(v) -> bool:
+    """True for None or a NaN float (both mean "no label")."""
+    return v is None or (isinstance(v, float) and v != v)
+
+
 def _stack_embeddings(
     embeddings: dict[str, np.ndarray], labels: pd.DataFrame, level: str
 ) -> tuple[np.ndarray, list[str], np.ndarray]:
@@ -129,6 +134,24 @@ def recall_at_first_fp(
         raise ValueError(f"distance={distance!r} not in {list(_DISTANCE_METRIC_MAP)}")
     metric = _DISTANCE_METRIC_MAP[distance]
     matrix, ids, label_vec = _stack_embeddings(embeddings, labels, level)
+
+    if is_positive_fn is None:
+        if any(_is_null_label(v) for v in label_vec):
+            raise ValueError(
+                f"level={level!r} has null label(s) (None/NaN) and no is_positive_fn "
+                f"was given; scalar-equality positivity would treat null == null as a "
+                f"match (fabricating recall) or silently drop every query. Provide "
+                f"is_positive_fn or score an available level (e.g. the family column is "
+                f"a placeholder until real labels are joined)."
+            )
+        if any(isinstance(v, (set, frozenset)) for v in label_vec):
+            raise ValueError(
+                f"level={level!r} has set-valued labels and no is_positive_fn was "
+                f"given; scalar equality on sets scores exact-set identity and "
+                f"undercounts multi-domain positives. Pass is_positive_fn, e.g. "
+                f"label_adapters.make_cath_is_positive_fn(labels, {level!r})."
+            )
+
     dmat = cdist(matrix, matrix, metric=metric)
 
     records: list[tuple[str, int, float, int]] = []
@@ -171,11 +194,52 @@ def recall_at_first_fp_multi_level(
     embeddings: dict[str, np.ndarray],
     labels: pd.DataFrame,
     distance: DistanceName = "cosine",
+    is_positive_fn_builder: "Callable[[pd.DataFrame, str], Callable[[str, str], bool]] | None" = None,
 ) -> dict[str, dict]:
-    """Run :func:`recall_at_first_fp` at all three CATH levels."""
-    return {
-        level: recall_at_first_fp(
-            embeddings, labels, distance=distance, level=level, per_query=True
+    """Run :func:`recall_at_first_fp` at all three CATH levels.
+
+    A level whose label column is entirely null (e.g. the ``family`` placeholder
+    before real CATH family labels are joined in) is **not scored** — it would
+    fabricate a perfect recall under scalar equality. Such a level appears in the
+    result with a ``skipped_reason`` instead of metrics (visible, not silently
+    dropped).
+
+    Every value carries a ``scored`` bool so callers can branch on a guaranteed
+    field rather than probing for ``mean_recall_1stFP`` vs ``skipped_reason``.
+
+    Parameters
+    ----------
+    is_positive_fn_builder
+        Optional ``(labels, level) -> predicate`` factory. When given, each
+        scored level uses the built ``is_positive_fn`` (e.g. CATH set
+        intersection from
+        :func:`evaluation.label_adapters.make_cath_is_positive_fn`) instead of
+        scalar label equality — required for correct multi-domain (set-valued)
+        labels.
+    """
+    out: dict[str, dict] = {}
+    for level in ("fold", "superfamily", "family"):
+        if level not in labels.columns or labels[level].isna().all():
+            out[level] = {
+                "level": level,
+                "scored": False,
+                "skipped_reason": (
+                    f"level {level!r} unavailable (column missing or all-null); "
+                    f"not scored to avoid fabricated recall"
+                ),
+            }
+            continue
+        is_pos = (
+            is_positive_fn_builder(labels, level) if is_positive_fn_builder else None
         )
-        for level in ("fold", "superfamily", "family")
-    }
+        res = recall_at_first_fp(
+            embeddings,
+            labels,
+            distance=distance,
+            level=level,
+            per_query=True,
+            is_positive_fn=is_pos,
+        )
+        res["scored"] = True
+        out[level] = res
+    return out

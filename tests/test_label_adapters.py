@@ -16,6 +16,7 @@ import pytest
 
 from evaluation.label_adapters import (
     load_cath_labels,
+    make_cath_is_positive_fn,
     parse_cath_from_gene3d,
     parse_ec_from_protein_names,
 )
@@ -209,3 +210,51 @@ def test_load_cath_labels_multidomain_from_disk(tmp_path):
     p = _write_tsv(tmp_path / "cath.tsv", [("P1", "1.10.287.70;3.40.50.2300;")])
     out = load_cath_labels(p)
     assert out.iloc[0]["superfamily"] == frozenset({"1.10.287.70", "3.40.50.2300"})
+
+
+# ── make_cath_is_positive_fn (W1 set-intersection predicate builder) ──────────
+def _labels_frame():
+    return pd.DataFrame(
+        {
+            "protein_id": ["Q", "A", "B"],
+            "fold": [frozenset({"d1", "d2"}), frozenset({"d2"}), frozenset({"d3"})],
+            "superfamily": [
+                frozenset({"s1"}),
+                frozenset({"s9"}),
+                frozenset({"s1"}),
+            ],
+            "family": [None, None, None],
+        }
+    )
+
+
+def test_is_positive_fn_shares_any_domain():
+    fn = make_cath_is_positive_fn(_labels_frame(), "fold")
+    assert fn("Q", "A") is True  # share d2
+    assert fn("Q", "B") is False  # disjoint
+
+
+def test_is_positive_fn_self_is_positive():
+    fn = make_cath_is_positive_fn(_labels_frame(), "fold")
+    assert fn("Q", "Q") is True
+
+
+def test_is_positive_fn_respects_level():
+    fn = make_cath_is_positive_fn(_labels_frame(), "superfamily")
+    assert fn("Q", "B") is True  # share s1 at superfamily
+    assert fn("Q", "A") is False  # disjoint at superfamily
+
+
+def test_is_positive_fn_unknown_id_is_false():
+    fn = make_cath_is_positive_fn(_labels_frame(), "fold")
+    assert fn("Q", "ZZZ") is False
+
+
+def test_is_positive_fn_null_label_is_false():
+    fn = make_cath_is_positive_fn(_labels_frame(), "family")
+    assert fn("Q", "A") is False
+
+
+def test_is_positive_fn_unknown_level_raises():
+    with pytest.raises(KeyError, match="class"):
+        make_cath_is_positive_fn(_labels_frame(), "class")

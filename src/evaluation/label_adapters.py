@@ -161,3 +161,46 @@ def load_cath_labels(
     """
     df = pd.read_csv(path, sep="\t", dtype=str)
     return parse_cath_from_gene3d(df, id_col=id_col, gene3d_col=gene3d_col)
+
+
+def make_cath_is_positive_fn(labels: pd.DataFrame, level: str):
+    """Build the recall-FP set-intersection positive predicate for one level.
+
+    The frame produced by :func:`parse_cath_from_gene3d` stores a *set* of CATH
+    domains per protein at ``fold``/``superfamily``. Two proteins are positives
+    if they share ANY domain at ``level`` — the multi-domain rule recall_fp's
+    scalar-equality default cannot express (it would require identical full
+    domain sets). Returns a ``(query_id, target_id) -> bool`` closure suitable
+    for ``recall_at_first_fp(..., is_positive_fn=...)``.
+
+    Parameters
+    ----------
+    labels
+        The CATH label frame (``protein_id`` + the ``level`` column of frozensets).
+    level
+        Label column to score on (``"fold"`` or ``"superfamily"``).
+
+    Returns
+    -------
+    Callable[[str, str], bool]
+        Predicate that is ``True`` iff both ids are present with non-null label
+        sets that intersect. Unknown ids and null labels (e.g. the ``family``
+        placeholder) return ``False`` — the predicate cannot manufacture a
+        positive it has no evidence for. A self-match (``q == t``) returns
+        ``True`` (a protein shares all its own domains); this is harmless because
+        recall_fp excludes the query from its own ranked list.
+    """
+    if level not in labels.columns:
+        raise KeyError(
+            f"level {level!r} not in labels columns {list(labels.columns)}"
+        )
+    lookup = dict(zip(labels["protein_id"], labels[level]))
+
+    def is_positive(query_id: str, target_id: str) -> bool:
+        q = lookup.get(query_id)
+        t = lookup.get(target_id)
+        if q is None or t is None:
+            return False
+        return len(q & t) > 0
+
+    return is_positive
