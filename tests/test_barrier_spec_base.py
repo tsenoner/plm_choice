@@ -72,12 +72,12 @@ def test_check_drift_raises_on_mismatch_and_non_list():
 
 
 def test_require_grid_size_noun_and_echo():
-    require_grid_size(["a"], None, singular="pLM", plural_key="plms")  # None -> no check
-    require_grid_size(["a", "b"], 2, singular="pLM", plural_key="plms")
+    require_grid_size(["a"], None, singular="pLM", axis_label="plms")  # None -> no check
+    require_grid_size(["a", "b"], 2, singular="pLM", axis_label="plms")
     with pytest.raises(SpecBuildError, match=r"unique pLM\(s\) but expected 15"):
-        require_grid_size(["a"], 15, singular="pLM", plural_key="plms")
+        require_grid_size(["a"], 15, singular="pLM", axis_label="plms")
     with pytest.raises(SpecBuildError, match=r"pairs=\[\('p', 'q'\)\]"):
-        require_grid_size([("p", "q")], 2, singular="pair", plural_key="pairs")
+        require_grid_size([("p", "q")], 2, singular="pair", axis_label="pairs")
 
 
 def test_emit_cell_covered_uses_authoritative(tmp_path):

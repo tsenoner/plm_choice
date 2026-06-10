@@ -37,7 +37,9 @@ from pathlib import Path
 from typing import Sequence
 
 from evaluation.snn_report import SNN_PARQUET_GUARDS, SNN_PER_QUERY_COLUMNS
-from evaluation.barrier_spec_base import (  # noqa: F401  (SpecBuildError/write_barrier_spec re-exported)
+# Shared base helpers. SpecBuildError + write_barrier_spec are also part of this
+# module's public surface (tests import them from here).
+from evaluation.barrier_spec_base import (
     SpecBuildError,
     check_per_query_columns_drift,
     dedup,
@@ -138,7 +140,7 @@ def build_snn_barrier_spec(
     distances = dedup(distances)
     if not pairs:
         raise SpecBuildError("no pairs given; the SNN grid cannot be empty.")
-    require_grid_size(pairs, expected_n_pairs, singular="pair", plural_key="pairs")
+    require_grid_size(pairs, expected_n_pairs, singular="pair", axis_label="pairs")
 
     artifacts: list[dict] = []
     reconstructed: list[str] = []

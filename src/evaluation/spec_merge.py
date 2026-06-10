@@ -105,9 +105,15 @@ def merge_specs(specs: Sequence[dict], *, names: "Sequence[str] | None" = None) 
                     f"got {nws!r}."
                 )
             n_without += nws
-            rc = meta.get("reconstructed_cells")
-            if isinstance(rc, list):
-                reconstructed.extend(rc)
+            rc = meta.get("reconstructed_cells", [])
+            if rc is None:
+                rc = []
+            if not isinstance(rc, list):
+                raise SpecBuildError(
+                    f"spec #{i} ({src}) _meta.reconstructed_cells must be a list, "
+                    f"got {rc!r}."
+                )
+            reconstructed.extend(rc)
             arms.append({"source": src, "meta": meta})
         else:
             arms.append({"source": src, "meta": None})

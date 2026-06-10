@@ -211,6 +211,22 @@ def _make_real_snn_cell(tmp_path):
     return d
 
 
+def test_corrupt_reconstructed_cells_non_list_fails_closed():
+    bad = {"artifacts": [{"label": "a:1", "path": "/a.parquet"}],
+           "_meta": {"n_cells_without_sidecar": 0, "reconstructed_cells": "oops"}}
+    with pytest.raises(SpecBuildError, match="reconstructed_cells"):
+        merge_specs([bad])
+
+
+def test_cli_malformed_spec_file_returns_2(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json")
+    out = tmp_path / "merged.json"
+    rc = main(["--specs", str(bad), "--out", str(out)])
+    assert rc == 2
+    assert not out.exists()
+
+
 def test_cross_arm_merge_passes_real_barrier_and_attributes_failures(tmp_path):
     from evaluation.barrier_spec import build_recall_fp_barrier_spec
     from evaluation.snn_barrier_spec import build_snn_barrier_spec

@@ -44,7 +44,9 @@ from pathlib import Path
 from typing import Sequence
 
 from evaluation.recall_fp_report import DEFAULT_LEVELS, PARQUET_GUARDS, PER_QUERY_COLUMNS
-from evaluation.barrier_spec_base import (  # noqa: F401  (SpecBuildError/write_barrier_spec re-exported)
+# Shared base helpers. SpecBuildError + write_barrier_spec are also part of this
+# module's public surface (tests import them from here).
+from evaluation.barrier_spec_base import (
     SpecBuildError,
     check_per_query_columns_drift,
     dedup,
@@ -144,7 +146,7 @@ def build_recall_fp_barrier_spec(
     levels = dedup(levels)
     if not plms:
         raise SpecBuildError("no pLMs given; the recall-fp grid cannot be empty.")
-    require_grid_size(plms, expected_n_plms, singular="pLM", plural_key="plms")
+    require_grid_size(plms, expected_n_plms, singular="pLM", axis_label="plms")
 
     artifacts: list[dict] = []
     reconstructed: list[str] = []

@@ -18,9 +18,9 @@ import json
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
-_T = TypeVar("_T")
-
 from shared.atomic_io import atomic_write
+
+_T = TypeVar("_T")
 
 # The ArtifactSpec parquet-guard field names make_artifact accepts. A guards dict
 # with any other key would be silently dropped by analysis_barrier._spec_from_dict
@@ -104,13 +104,13 @@ def check_per_query_columns_drift(manifest: dict, contract: Sequence[str],
 
 
 def require_grid_size(axis: Sequence, expected: int | None, *,
-                      singular: str, plural_key: str) -> None:
+                      singular: str, axis_label: str) -> None:
     """Silent-under-coverage guard: fail unless the deduped axis has ``expected`` items."""
     if expected is not None and len(axis) != expected:
         raise SpecBuildError(
             f"grid has {len(axis)} unique {singular}(s) but expected {expected}; "
             f"refusing to build a spec over an under/over-specified grid "
-            f"(silent under-coverage guard). {plural_key}={axis}"
+            f"(silent under-coverage guard). {axis_label}={axis}"
         )
 
 
