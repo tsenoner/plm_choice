@@ -32,19 +32,22 @@ CLI::
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from evaluation.snn_report import SNN_PARQUET_GUARDS, SNN_PER_QUERY_COLUMNS
-from shared.atomic_io import atomic_write
+from evaluation.barrier_spec_base import (  # noqa: F401  (SpecBuildError/write_barrier_spec re-exported)
+    SpecBuildError,
+    check_per_query_columns_drift,
+    dedup,
+    emit_cell,
+    read_sidecar_dict,
+    require_grid_size,
+    write_barrier_spec,
+)
 
 DEFAULT_DISTANCES: tuple[str, ...] = ("cosine", "euclidean", "manhattan")
-
-
-class SpecBuildError(Exception):
-    """The SNN barrier spec cannot be built (operator/config fault → exit 2)."""
 
 
 def _stem(plm_a: str, plm_b: str, rep: str, distance: str) -> str:
@@ -59,27 +62,16 @@ def _canonical_parquet(d: Path, a: str, b: str, rep: str, distance: str) -> Path
     return d / f"{_stem(a, b, rep, distance)}.parquet"
 
 
-def _dedup(seq):
-    """Order-preserving de-duplication (so a duplicated grid axis can't mask a gap)."""
-    seen = set()
-    out = []
-    for x in seq:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _load_sidecar(path: Path) -> dict:
-    """Read + validate one SNN sidecar manifest. Raises SpecBuildError on any fault."""
-    try:
-        manifest = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        raise SpecBuildError(f"sidecar is not valid JSON: {path}: {e}") from e
-    except OSError as e:
-        raise SpecBuildError(f"sidecar unreadable: {path}: {e}") from e
-    if not isinstance(manifest, dict):
-        raise SpecBuildError(f"sidecar must be a JSON object: {path}")
+    """Read + validate one SNN sidecar. Raises SpecBuildError on any fault.
+
+    JSON parsing and the top-level object check are delegated to ``read_sidecar_dict``;
+    this validates the SNN-specific flat shape (non-empty string ``path`` field, integer
+    types for ``n_common``/``population_n_a``/``population_n_b``) and then the
+    ``per_query_columns`` drift guard (called last to preserve error precedence: shape
+    checks fire before the drift check).
+    """
+    manifest = read_sidecar_dict(path)
     p = manifest.get("path")
     if not isinstance(p, str) or not p:
         raise SpecBuildError(f"sidecar has no non-empty string 'path': {path}")
@@ -93,24 +85,8 @@ def _load_sidecar(path: Path) -> dict:
             raise SpecBuildError(
                 f"sidecar {key!r} must be an integer or null, got {v!r} ({path})."
             )
-    cols = manifest.get("per_query_columns")
-    if cols is not None and (not isinstance(cols, list) or tuple(cols) != SNN_PER_QUERY_COLUMNS):
-        raise SpecBuildError(
-            f"sidecar per_query_columns {cols!r} disagree with the contract "
-            f"{list(SNN_PER_QUERY_COLUMNS)} ({path}); producer/spec-builder schema drift."
-        )
+    check_per_query_columns_drift(manifest, SNN_PER_QUERY_COLUMNS, path)
     return manifest
-
-
-def _artifact(label: str, path: Path | str, expected_rows: int | None) -> dict:
-    """One ArtifactSpec-shaped dict armed with the shared SNN parquet guard contract."""
-    return {
-        "label": label,
-        "path": str(path),
-        "expected_rows": expected_rows,
-        "kind": "parquet",
-        **{key: list(cols) for key, cols in SNN_PARQUET_GUARDS.items()},
-    }
 
 
 def build_snn_barrier_spec(
@@ -157,17 +133,12 @@ def build_snn_barrier_spec(
         parquet present with no sidecar), or a malformed/contradictory sidecar.
     """
     sidecar_dir = Path(sidecar_dir)
-    pairs = _dedup([tuple(p) for p in pairs])
-    representations = _dedup(representations)
-    distances = _dedup(distances)
+    pairs = dedup([tuple(p) for p in pairs])
+    representations = dedup(representations)
+    distances = dedup(distances)
     if not pairs:
         raise SpecBuildError("no pairs given; the SNN grid cannot be empty.")
-    if expected_n_pairs is not None and len(pairs) != expected_n_pairs:
-        raise SpecBuildError(
-            f"grid has {len(pairs)} unique pair(s) but expected {expected_n_pairs}; "
-            f"refusing to build a spec over an under/over-specified grid "
-            f"(silent under-coverage guard). pairs={pairs}"
-        )
+    require_grid_size(pairs, expected_n_pairs, singular="pair", plural_key="pairs")
 
     artifacts: list[dict] = []
     reconstructed: list[str] = []
@@ -177,29 +148,28 @@ def build_snn_barrier_spec(
             for dist in distances:
                 label = f"snn:{a}:{b}:{rep}:{dist}"
                 sc_path = _sidecar_path(sidecar_dir, a, b, rep, dist)
-                if sc_path.exists():
-                    manifest = _load_sidecar(sc_path)
-                    path = manifest["path"]  # sidecar-authoritative
-                    rows = manifest.get("n_common") if use_expected_rows else None
+                canonical = _canonical_parquet(sidecar_dir, a, b, rep, dist)
+                covered = sc_path.exists()
+                manifest = _load_sidecar(sc_path) if covered else None
+                if manifest is not None:
                     population[f"{a}__{b}:{rep}:{dist}"] = {
                         "a": manifest.get("population_n_a"),
                         "b": manifest.get("population_n_b"),
                     }
-                else:
-                    # A parquet at the canonical name with NO sidecar is an orphan — a
-                    # stale/partial artifact (the sidecar is written last) that the
-                    # barrier would otherwise pass on shape alone. Fail closed.
-                    canonical = _canonical_parquet(sidecar_dir, a, b, rep, dist)
-                    if canonical.exists():
-                        raise SpecBuildError(
-                            f"orphan parquet without a sidecar: {canonical} (cell {label}); "
-                            f"a parquet present with no manifest is a stale/partial artifact "
-                            f"— remove it or re-run the cell."
-                        )
-                    path = canonical
-                    rows = None
+
+                # manifest is captured directly: emit_cell calls this synchronously
+                # within the same iteration, so there is no late-binding concern.
+                def _path_rows():
+                    rows = manifest.get("n_common") if use_expected_rows else None
+                    return manifest["path"], rows
+
+                art, recon = emit_cell(
+                    label, covered=covered, get_path_rows=_path_rows,
+                    canonical_parquet=canonical, guards=SNN_PARQUET_GUARDS,
+                )
+                artifacts.append(art)
+                if recon:
                     reconstructed.append(label)
-                artifacts.append(_artifact(label, path, rows))
 
     return {
         "artifacts": artifacts,
@@ -210,15 +180,6 @@ def build_snn_barrier_spec(
             "population_n": population,
         },
     }
-
-
-def write_barrier_spec(spec: dict, out_path: Path | str, *, overwrite: bool = True) -> Path:
-    """Atomically write the barrier spec JSON; return where it landed."""
-    return atomic_write(
-        Path(out_path),
-        lambda p: p.write_text(json.dumps(spec, indent=2) + "\n"),
-        mode="replace" if overwrite else "timestamp",
-    )
 
 
 def _parse_pair(s: str) -> tuple[str, str]:
