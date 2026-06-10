@@ -37,6 +37,34 @@ def test_identity_jaccard_with_different_metric(toy_embeddings_a):
     assert result["mean_jaccard"] == pytest.approx(1.0)
 
 
+def test_capped_partner_scores_against_common_cohort(toy_embeddings_a):
+    # When one pLM covers fewer proteins (an architecture cap, e.g. esm1b), BOTH sides
+    # must rank against the SAME common cohort. Here B is a strict subset of A with
+    # IDENTICAL vectors on the overlap -> perfect agreement. The pre-fix code built A's
+    # k-NN database from all of A (so ids absent from B entered the union as guaranteed
+    # misses) and deflated the Jaccard well below 1.0.
+    full = toy_embeddings_a
+    capped = {k: full[k] for k in list(full)[:12]}  # 12 of 20, identical vectors
+    res = knn_jaccard_between_plms(full, capped, k=4, distance="cosine")
+    assert res["mean_jaccard"] == pytest.approx(1.0)
+    assert (res["per_query"]["k_a"] == res["per_query"]["k_b"]).all()  # shared cohort -> equal k
+
+
+def test_compute_ci_false_skips_bootstrap_keeps_per_query(toy_embeddings_a):
+    # The analysis-DAG bridge recomputes its own seeded CI from per_query, so it asks
+    # knn_jaccard_between_plms to skip the otherwise-discarded B=1000 bootstrap. The
+    # mean/per_query must be identical; only the (unused) ci becomes (nan, nan).
+    rng = np.random.default_rng(1)
+    b = {f"P{i}": rng.normal(size=8).astype(np.float32) for i in range(20)}
+    full = knn_jaccard_between_plms(toy_embeddings_a, b, k=5, distance="cosine", rng=0)
+    fast = knn_jaccard_between_plms(toy_embeddings_a, b, k=5, distance="cosine",
+                                    compute_ci=False)
+    assert fast["mean_jaccard"] == full["mean_jaccard"]
+    assert list(fast["per_query"]["jaccard"]) == list(full["per_query"]["jaccard"])
+    assert np.isnan(fast["ci"][0]) and np.isnan(fast["ci"][1])
+    assert np.isfinite(full["ci"][0])  # default path still computes a real CI
+
+
 def test_jaccard_random_pair_below_one():
     rng = np.random.default_rng(0)
     a = {f"P{i}": rng.normal(size=8).astype(np.float32) for i in range(30)}
@@ -62,8 +90,13 @@ def test_jaccard_intersection_is_query_set(toy_embeddings_a):
     result = knn_jaccard_between_plms(
         smaller, toy_embeddings_a, k=3, distance="cosine"
     )
+    # The query set is the intersection (the 10 ids in `smaller`).
     assert len(result["per_query"]) == 10
-    assert result["mean_jaccard"] < 1.0
+    # `smaller` carries IDENTICAL vectors to the overlap of the full set, so once both
+    # sides rank against the same common cohort (the bug fix), agreement is perfect.
+    # (Pre-fix, the full side's k-NN database spanned all 20 ids — including 10 absent
+    # from `smaller` — which deflated this below 1.0; that asymmetry was the bug.)
+    assert result["mean_jaccard"] == pytest.approx(1.0)
 
 
 def test_jaccard_matrix_shape_and_diagonal(toy_embeddings_a):

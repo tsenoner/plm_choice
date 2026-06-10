@@ -62,7 +62,10 @@ def _knn_sets(
         raise ValueError(
             f"distance={distance!r} not in {list(_SKLEARN_METRIC_MAP)}"
         )
-    ids = list(embeddings.keys())
+    # Sort ids so the fitted matrix row order — and hence sklearn's index-based
+    # tie-break on exact distance ties — is independent of dict insertion order (two
+    # pLM H5s written in different orders would otherwise resolve ties differently).
+    ids = sorted(embeddings.keys())
     matrix = np.stack(
         [np.asarray(embeddings[pid], dtype=np.float32) for pid in ids]
     )
@@ -90,6 +93,7 @@ def knn_jaccard_between_plms(
     k: int = 10,
     distance: DistanceName = "cosine",
     rng: int | np.random.Generator | None = None,
+    compute_ci: bool = True,
 ) -> dict:
     """Per-query Jaccard of k-NN sets between two pLMs.
 
@@ -99,11 +103,17 @@ def knn_jaccard_between_plms(
         k: Number of neighbours per query (default 10).
         distance: Distance metric (same for both pLMs).
         rng: Seed or Generator for the bootstrap CI (reproducibility).
+        compute_ci: If True (default), attach the 95% BCa CI of the mean. The
+            analysis-DAG bridge (``snn_report``) recomputes its own degenerate-honest,
+            seed-reproducible CI from ``per_query`` and passes ``compute_ci=False`` to
+            skip this otherwise-discarded bootstrap (saving ~B resamples per cell over
+            the 105-pair grid). When False, ``ci`` is ``(nan, nan)``.
 
     Returns:
         ``{"mean_jaccard": float, "ci": (low, high), "k": int, "distance": str,
         "per_query": pd.DataFrame[query, jaccard, k_a, k_b]}``. ``ci`` is the
-        95% BCa-bootstrap CI of the mean (B=1000).
+        95% BCa-bootstrap CI of the mean (B=1000), or ``(nan, nan)`` if
+        ``compute_ci=False``.
     """
     common_ids = sorted(set(embeddings_a) & set(embeddings_b))
     if len(common_ids) < 2:
@@ -111,8 +121,17 @@ def knn_jaccard_between_plms(
             f"Need >=2 proteins in both embedding sets (got {len(common_ids)})"
         )
 
-    nn_a = _knn_sets(embeddings_a, common_ids, k, distance)
-    nn_b = _knn_sets(embeddings_b, common_ids, k, distance)
+    # Both pLMs must rank each query against the SAME candidate pool (the common
+    # cohort) for the neighbourhoods to be comparable. Subset both databases to
+    # common_ids BEFORE building either k-NN index — otherwise a capped pLM (e.g.
+    # esm1b, 267/319) ranks against a smaller DB than its peer, so ids only the
+    # larger side has enter the union as guaranteed misses and systematically
+    # DEFLATE the Jaccard (identical embeddings on a 319/267 pair otherwise score
+    # ~0.73 instead of 1.0). This also keeps k_a == k_b (shared cohort size).
+    emb_a_common = {pid: embeddings_a[pid] for pid in common_ids}
+    emb_b_common = {pid: embeddings_b[pid] for pid in common_ids}
+    nn_a = _knn_sets(emb_a_common, common_ids, k, distance)
+    nn_b = _knn_sets(emb_b_common, common_ids, k, distance)
 
     records: list[tuple[str, float, int, int]] = []
     for qid in common_ids:
@@ -127,7 +146,10 @@ def knn_jaccard_between_plms(
     jaccards = per_query_df["jaccard"].to_numpy()
     mean_jacc = float(jaccards.mean())
 
-    ci_low, ci_high = _safe_bootstrap_ci(jaccards, rng=rng)
+    if compute_ci:
+        ci_low, ci_high = _safe_bootstrap_ci(jaccards, rng=rng)
+    else:
+        ci_low, ci_high = float("nan"), float("nan")
 
     return {
         "mean_jaccard": mean_jacc,
