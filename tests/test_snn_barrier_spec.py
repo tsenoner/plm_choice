@@ -251,3 +251,65 @@ def test_cli_orphan_returns_2(tmp_path):
     rc = main(["--sidecar-dir", str(tmp_path), "--pairs", "prott5,esm2",
                "--representations", "raw", "--distances", "cosine", "--out", str(out)])
     assert rc == 2
+
+
+# ── Phase-0 backfill: characterization tests pinning behavior the refactor must preserve ──
+
+def test_unreadable_sidecar_raises(tmp_path):
+    (tmp_path / "snn_prott5__esm2_raw_cosine.manifest.json").mkdir()
+    with pytest.raises(SpecBuildError):
+        build_snn_barrier_spec(tmp_path, pairs=[("prott5", "esm2")],
+                               representations=["raw"], distances=["cosine"])
+
+def test_n_common_bool_rejected(tmp_path):
+    # bool is an int subclass; the guard must reject it. Asserted only by comment today.
+    parquet = tmp_path / "snn_prott5__esm2_raw_cosine.parquet"
+    _write_parquet(parquet, 6)
+    sidecar = tmp_path / "snn_prott5__esm2_raw_cosine.manifest.json"
+    sidecar.write_text(json.dumps({
+        "plm_a": "prott5", "plm_b": "esm2", "n_common": True,
+        "population_n_a": 6, "population_n_b": 6,
+        "per_query_columns": list(SNN_PER_QUERY_COLUMNS), "path": str(parquet),
+    }))
+    with pytest.raises(SpecBuildError, match="n_common"):
+        build_snn_barrier_spec(tmp_path, pairs=[("prott5", "esm2")],
+                               representations=["raw"], distances=["cosine"])
+
+def test_population_n_non_int_rejected(tmp_path):
+    parquet = tmp_path / "snn_prott5__esm2_raw_cosine.parquet"
+    _write_parquet(parquet, 6)
+    sidecar = tmp_path / "snn_prott5__esm2_raw_cosine.manifest.json"
+    sidecar.write_text(json.dumps({
+        "plm_a": "prott5", "plm_b": "esm2", "n_common": 6,
+        "population_n_a": 6.0, "population_n_b": 6,  # float, not int
+        "per_query_columns": list(SNN_PER_QUERY_COLUMNS), "path": str(parquet),
+    }))
+    with pytest.raises(SpecBuildError, match="population_n_a"):
+        build_snn_barrier_spec(tmp_path, pairs=[("prott5", "esm2")],
+                               representations=["raw"], distances=["cosine"])
+
+def test_dedup_pairs_interacts_with_expected_n(tmp_path):
+    # Duplicated pair collapses to 1 unique -> expected_n_pairs=1 passes, =2 fails.
+    _write_cell(tmp_path, "prott5", "esm2", "raw", "cosine")
+    spec = build_snn_barrier_spec(
+        tmp_path, pairs=[("prott5", "esm2"), ("prott5", "esm2")],
+        representations=["raw"], distances=["cosine"], expected_n_pairs=1,
+    )
+    assert spec["_meta"]["n_cells"] == 1
+    with pytest.raises(SpecBuildError, match="expected"):
+        build_snn_barrier_spec(
+            tmp_path, pairs=[("prott5", "esm2"), ("prott5", "esm2")],
+            representations=["raw"], distances=["cosine"], expected_n_pairs=2,
+        )
+
+def test_cli_missing_sidecar_warns_on_stderr(tmp_path, capsys):
+    # SNN had NO CLI-warning test; epilogue extraction would be invisible without it.
+    _write_cell(tmp_path, "prott5", "esm2", "raw", "cosine")  # euclidean absent
+    out = tmp_path / "snn_barrier_spec.json"
+    rc = main(["--sidecar-dir", str(tmp_path), "--pairs", "prott5,esm2",
+               "--representations", "raw", "--distances", "cosine", "euclidean",
+               "--out", str(out)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "no sidecar" in err
+    assert "snn:prott5:esm2:raw:euclidean" in err

@@ -449,3 +449,36 @@ def test_cli_expected_n_plms_mismatch_returns_2(tmp_path):
     ])
     assert rc == 2
     assert not out.exists()
+
+
+# ── Phase-0 backfill: characterization tests pinning behavior the refactor must preserve ──
+
+def test_unreadable_sidecar_raises_specbuilderror(tmp_path):
+    # OSError branch of sidecar read: a DIRECTORY at the manifest path is unreadable as text.
+    (tmp_path / "recall_fp_prott5_raw.manifest.json").mkdir()
+    with pytest.raises(SpecBuildError):
+        build_recall_fp_barrier_spec(tmp_path, plms=["prott5"], representations=["raw"])
+
+def test_write_barrier_spec_emits_indent2_trailing_newline(tmp_path):
+    # Byte-level pin so a refactor that drops indent=2 / trailing "\n" is caught.
+    _write_sidecar(tmp_path, "prott5", "raw")
+    spec = build_recall_fp_barrier_spec(tmp_path, plms=["prott5"], representations=["raw"])
+    target = tmp_path / "barrier_spec.json"
+    write_barrier_spec(spec, target)
+    text = target.read_text()
+    assert text.endswith("\n")
+    assert "\n  " in text  # indent=2 produced indented lines
+
+def test_specbuilderror_match_on_grid_size_orphan_drift(tmp_path):
+    # Backfill match= on recall-side raises so message DRIFT is caught (recall used bare raises).
+    _write_sidecar(tmp_path, "prott5", "raw")
+    with pytest.raises(SpecBuildError, match="expected"):
+        build_recall_fp_barrier_spec(
+            tmp_path, plms=["prott5"], representations=["raw"], expected_n_plms=15
+        )
+    (tmp_path / "recall_fp_esm2_raw_fold.parquet").write_bytes(b"x")
+    with pytest.raises(SpecBuildError, match="orphan"):
+        build_recall_fp_barrier_spec(tmp_path, plms=["esm2"], representations=["raw"])
+    _write_sidecar(tmp_path, "ankh", "raw", per_query_columns=["query_id"])
+    with pytest.raises(SpecBuildError, match="per_query_columns"):
+        build_recall_fp_barrier_spec(tmp_path, plms=["ankh"], representations=["raw"])
