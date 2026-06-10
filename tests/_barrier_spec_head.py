@@ -1,4 +1,6 @@
-"""Fan-in barrier spec-builder for the recall-fp analysis grid (plan v3, B6 wiring).
+"""FROZEN HEAD SNAPSHOT — differential oracle for test_barrier_spec_differential.py. Do not edit; regenerate from git HEAD if the builders change intentionally.
+
+Fan-in barrier spec-builder for the recall-fp analysis grid (plan v3, B6 wiring).
 
 :mod:`evaluation.analysis_barrier` is generic by design — it imports no project
 modules and validates whatever :class:`~evaluation.analysis_barrier.ArtifactSpec`

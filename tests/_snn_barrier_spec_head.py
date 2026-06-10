@@ -1,4 +1,6 @@
-"""Fan-in barrier spec-builder for the cross-pLM SNN grid (pLM-pair x rep x distance).
+"""FROZEN HEAD SNAPSHOT — differential oracle for test_barrier_spec_differential.py. Do not edit; regenerate from git HEAD if the builders change intentionally.
+
+Fan-in barrier spec-builder for the cross-pLM SNN grid (pLM-pair x rep x distance).
 
 The SNN analogue of :mod:`evaluation.barrier_spec`. :mod:`evaluation.analysis_barrier`
 is generic by design — it validates whatever ``ArtifactSpec`` grid the caller hands it.
