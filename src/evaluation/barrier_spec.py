@@ -39,17 +39,20 @@ CLI::
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from evaluation.recall_fp_report import DEFAULT_LEVELS, PARQUET_GUARDS, PER_QUERY_COLUMNS
-from shared.atomic_io import atomic_write
-
-
-class SpecBuildError(Exception):
-    """The recall-fp barrier spec cannot be built (operator/config fault → exit 2)."""
+from evaluation.barrier_spec_base import (  # noqa: F401  (SpecBuildError/write_barrier_spec re-exported)
+    SpecBuildError,
+    check_per_query_columns_drift,
+    dedup,
+    emit_cell,
+    read_sidecar_dict,
+    require_grid_size,
+    write_barrier_spec,
+)
 
 
 def _sidecar_path(sidecar_dir: Path, plm: str, rep: str) -> Path:
@@ -60,32 +63,15 @@ def _canonical_parquet(sidecar_dir: Path, plm: str, rep: str, level: str) -> Pat
     return sidecar_dir / f"recall_fp_{plm}_{rep}_{level}.parquet"
 
 
-def _dedup(seq: Sequence[str]) -> list[str]:
-    """Order-preserving de-duplication (so a duplicated grid axis can't mask a gap)."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in seq:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _load_sidecar(path: Path) -> dict:
-    """Read + fully validate one sidecar manifest. Raises SpecBuildError on any fault.
+    """Read + validate one recall-fp sidecar. Raises SpecBuildError on any fault.
 
-    Validates the whole shape the builder later trusts (the ``levels`` map, each level
-    block being an object with a non-empty string ``path``, and ``per_query_columns``
-    being a list when present) so a malformed-but-present sidecar surfaces as a clean
-    operator fault (exit 2) rather than a ``KeyError``/``TypeError`` traceback downstream.
+    JSON parsing and the top-level object check are delegated to ``read_sidecar_dict``;
+    this validates the recall-fp-specific shape (the ``levels`` map, per-level block
+    objects, non-empty path fields) and then the ``per_query_columns`` drift guard.
     """
-    try:
-        manifest = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        raise SpecBuildError(f"sidecar is not valid JSON: {path}: {e}") from e
-    except OSError as e:
-        raise SpecBuildError(f"sidecar unreadable: {path}: {e}") from e
-    if not isinstance(manifest, dict) or "levels" not in manifest:
+    manifest = read_sidecar_dict(path)
+    if "levels" not in manifest:
         raise SpecBuildError(f"sidecar missing 'levels' object: {path}")
     levels = manifest["levels"]
     if not isinstance(levels, dict):
@@ -98,27 +84,8 @@ def _load_sidecar(path: Path) -> dict:
             raise SpecBuildError(
                 f"sidecar level {lvl!r} has no non-empty string 'path': {path}"
             )
-    # Drift guard: the producing run must agree with our single source of truth for
-    # the parquet column contract, else the transcribed guards would be wrong. A sidecar
-    # that predates the field (cols is None) legitimately skips the check.
-    cols = manifest.get("per_query_columns")
-    if cols is not None and (not isinstance(cols, list) or tuple(cols) != PER_QUERY_COLUMNS):
-        raise SpecBuildError(
-            f"sidecar per_query_columns {cols!r} disagree with the contract "
-            f"{list(PER_QUERY_COLUMNS)} ({path}); task-1/task-2 schema drift."
-        )
+    check_per_query_columns_drift(manifest, PER_QUERY_COLUMNS, path)
     return manifest
-
-
-def _artifact(label: str, path: Path | str, expected_rows: int | None) -> dict:
-    """One ArtifactSpec-shaped dict armed with the shared parquet guard contract."""
-    return {
-        "label": label,
-        "path": str(path),
-        "expected_rows": expected_rows,
-        "kind": "parquet",
-        **{key: list(cols) for key, cols in PARQUET_GUARDS.items()},
-    }
 
 
 def build_recall_fp_barrier_spec(
@@ -172,17 +139,12 @@ def build_recall_fp_barrier_spec(
         malformed / contradicts the column contract.
     """
     sidecar_dir = Path(sidecar_dir)
-    plms = _dedup(plms)
-    representations = _dedup(representations)
-    levels = _dedup(levels)
+    plms = dedup(plms)
+    representations = dedup(representations)
+    levels = dedup(levels)
     if not plms:
         raise SpecBuildError("no pLMs given; the recall-fp grid cannot be empty.")
-    if expected_n_plms is not None and len(plms) != expected_n_plms:
-        raise SpecBuildError(
-            f"grid has {len(plms)} unique pLM(s) but expected {expected_n_plms}; "
-            f"refusing to build a spec over an under/over-specified grid "
-            f"(silent under-coverage guard). plms={plms}"
-        )
+    require_grid_size(plms, expected_n_plms, singular="pLM", plural_key="plms")
 
     artifacts: list[dict] = []
     reconstructed: list[str] = []
@@ -195,29 +157,23 @@ def build_recall_fp_barrier_spec(
                 population[f"{plm}:{rep}"] = manifest.get("population_n")
             for level in levels:
                 label = f"recall_fp:{plm}:{rep}:{level}"
-                if manifest is not None and level in manifest["levels"]:
-                    info = manifest["levels"][level]
-                    path = info["path"]  # sidecar-authoritative
+                covered = manifest is not None and level in manifest["levels"]
+                canonical = _canonical_parquet(sidecar_dir, plm, rep, level)
+
+                # `_lvl=level` freezes the loop var at definition time (Python binds
+                # closure names late); `manifest` is stable across the level loop.
+                def _path_rows(_lvl=level):
+                    info = manifest["levels"][_lvl]
                     rows = info.get("n_queries_with_positives") if use_expected_rows else None
-                else:
-                    # No sidecar (or this level is absent from it). A parquet sitting at
-                    # the canonical name with NO sidecar is an orphan — a stale/partial
-                    # artifact (sidecar is written last, so its absence means the cell
-                    # didn't finish) that the barrier would otherwise pass on shape alone.
-                    # Fail closed rather than reconstruct over it.
-                    canonical = _canonical_parquet(sidecar_dir, plm, rep, level)
-                    if canonical.exists():
-                        raise SpecBuildError(
-                            f"orphan parquet without a sidecar: {canonical} (cell {label}); "
-                            f"a parquet present with no manifest is a stale/partial artifact "
-                            f"— remove it or re-run the cell with --overwrite."
-                        )
-                    # Genuinely-absent cell: emit it so the barrier reports it MISSING
-                    # rather than the gap going unnoticed.
-                    path = canonical
-                    rows = None
+                    return info["path"], rows
+
+                art, recon = emit_cell(
+                    label, covered=covered, get_path_rows=_path_rows,
+                    canonical_parquet=canonical, guards=PARQUET_GUARDS,
+                )
+                artifacts.append(art)
+                if recon:
                     reconstructed.append(label)
-                artifacts.append(_artifact(label, path, rows))
 
     return {
         "artifacts": artifacts,
@@ -228,22 +184,6 @@ def build_recall_fp_barrier_spec(
             "population_n": population,
         },
     }
-
-
-def write_barrier_spec(
-    spec: dict, out_path: Path | str, *, overwrite: bool = True
-) -> Path:
-    """Atomically write the barrier spec JSON; return where it landed.
-
-    The spec is a regenerable build product (rebuilt each DAG submission), so the
-    default is atomic in-place replacement at the canonical path (``overwrite=True``);
-    pass ``overwrite=False`` for a never-clobber timestamped sibling.
-    """
-    return atomic_write(
-        Path(out_path),
-        lambda p: p.write_text(json.dumps(spec, indent=2) + "\n"),
-        mode="replace" if overwrite else "timestamp",
-    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
