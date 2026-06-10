@@ -207,6 +207,13 @@ def recall_at_first_fp_multi_level(
     Every value carries a ``scored`` bool so callers can branch on a guaranteed
     field rather than probing for ``mean_recall_1stFP`` vs ``skipped_reason``.
 
+    Skip detection assumes columns are **all-or-nothing null**: a level is skipped
+    only when ``labels[level].isna().all()``. A *partially*-null level is passed
+    through to :func:`recall_at_first_fp`, whose per-row guard then raises and
+    aborts the sweep (unless an ``is_positive_fn_builder`` is supplied). Real
+    partial-coverage handling (e.g. scoring the labeled subset of a partly
+    annotated family level) is deferred until those labels are acquired (W3).
+
     Parameters
     ----------
     is_positive_fn_builder

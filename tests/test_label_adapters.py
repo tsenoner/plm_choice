@@ -258,3 +258,35 @@ def test_is_positive_fn_null_label_is_false():
 def test_is_positive_fn_unknown_level_raises():
     with pytest.raises(KeyError, match="class"):
         make_cath_is_positive_fn(_labels_frame(), "class")
+
+
+def test_is_positive_fn_is_symmetric():
+    # recall_fp always calls is_positive_fn(query, target); an asymmetric
+    # predicate (e.g. subset instead of intersection) would corrupt scoring.
+    fn = make_cath_is_positive_fn(_labels_frame(), "fold")
+    assert fn("Q", "A") == fn("A", "Q")
+    assert fn("Q", "B") == fn("B", "Q")
+
+
+def test_is_positive_fn_empty_frozenset_is_false():
+    # A hand-built frame with an empty label set shares nothing -> not a positive
+    # (the parser never emits empty sets, but the builder must stay safe).
+    df = pd.DataFrame(
+        {
+            "protein_id": ["Q", "A"],
+            "fold": [frozenset(), frozenset({"d1"})],
+            "superfamily": [frozenset(), frozenset({"s1"})],
+            "family": [None, None],
+        }
+    )
+    fn = make_cath_is_positive_fn(df, "fold")
+    assert fn("Q", "A") is False
+
+
+def test_load_cath_labels_duplicate_topology_collapses_from_disk(tmp_path):
+    # End-to-end: two domains sharing a Topology -> fold collapses to one code,
+    # superfamily keeps both, through the file-read path.
+    p = _write_tsv(tmp_path / "cath.tsv", [("P1", "3.40.50.2300;3.40.50.1000;")])
+    out = load_cath_labels(p)
+    assert out.iloc[0]["fold"] == frozenset({"3.40.50"})
+    assert out.iloc[0]["superfamily"] == frozenset({"3.40.50.2300", "3.40.50.1000"})

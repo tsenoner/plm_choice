@@ -43,9 +43,13 @@ def test_recall_at_first_fp_hand_computable(tiny_db):
     assert result["n_queries_skipped_no_positives"] == 0
     assert result["mean_recall_1stFP"] == pytest.approx(0.6, abs=1e-9)
     per_q = result["per_query"].set_index("query_id")
+    # All five per-query recalls asserted so the 0.6 mean can't be hit by a
+    # compensating swap of two unverified queries.
     assert per_q.loc["P1", "recall"] == pytest.approx(0.5)
+    assert per_q.loc["P2", "recall"] == pytest.approx(0.5)
     assert per_q.loc["P3", "recall"] == pytest.approx(0.0)
     assert per_q.loc["P4", "recall"] == pytest.approx(1.0)
+    assert per_q.loc["P5", "recall"] == pytest.approx(1.0)
     assert per_q.loc["P1", "n_positives"] == 2
 
 
@@ -82,7 +86,7 @@ def test_recall_invalid_distance(tiny_db):
 
 def test_recall_missing_level(tiny_db):
     embeddings, labels = tiny_db
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="class"):
         recall_at_first_fp(embeddings, labels, distance="euclidean", level="class")
 
 
@@ -237,6 +241,25 @@ def test_recall_fails_closed_on_set_valued_level_without_predicate():
         recall_at_first_fp(embeddings, labels, distance="euclidean", level="fold")
 
 
+def test_recall_fails_closed_on_mixed_str_and_set_level():
+    # A column mixing scalar strings and frozensets (e.g. a partial parse or a
+    # concat of two frames) is set-valued enough to be unscorable by scalar ==.
+    embeddings = {
+        "Q": np.array([0.0], dtype=np.float32),
+        "A": np.array([1.0], dtype=np.float32),
+    }
+    labels = pd.DataFrame(
+        {
+            "protein_id": ["Q", "A"],
+            "fold": ["A1", frozenset({"d1"})],
+            "superfamily": ["S1", "S1"],
+            "family": [None, None],
+        }
+    )
+    with pytest.raises(ValueError, match="is_positive_fn"):
+        recall_at_first_fp(embeddings, labels, distance="euclidean", level="fold")
+
+
 def test_recall_null_level_ok_with_predicate():
     # A predicate overrides scalar equality, so a null label column is fine.
     embeddings, labels = _none_family_db()
@@ -290,5 +313,18 @@ def test_multi_level_uses_positive_predicate_builder():
     assert per_q.loc["Q", "n_positives"] == 1
     assert per_q.loc["Q", "recall"] == pytest.approx(1.0)
     assert out["fold"]["scored"] is True
+    assert out["superfamily"]["scored"] is True
     assert out["family"]["scored"] is False
     assert "skipped_reason" in out["family"]
+
+
+def test_multi_level_partial_null_level_raises_without_builder():
+    # Documents the all-or-nothing assumption: multi_level only *skips* a level
+    # that is entirely null (isna().all()). A partially-null level is passed
+    # through and trips recall_at_first_fp's per-row guard, aborting the sweep.
+    # (Real partial-coverage handling is a W3 concern once family labels land.)
+    embeddings, labels = _none_family_db()
+    labels = labels.copy()
+    labels["superfamily"] = ["A1", None, "B1"]
+    with pytest.raises(ValueError, match="superfamily"):
+        recall_at_first_fp_multi_level(embeddings, labels, distance="euclidean")
