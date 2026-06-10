@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -36,10 +35,13 @@ from typing import Iterable, Sequence
 import numpy as np
 import pandas as pd
 
+from evaluation.analysis_io import json_safe as _json_safe
+from evaluation.analysis_io import load_embeddings_h5 as _load_embeddings_h5
+from evaluation.analysis_io import load_frozen_ids as _load_frozen_ids
 from evaluation.label_adapters import load_cath_labels, make_cath_is_positive_fn
 from evaluation.population import PopulationError, assert_population
 from evaluation.recall_fp import recall_at_first_fp
-from evaluation.stats import bca_bootstrap
+from evaluation.stats import bounded_mean_bca_ci
 from shared.atomic_io import atomic_write
 
 # Phase A scores the two CATH levels Gene3D resolves to; family is deferred (W3).
@@ -85,30 +87,16 @@ def _recall_ci(
 ) -> tuple[float, float, bool]:
     """BCa CI for the mean of per-query recalls. Returns ``(lo, hi, degenerate)``.
 
-    The mean recall@first-FP is an *absolute* metric (B=10_000 default per plan B3).
-    ``degenerate`` is True whenever the returned interval is not a genuine 95% bootstrap
-    coverage statement, so the caller can flag it (``ci_degenerate``):
-
-    * fewer than 2 queries → ``(nan, nan, True)`` — no interval is meaningful;
-    * all-identical recalls (e.g. perfect retrieval, every query 1.0) → ``(c, c, True)``
-      — the bootstrap is inapplicable (every resample is the constant), so this is a
-      point, not a coverage interval (scipy would otherwise return NaN);
-    * BCa fails to form a finite interval (degenerate jackknife at tiny/odd n) →
-      ``(nan, nan, True)`` rather than leaking scipy's NaN/garbage into the manifest.
-
-    Otherwise the BCa interval is clipped to ``[0, 1]`` — the statistic is bounded, and
-    BCa can spill past the boundary on skewed data (cf. the ``r2_ci_via_r`` guard).
+    A thin wrapper over the shared :func:`evaluation.stats.bounded_mean_bca_ci` with the
+    unit-range clip ``(0, 1)`` — recall@first-FP is a bounded absolute metric — so the
+    recall arm and the shared CI primitive can never drift apart. The mean recall is an
+    absolute metric (``B=10_000`` default per plan B3). ``degenerate`` flags the cases
+    where the pair is a point, not a 95% coverage interval (perfect/near-degenerate
+    retrieval or too few queries); see the shared helper for the full contract.
     """
-    recalls = np.asarray(recalls, dtype=float)
-    if recalls.size < 2:
-        return float("nan"), float("nan"), True
-    if float(np.ptp(recalls)) == 0.0:
-        c = float(recalls[0])
-        return c, c, True
-    _, lo, hi = bca_bootstrap(recalls, np.mean, B=n_boot, alpha=alpha, rng=rng)
-    if not (math.isfinite(lo) and math.isfinite(hi)):
-        return float("nan"), float("nan"), True
-    return float(min(max(lo, 0.0), 1.0)), float(min(max(hi, 0.0), 1.0)), False
+    return bounded_mean_bca_ci(
+        recalls, n_boot=n_boot, alpha=alpha, rng=rng, clip=(0.0, 1.0)
+    )
 
 
 def recall_fp_report(
@@ -288,64 +276,9 @@ def recall_fp_report(
 
 
 # ── CLI: the analysis-DAG recall-fp step ──────────────────────────────────────
-def _load_embeddings_h5(path: Path | str) -> dict[str, np.ndarray]:
-    """Load a per-protein embedding H5 into ``{protein_id: 1-D np.ndarray}``.
-
-    Each dataset is one protein. A 2-D ``(L, D)`` per-residue dataset is mean-pooled
-    over residues to a protein-level vector (matching
-    :class:`data_preparation.distance_computation`'s loader), so a per-residue H5 is
-    accepted as well as the reduced per-protein H5 the extract step writes.
-    """
-    import h5py
-
-    out: dict[str, np.ndarray] = {}
-    with h5py.File(path, "r") as f:
-        for key in f.keys():
-            arr = np.asarray(f[key][()])  # [()] reads scalar + array datasets alike
-            if arr.ndim > 1:
-                arr = arr.mean(axis=0)  # (L, D) per-residue -> (D,) protein-level
-            out[key] = np.asarray(arr, dtype=np.float32)
-    return out
-
-
-def _json_safe_manifest(manifest: dict) -> dict:
-    """Copy ``manifest`` with non-finite ``mean_recall_1stFP`` rendered as ``None``.
-
-    A level that scores zero queries carries ``mean_recall_1stFP = NaN``. ``json.dumps``
-    would emit the bare token ``NaN`` — accepted by Python's ``json.loads`` but invalid
-    per the JSON spec, so a strict / non-Python reader (the barrier spec-builder) would
-    reject the sidecar. Mapping NaN → ``null`` keeps the sidecar standards-valid; the
-    contract is "null mean == a 0-query level" (also signalled by ``n_scored == 0``).
-    """
-    safe = {**manifest, "levels": {}}
-    for level, info in manifest["levels"].items():
-        info = dict(info)
-        for key in ("mean_recall_1stFP", "ci_lo", "ci_hi"):
-            v = info.get(key)
-            if isinstance(v, float) and not math.isfinite(v):
-                info[key] = None
-        safe["levels"][level] = info
-    return safe
-
-
-def _load_frozen_ids(freeze_path: Path | str) -> list[str]:
-    """Read the committed canonical-set freeze and return its ``ids`` list.
-
-    The freeze (``canonical_set_<name>.json``) is the single source of truth for the
-    analysis population — the caller must pass it rather than reconstruct the id set.
-    Raises ``ValueError`` if the manifest carries no non-empty ``ids`` list (an
-    operator/config fault → CLI exit 2).
-    """
-    data = json.loads(Path(freeze_path).read_text())
-    ids = data.get("ids") if isinstance(data, dict) else None
-    if not isinstance(ids, list) or not ids:
-        raise ValueError(
-            f"freeze {freeze_path} has no non-empty 'ids' list; pass the committed "
-            f"canonical_set_<name>.json"
-        )
-    return ids
-
-
+# The H5/freeze loaders and the JSON-safe serialiser are the shared analysis_io
+# primitives (imported above as _load_embeddings_h5 / _load_frozen_ids / _json_safe)
+# so every arm subsets, asserts, and serialises identically.
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI wrapper: score one (pLM, representation) recall-fp cell + write the sidecar.
 
@@ -451,7 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sidecar = Path(args.out_dir) / f"recall_fp_{args.plm}_{args.representation}.manifest.json"
     written = atomic_write(
         sidecar,
-        lambda p: p.write_text(json.dumps(_json_safe_manifest(manifest), indent=2) + "\n"),
+        lambda p: p.write_text(json.dumps(_json_safe(manifest), indent=2) + "\n"),
         mode="replace" if overwrite else "timestamp",
     )
     print(f"recall_fp_report: {args.plm}/{args.representation} (n={manifest['population_n']}) "

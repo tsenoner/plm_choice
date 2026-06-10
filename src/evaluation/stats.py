@@ -25,6 +25,7 @@ Design rules:
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable
 
 import numpy as np
@@ -116,6 +117,80 @@ def bca_bootstrap(
     point = float(statistic(data_arr))
     ci = result.confidence_interval
     return point, float(ci.low), float(ci.high)
+
+
+# Below this many observations a BCa CI is not defensible: the jackknife acceleration
+# is chronically singular and scipy returns a coverage-free interval that is just the
+# data's (min, max) — reported, misleadingly, as a 95% CI. Flag those degenerate. The
+# real analysis cells are full cohorts (n ~ 260-319), so this floor never fires there;
+# it guards sparse/stratified cells a future arm might produce.
+MIN_BOOTSTRAP_N = 4
+
+# Data whose spread is this small relative to its scale is effectively constant: the BCa
+# acceleration jackknife denominator (sum of cubed deviations)^1.5 underflows toward 0 and
+# the interval is garbage. Treat as a degenerate point. For the real per-row metrics
+# (recall/Jaccard are discrete rationals) per-query values are either equal or differ by
+# >= 1/(2k), so this only ever fires on exactly-constant data there; it additionally guards
+# continuous-valued future metrics. Subsumes the exact-constant (spread == 0) case.
+_NEAR_CONSTANT_RTOL = 1e-6
+
+
+def bounded_mean_bca_ci(
+    values: np.ndarray,
+    *,
+    n_boot: int = 10_000,
+    alpha: float = 0.05,
+    rng: int | np.random.Generator | None = None,
+    clip: tuple[float, float] | None = (0.0, 1.0),
+) -> tuple[float, float, bool]:
+    """Degenerate-honest BCa CI for the *mean* of a bounded per-row metric.
+
+    The shared CI primitive for every absolute mean-of-per-row statistic in the
+    analysis DAG — recall@first-FP, SNN per-query Jaccard, AAC-floor recall — so the
+    "degenerate is a point not an interval" and "clip to the statistic's range" rules
+    live in exactly one place (this was first written privately as
+    ``recall_fp_report._recall_ci``).
+
+    Returns ``(lo, hi, degenerate)``. ``degenerate`` is True whenever the returned
+    pair is NOT a genuine ``1 - alpha`` bootstrap coverage statement:
+
+    * fewer than ``MIN_BOOTSTRAP_N`` (=4) values → ``(nan, nan, True)`` — at n=2/3 BCa
+      degenerates to the data range, a coverage-free interval, so no CI is reported;
+    * exactly- or near-constant values (e.g. perfect retrieval, every query 1.0; spread
+      negligible relative to scale) → ``(mean, mean, True)`` — every resample is ~the
+      constant, so the bootstrap is inapplicable and this is a point (scipy's BCa
+      acceleration jackknife is singular and would return NaN or coverage-free garbage);
+    * BCa fails to form a finite interval → ``(nan, nan, True)`` rather than passing
+      scipy's NaN through as if it were real.
+
+    Otherwise the BCa interval is clipped to ``clip`` (default ``(0.0, 1.0)`` for a
+    unit-range metric; pass ``clip=None`` to disable, or a custom ``(lo, hi)`` for a
+    different range such as a correlation in ``[-1, 1]``) — BCa can spill past a
+    boundary on skewed data (cf. ``r2_ci_via_r``).
+
+    Raises ``ValueError`` if ``clip`` is given with ``clip[0] > clip[1]`` (a transposed
+    bound would silently collapse every result to a single value).
+    """
+    if clip is not None and clip[0] > clip[1]:
+        raise ValueError(f"clip lower bound {clip[0]} > upper bound {clip[1]}")
+    arr = np.asarray(values, dtype=float)
+    if arr.size < MIN_BOOTSTRAP_N:
+        return float("nan"), float("nan"), True
+    # Exactly- or near-constant data -> degenerate point (the bootstrap is inapplicable;
+    # its acceleration jackknife is singular). Return the mean as the point estimate.
+    spread = float(np.ptp(arr))
+    scale = max(1.0, float(np.max(np.abs(arr))))
+    if spread <= _NEAR_CONSTANT_RTOL * scale:
+        c = float(np.mean(arr))
+        return c, c, True
+    _, lo, hi = bca_bootstrap(arr, np.mean, B=n_boot, alpha=alpha, rng=rng)
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return float("nan"), float("nan"), True
+    if clip is not None:
+        lo_b, hi_b = clip
+        lo = min(max(lo, lo_b), hi_b)
+        hi = min(max(hi, lo_b), hi_b)
+    return float(lo), float(hi), False
 
 
 def r2_ci_via_r(
