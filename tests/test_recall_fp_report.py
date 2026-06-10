@@ -503,6 +503,137 @@ def test_cli_multidomain_set_intersection_through_bridge(tmp_path):
     assert fold["mean_recall_1stFP"] == pytest.approx(1.0)
 
 
+# ── BCa CIs on mean recall@first-FP ─────────────────────────────────────────────
+import math
+
+from evaluation.recall_fp_report import _recall_ci
+
+
+def test_recall_ci_brackets_mean_and_is_reproducible():
+    data = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0])  # mean 0.5, varies
+    lo1, hi1, deg1 = _recall_ci(data, n_boot=500, alpha=0.05, rng=np.random.default_rng(42))
+    lo2, hi2, deg2 = _recall_ci(data, n_boot=500, alpha=0.05, rng=np.random.default_rng(42))
+    assert (lo1, hi1) == (lo2, hi2)        # same seed -> byte-identical interval
+    assert not deg1 and not deg2           # a genuine (non-degenerate) interval
+    assert 0.0 <= lo1 < hi1 <= 1.0         # a real, ordered interval within [0, 1]
+    assert lo1 <= 0.5 <= hi1               # brackets the mean
+
+
+def test_recall_ci_realistic_n_is_finite_and_bounded():
+    # production cells are ~283 queries; confirm BCa yields a finite, ordered,
+    # in-bounds interval at realistic n (the small-n tests don't prove this).
+    rng_data = np.random.default_rng(0)
+    data = (rng_data.random(283) < 0.5).astype(float)  # ~half 0, half 1
+    lo, hi, deg = _recall_ci(data, n_boot=2000, alpha=0.05, rng=np.random.default_rng(1))
+    assert not deg
+    assert 0.0 <= lo < hi <= 1.0
+
+
+def test_recall_ci_alpha_widens_interval():
+    # a smaller alpha (higher confidence) must give a wider interval.
+    data = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0])
+    lo95, hi95, _ = _recall_ci(data, n_boot=1500, alpha=0.05, rng=np.random.default_rng(3))
+    lo80, hi80, _ = _recall_ci(data, n_boot=1500, alpha=0.20, rng=np.random.default_rng(3))
+    assert (hi95 - lo95) > (hi80 - lo80)
+
+
+def test_recall_ci_constant_is_zero_width_not_nan():
+    # perfect retrieval (every query 1.0) -> degenerate; scipy BCa would NaN, we
+    # return the honest 0-width interval (flagged) without invoking the bootstrap.
+    lo, hi, deg = _recall_ci(np.array([1.0, 1.0, 1.0, 1.0]), n_boot=500, alpha=0.05,
+                             rng=np.random.default_rng(0))
+    assert (lo, hi) == (1.0, 1.0) and deg is True
+
+
+def test_recall_ci_too_few_queries_is_nan():
+    lo, hi, deg = _recall_ci(np.array([1.0]), n_boot=500, alpha=0.05,
+                             rng=np.random.default_rng(0))
+    assert math.isnan(lo) and math.isnan(hi) and deg is True
+
+
+def test_report_manifest_carries_ci_and_provenance(tmp_path):
+    emb, labels = _db()
+    m = recall_fp_report(
+        emb, labels, tmp_path, pLM="prott5",
+        expected_ids=["P1", "P2", "P3", "P4"], distance="euclidean",
+        n_boot=500, ci_alpha=0.05, seed=42,
+    )
+    assert m["ci_alpha"] == 0.05 and m["n_boot"] == 500 and m["seed"] == 42
+    # CI provenance is recorded so a caption can't mis-present the interval.
+    assert m["ci_resample_unit"] == "query"
+    assert "BCa" in m["ci_method"]
+    assert "not i.i.d." in m["ci_note"].lower() or "not i.i.d" in m["ci_note"]
+    fold = m["levels"]["fold"]
+    # clean _db retrieval -> recall all 1.0 -> degenerate 0-width CI, flagged, not a crash
+    assert fold["ci_lo"] == 1.0 and fold["ci_hi"] == 1.0
+    assert fold["ci_degenerate"] is True
+
+
+def test_report_ci_reproducible_on_varying_recall(tmp_path):
+    # imperfect retrieval: P3 (fold B) intrudes between the fold-A pair, so some
+    # per-query recalls are 0 and some 1 -> a non-degenerate CI. Same seed must
+    # reproduce it exactly (NEW-2 twice-run-identity / reproducible CIs).
+    emb = {
+        "P1": np.array([0.0, 0.0], dtype=np.float32),
+        "P2": np.array([0.5, 0.0], dtype=np.float32),
+        "P3": np.array([0.7, 0.0], dtype=np.float32),
+        "P4": np.array([10.0, 0.0], dtype=np.float32),
+    }
+    labels = pd.DataFrame({
+        "protein_id": ["P1", "P2", "P3", "P4"],
+        "fold": [frozenset({"A"}), frozenset({"A"}), frozenset({"B"}), frozenset({"B"})],
+        "superfamily": [frozenset({"A1"}), frozenset({"A1"}),
+                        frozenset({"B1"}), frozenset({"B1"})],
+        "family": [None, None, None, None],
+    })
+    kw = dict(pLM="prott5", expected_ids=["P1", "P2", "P3", "P4"],
+              distance="euclidean", n_boot=800, seed=7)
+    a = recall_fp_report(emb, labels, tmp_path / "a", **kw)
+    b = recall_fp_report(emb, labels, tmp_path / "b", **kw)
+    fa, fb = a["levels"]["fold"], b["levels"]["fold"]
+    assert fa["ci_degenerate"] is False                             # geometry varies -> real CI
+    assert (fa["ci_lo"], fa["ci_hi"]) == (fb["ci_lo"], fb["ci_hi"])  # reproducible
+    assert math.isfinite(fa["ci_lo"]) and math.isfinite(fa["ci_hi"])
+    assert fa["ci_lo"] <= fa["ci_hi"]
+
+
+def test_cli_ci_reproducible_through_main_on_varying_recall(tmp_path):
+    # End-to-end: --seed through main() reproduces a NON-degenerate interval (the
+    # other CLI CI test only exercises the 0-width shortcut, which never touches the RNG).
+    emb = {
+        "P1": np.array([0.0, 0.0], dtype=np.float32),
+        "P2": np.array([0.5, 0.0], dtype=np.float32),
+        "P3": np.array([0.7, 0.0], dtype=np.float32),  # fold-B intruder near fold-A pair
+        "P4": np.array([10.0, 0.0], dtype=np.float32),
+    }
+    h5 = tmp_path / "prott5.h5"
+    _write_h5(h5, emb)
+    tsv = tmp_path / "cath.tsv"
+    _write_cath_tsv(
+        tsv,
+        {"P1": "3.30.70.10", "P2": "3.30.70.10", "P3": "1.10.10.10", "P4": "1.10.10.10"},
+    )
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ["P1", "P2", "P3", "P4"])
+    out1, out2 = tmp_path / "o1", tmp_path / "o2"
+    extra = ("--n-boot", "800", "--seed", "7")
+    assert main(_argv(h5, tsv, freeze, out1, extra=extra)) == 0
+    assert main(_argv(h5, tsv, freeze, out2, extra=extra)) == 0
+    f1 = json.loads((out1 / "recall_fp_prott5_raw.manifest.json").read_text())["levels"]["fold"]
+    f2 = json.loads((out2 / "recall_fp_prott5_raw.manifest.json").read_text())["levels"]["fold"]
+    assert f1["ci_degenerate"] is False  # imperfect retrieval -> a genuine interval
+    assert (f1["ci_lo"], f1["ci_hi"]) == (f2["ci_lo"], f2["ci_hi"])  # seed reproduces via CLI
+
+
+def test_cli_sidecar_carries_ci(tmp_path):
+    h5, tsv, freeze, out = _cli_inputs(tmp_path)
+    assert main(_argv(h5, tsv, freeze, out) + ["--n-boot", "500", "--seed", "42"]) == 0
+    fold = json.loads((out / "recall_fp_prott5_raw.manifest.json").read_text())[
+        "levels"
+    ]["fold"]
+    assert fold["ci_lo"] == 1.0 and fold["ci_hi"] == 1.0  # clean -> 0-width
+
+
 def test_cli_parquet_passes_the_real_barrier(tmp_path):
     # The CLI is the path that gets barrier-validated in production, and it differs
     # from the direct recall_fp_report() call (it loads from H5 + TSV + freeze).
@@ -559,6 +690,7 @@ def test_cli_zero_positive_level_emits_0row_parquet_and_null_mean(tmp_path):
     fold = manifest["levels"]["fold"]
     assert fold["n_queries_with_positives"] == 0
     assert fold["mean_recall_1stFP"] is None  # NaN -> null
+    assert fold["ci_lo"] is None and fold["ci_hi"] is None  # no CI on 0 queries
     # the parquet exists and has zero rows (the barrier rejects it by design)
     df = pd.read_parquet(fold["path"])
     assert len(df) == 0

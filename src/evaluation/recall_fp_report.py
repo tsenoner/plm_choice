@@ -39,6 +39,7 @@ import pandas as pd
 from evaluation.label_adapters import load_cath_labels, make_cath_is_positive_fn
 from evaluation.population import PopulationError, assert_population
 from evaluation.recall_fp import recall_at_first_fp
+from evaluation.stats import bca_bootstrap
 from shared.atomic_io import atomic_write
 
 # Phase A scores the two CATH levels Gene3D resolves to; family is deferred (W3).
@@ -62,6 +63,53 @@ PARQUET_GUARDS: dict[str, tuple[str, ...]] = {
     "finite_columns": ("recall",),
 }
 
+# CI provenance — written into every manifest so a figure caption never presents the
+# interval as something it isn't. The recall CI is a bootstrap over QUERIES: every query
+# is ranked against the same shared retrieval DB, so the per-query recalls are NOT i.i.d.
+# (a query is also a DB entry for the others). The interval captures query-sampling
+# variability only; it does not propagate embedding/DB uncertainty. (Same caveat the plan
+# attaches to the SNN CI.)
+CI_METHOD = "BCa bootstrap, query-level resample"
+CI_RESAMPLE_UNIT = "query"
+CI_NOTE = (
+    "Query-level bootstrap: captures query-sampling variability only. Per-query recalls "
+    "are NOT i.i.d. (all queries share one retrieval DB), and the interval does not "
+    "propagate embedding/DB uncertainty. A 0-width interval with ci_degenerate=true marks "
+    "all-identical per-query recall (e.g. perfect retrieval), where the bootstrap is "
+    "inapplicable — it is a point, not a 95% coverage statement."
+)
+
+
+def _recall_ci(
+    recalls: np.ndarray, *, n_boot: int, alpha: float, rng
+) -> tuple[float, float, bool]:
+    """BCa CI for the mean of per-query recalls. Returns ``(lo, hi, degenerate)``.
+
+    The mean recall@first-FP is an *absolute* metric (B=10_000 default per plan B3).
+    ``degenerate`` is True whenever the returned interval is not a genuine 95% bootstrap
+    coverage statement, so the caller can flag it (``ci_degenerate``):
+
+    * fewer than 2 queries → ``(nan, nan, True)`` — no interval is meaningful;
+    * all-identical recalls (e.g. perfect retrieval, every query 1.0) → ``(c, c, True)``
+      — the bootstrap is inapplicable (every resample is the constant), so this is a
+      point, not a coverage interval (scipy would otherwise return NaN);
+    * BCa fails to form a finite interval (degenerate jackknife at tiny/odd n) →
+      ``(nan, nan, True)`` rather than leaking scipy's NaN/garbage into the manifest.
+
+    Otherwise the BCa interval is clipped to ``[0, 1]`` — the statistic is bounded, and
+    BCa can spill past the boundary on skewed data (cf. the ``r2_ci_via_r`` guard).
+    """
+    recalls = np.asarray(recalls, dtype=float)
+    if recalls.size < 2:
+        return float("nan"), float("nan"), True
+    if float(np.ptp(recalls)) == 0.0:
+        c = float(recalls[0])
+        return c, c, True
+    _, lo, hi = bca_bootstrap(recalls, np.mean, B=n_boot, alpha=alpha, rng=rng)
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return float("nan"), float("nan"), True
+    return float(min(max(lo, 0.0), 1.0)), float(min(max(hi, 0.0), 1.0)), False
+
 
 def recall_fp_report(
     embeddings: dict[str, np.ndarray],
@@ -75,6 +123,9 @@ def recall_fp_report(
     levels: Sequence[str] = DEFAULT_LEVELS,
     allow_capped: bool = False,
     overwrite: bool = True,
+    n_boot: int = 10_000,
+    ci_alpha: float = 0.05,
+    seed: int | None = None,
 ) -> dict:
     """Score recall-at-first-FP for one pLM and write a parquet per CATH level.
 
@@ -122,20 +173,32 @@ def recall_fp_report(
         timestamped sibling would leave the barrier checking the stale file and
         ``needs_rebuild`` unsatisfiable. Set False only for ad-hoc never-clobber.
 
+    n_boot, ci_alpha, seed
+        BCa bootstrap CI controls for the per-level mean recall (an absolute metric →
+        ``B=10_000`` default per plan B3; ``ci_alpha=0.05`` → 95%). ``seed`` makes the
+        CIs byte-reproducible (NEW-2); each level draws an independent stream via
+        ``SeedSequence.spawn``.
+
     Returns
     -------
     dict
-        ``{"pLM", "representation", "distance", "population_n", "levels":
-        {level: {"path", "n_queries_with_positives",
-        "n_queries_skipped_no_positives", "n_scored", "mean_recall_1stFP"}}}``.
+        ``{"pLM", "representation", "distance", "population_n", "ci_alpha", "n_boot",
+        "seed", "ci_method", "ci_resample_unit", "ci_note", "per_query_columns",
+        "levels": {level: {"path", "n_queries_with_positives",
+        "n_queries_skipped_no_positives", "n_scored", "mean_recall_1stFP", "ci_lo",
+        "ci_hi", "ci_degenerate"}}}``.
         ``population_n`` is the asserted embedding cohort (post-subset);
         ``n_scored`` is the queries actually ranked at that level (cohort ∩
         labelled), which can be smaller when some canonical proteins lack a CATH
-        label. The spec-builder sets each cell's barrier ``expected_rows`` from
-        ``n_queries_with_positives`` (or leaves it ``None`` and relies on the
-        barrier's 0-row + unique/non-null/finite guards). A level that scores
-        zero queries emits a 0-row parquet (the barrier rejects it — intentional)
-        and a NaN ``mean_recall_1stFP``.
+        label. ``(ci_lo, ci_hi)`` is the BCa CI on ``mean_recall_1stFP`` — a
+        *query-level resample* (see ``ci_note``: NOT i.i.d., DB-uncertainty-blind);
+        ``ci_degenerate`` is True when that interval is a point, not a coverage
+        statement (perfect/near-degenerate retrieval or too few queries — then the
+        CI bounds are the point value or NaN). The spec-builder sets each cell's
+        barrier ``expected_rows`` from ``n_queries_with_positives`` (or leaves it
+        ``None`` and relies on the barrier's 0-row + unique/non-null/finite guards).
+        A level that scores zero queries emits a 0-row parquet (the barrier rejects
+        it — intentional) with a NaN ``mean_recall_1stFP`` and NaN CI bounds.
 
     Raises
     ------
@@ -162,17 +225,28 @@ def recall_fp_report(
         )
 
     mode = "replace" if overwrite else "timestamp"
+    # Independent, seed-reproducible bootstrap stream per level (NEW-2 seed gate):
+    # SeedSequence.spawn gives genuinely independent child generators (not consecutive
+    # slices of one stream), reproducible given `seed`. seed=None -> fresh randomness.
+    level_seeds = np.random.SeedSequence(seed).spawn(len(levels))
     out: dict = {
         "pLM": pLM,
         "representation": representation,
         "distance": distance,
         "population_n": len(embeddings),
+        # CI provenance so a re-run is byte-reproducible and the legend is auditable.
+        "ci_alpha": ci_alpha,
+        "n_boot": n_boot,
+        "seed": seed,
+        "ci_method": CI_METHOD,
+        "ci_resample_unit": CI_RESAMPLE_UNIT,
+        "ci_note": CI_NOTE,
         # The per-query parquet schema, surfaced so the barrier spec-builder transcribes
         # the column contract from the artifact's own manifest (see PARQUET_GUARDS).
         "per_query_columns": list(PER_QUERY_COLUMNS),
         "levels": {},
     }
-    for level in levels:
+    for level, level_seed in zip(levels, level_seeds):
         is_pos = make_cath_is_positive_fn(labels, level)
         result = recall_at_first_fp(
             embeddings,
@@ -183,6 +257,12 @@ def recall_fp_report(
             is_positive_fn=is_pos,
         )
         per_query: pd.DataFrame = result["per_query"]
+        ci_lo, ci_hi, ci_degenerate = _recall_ci(
+            per_query["recall"].to_numpy(),
+            n_boot=n_boot,
+            alpha=ci_alpha,
+            rng=np.random.default_rng(level_seed),
+        )
         target = out_dir / f"recall_fp_{pLM}_{representation}_{level}.parquet"
         written = atomic_write(
             target,
@@ -200,6 +280,9 @@ def recall_fp_report(
                 + result["n_queries_skipped_no_positives"]
             ),
             "mean_recall_1stFP": result["mean_recall_1stFP"],
+            "ci_lo": ci_lo,
+            "ci_hi": ci_hi,
+            "ci_degenerate": ci_degenerate,
         }
     return out
 
@@ -237,9 +320,10 @@ def _json_safe_manifest(manifest: dict) -> dict:
     safe = {**manifest, "levels": {}}
     for level, info in manifest["levels"].items():
         info = dict(info)
-        m = info.get("mean_recall_1stFP")
-        if isinstance(m, float) and not math.isfinite(m):
-            info["mean_recall_1stFP"] = None
+        for key in ("mean_recall_1stFP", "ci_lo", "ci_hi"):
+            v = info.get(key)
+            if isinstance(v, float) and not math.isfinite(v):
+                info[key] = None
         safe["levels"][level] = info
     return safe
 
@@ -315,6 +399,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Permit a strict subset of the frozen set (an arch-capped pLM, e.g. esm1b).",
     )
+    ap.add_argument(
+        "--seed", type=int, default=42,
+        help="RNG seed for the BCa bootstrap CIs (default 42; fixes a reproducible interval).",
+    )
+    ap.add_argument(
+        "--n-boot", type=int, default=10_000,
+        help="BCa bootstrap resamples for the recall CIs (default 10000; absolute-metric rule).",
+    )
+    ap.add_argument(
+        "--ci-alpha", type=float, default=0.05,
+        help="Two-sided CI coverage error (default 0.05 -> 95%% CI).",
+    )
     args = ap.parse_args(argv)
 
     # DAG artifacts always replace in place at the barrier's fixed spec path — a
@@ -337,6 +433,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             levels=args.levels,
             allow_capped=args.allow_capped,
             overwrite=overwrite,
+            n_boot=args.n_boot,
+            ci_alpha=args.ci_alpha,
+            seed=args.seed,
         )
     except PopulationError as e:
         print(f"recall_fp_report: POPULATION DRIFT: {e}", file=sys.stderr, flush=True)
@@ -360,7 +459,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for level, info in manifest["levels"].items():
         print(
             f"  {level}: n_scored={info['n_scored']} "
-            f"mean_recall_1stFP={info['mean_recall_1stFP']}",
+            f"mean_recall_1stFP={info['mean_recall_1stFP']} "
+            f"[{info['ci_lo']}, {info['ci_hi']}]",
             flush=True,
         )
     return 0
