@@ -26,19 +26,41 @@ parquet contract validates.
 """
 from __future__ import annotations
 
+import argparse
+import json
+import math
+import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 
-from evaluation.label_adapters import make_cath_is_positive_fn
-from evaluation.population import assert_population
+from evaluation.label_adapters import load_cath_labels, make_cath_is_positive_fn
+from evaluation.population import PopulationError, assert_population
 from evaluation.recall_fp import recall_at_first_fp
 from shared.atomic_io import atomic_write
 
 # Phase A scores the two CATH levels Gene3D resolves to; family is deferred (W3).
 DEFAULT_LEVELS: tuple[str, ...] = ("fold", "superfamily")
+
+# The per-query parquet schema + the fan-in barrier guard semantics, as ONE source of
+# truth. The barrier spec-builder (analysis-DAG wiring) arms each cell's ``ArtifactSpec``
+# from here rather than re-deriving the column contract — so the "lenient CLI, strict
+# barrier" division of labour cannot drift apart (a scrambled write, an all-NaN ``recall``
+# column, or duplicate ``query_id`` is only caught if these guards are actually wired).
+PER_QUERY_COLUMNS: tuple[str, ...] = (
+    "query_id",
+    "n_positives",
+    "recall",
+    "n_ties_at_first_fp",
+)
+PARQUET_GUARDS: dict[str, tuple[str, ...]] = {
+    "required_columns": PER_QUERY_COLUMNS,
+    "unique_columns": ("query_id",),
+    "non_null_columns": ("query_id",),
+    "finite_columns": ("recall",),
+}
 
 
 def recall_fp_report(
@@ -127,6 +149,17 @@ def recall_fp_report(
     embeddings = {k: v for k, v in embeddings.items() if k in exp}
     # S3: assert BEFORE scoring so a drifted cell fails loudly, not silently.
     assert_population(embeddings.keys(), exp, name=pLM, allow_capped=allow_capped)
+    # Reject a corrupt/degenerate embedding set (NaN/Inf) before scoring. The
+    # per-query parquet's finite(recall) guard only catches non-finiteness that
+    # propagates into the recall scalar; a NaN/Inf vector can still yield a
+    # finite-but-meaningless recall (e.g. under euclidean) the barrier would pass —
+    # exactly the B7 "valid-looking but degenerate artifact" hazard, on the input side.
+    nonfinite = sorted(k for k, v in embeddings.items() if not np.all(np.isfinite(v)))
+    if nonfinite:
+        raise ValueError(
+            f"{len(nonfinite)} embedding(s) for {pLM} contain non-finite values "
+            f"(NaN/Inf), e.g. {nonfinite[:5]}; refusing to score a degenerate set."
+        )
 
     mode = "replace" if overwrite else "timestamp"
     out: dict = {
@@ -134,6 +167,9 @@ def recall_fp_report(
         "representation": representation,
         "distance": distance,
         "population_n": len(embeddings),
+        # The per-query parquet schema, surfaced so the barrier spec-builder transcribes
+        # the column contract from the artifact's own manifest (see PARQUET_GUARDS).
+        "per_query_columns": list(PER_QUERY_COLUMNS),
         "levels": {},
     }
     for level in levels:
@@ -166,3 +202,169 @@ def recall_fp_report(
             "mean_recall_1stFP": result["mean_recall_1stFP"],
         }
     return out
+
+
+# ── CLI: the analysis-DAG recall-fp step ──────────────────────────────────────
+def _load_embeddings_h5(path: Path | str) -> dict[str, np.ndarray]:
+    """Load a per-protein embedding H5 into ``{protein_id: 1-D np.ndarray}``.
+
+    Each dataset is one protein. A 2-D ``(L, D)`` per-residue dataset is mean-pooled
+    over residues to a protein-level vector (matching
+    :class:`data_preparation.distance_computation`'s loader), so a per-residue H5 is
+    accepted as well as the reduced per-protein H5 the extract step writes.
+    """
+    import h5py
+
+    out: dict[str, np.ndarray] = {}
+    with h5py.File(path, "r") as f:
+        for key in f.keys():
+            arr = np.asarray(f[key][()])  # [()] reads scalar + array datasets alike
+            if arr.ndim > 1:
+                arr = arr.mean(axis=0)  # (L, D) per-residue -> (D,) protein-level
+            out[key] = np.asarray(arr, dtype=np.float32)
+    return out
+
+
+def _json_safe_manifest(manifest: dict) -> dict:
+    """Copy ``manifest`` with non-finite ``mean_recall_1stFP`` rendered as ``None``.
+
+    A level that scores zero queries carries ``mean_recall_1stFP = NaN``. ``json.dumps``
+    would emit the bare token ``NaN`` — accepted by Python's ``json.loads`` but invalid
+    per the JSON spec, so a strict / non-Python reader (the barrier spec-builder) would
+    reject the sidecar. Mapping NaN → ``null`` keeps the sidecar standards-valid; the
+    contract is "null mean == a 0-query level" (also signalled by ``n_scored == 0``).
+    """
+    safe = {**manifest, "levels": {}}
+    for level, info in manifest["levels"].items():
+        info = dict(info)
+        m = info.get("mean_recall_1stFP")
+        if isinstance(m, float) and not math.isfinite(m):
+            info["mean_recall_1stFP"] = None
+        safe["levels"][level] = info
+    return safe
+
+
+def _load_frozen_ids(freeze_path: Path | str) -> list[str]:
+    """Read the committed canonical-set freeze and return its ``ids`` list.
+
+    The freeze (``canonical_set_<name>.json``) is the single source of truth for the
+    analysis population — the caller must pass it rather than reconstruct the id set.
+    Raises ``ValueError`` if the manifest carries no non-empty ``ids`` list (an
+    operator/config fault → CLI exit 2).
+    """
+    data = json.loads(Path(freeze_path).read_text())
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise ValueError(
+            f"freeze {freeze_path} has no non-empty 'ids' list; pass the committed "
+            f"canonical_set_<name>.json"
+        )
+    return ids
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI wrapper: score one (pLM, representation) recall-fp cell + write the sidecar.
+
+    Loads the pLM embedding H5, the cath_labels TSV, and the committed canonical-set
+    freeze, calls :func:`recall_fp_report` (which writes the per-level parquets), then
+    persists the returned manifest as a sidecar JSON — the report itself deliberately
+    does NOT write the sidecar; that is this wrapper's job (the barrier spec-builder
+    reads it). Exit codes mirror the other DAG mains (:mod:`evaluation.verify_analysis`,
+    :mod:`evaluation.analysis_barrier`):
+
+    * ``0`` — scored and wrote the parquets + sidecar.
+    * ``1`` — population drift (a pLM silently missing frozen ids, not flagged capped):
+      a *data* failure; nothing is written.
+    * ``2`` — operator/config fault (missing input file, malformed freeze, bad column).
+    """
+    ap = argparse.ArgumentParser(
+        prog="recall_fp_report",
+        description="Score recall-at-first-FP for one pLM against the frozen canonical "
+        "set (Topology/SF) and write a per-level parquet + a manifest sidecar JSON.",
+    )
+    ap.add_argument("--plm", required=True, help="pLM name (used in filenames + manifest).")
+    ap.add_argument("--emb-h5", required=True, help="Per-protein embedding H5 for this pLM.")
+    ap.add_argument("--cath-tsv", required=True, help="cath_labels TSV (UniProt Gene3D export).")
+    ap.add_argument(
+        "--freeze",
+        required=True,
+        help="Committed canonical-set freeze JSON; its 'ids' are the expected population.",
+    )
+    ap.add_argument("--out-dir", required=True, help="Directory for the parquets + sidecar.")
+    ap.add_argument(
+        "--distance",
+        required=True,
+        choices=("cosine", "euclidean", "manhattan"),
+        help="Retrieval metric (required — the data-prep pipeline uses euclidean).",
+    )
+    ap.add_argument(
+        "--representation",
+        default="raw",
+        help="Representation axis (default raw); part of the filenames so raw/ffn don't collide.",
+    )
+    ap.add_argument(
+        "--levels",
+        nargs="+",
+        choices=("fold", "superfamily", "family"),
+        default=list(DEFAULT_LEVELS),
+        help=f"CATH levels to score (default {' '.join(DEFAULT_LEVELS)}; family deferred, W3 — "
+        "passing it yields a barrier-rejected 0-row parquet, never a fabricated positive).",
+    )
+    ap.add_argument(
+        "--allow-capped",
+        action="store_true",
+        help="Permit a strict subset of the frozen set (an arch-capped pLM, e.g. esm1b).",
+    )
+    args = ap.parse_args(argv)
+
+    # DAG artifacts always replace in place at the barrier's fixed spec path — a
+    # timestamped sibling would orphan the fresh result where the barrier never looks
+    # (and desync the sidecar the spec-builder reads). The library recall_fp_report(...)
+    # still exposes overwrite= for ad-hoc never-clobber use; the CLI does not.
+    overwrite = True
+    try:
+        embeddings = _load_embeddings_h5(args.emb_h5)
+        labels = load_cath_labels(args.cath_tsv)
+        expected_ids = _load_frozen_ids(args.freeze)
+        manifest = recall_fp_report(
+            embeddings,
+            labels,
+            args.out_dir,
+            pLM=args.plm,
+            expected_ids=expected_ids,
+            distance=args.distance,
+            representation=args.representation,
+            levels=args.levels,
+            allow_capped=args.allow_capped,
+            overwrite=overwrite,
+        )
+    except PopulationError as e:
+        print(f"recall_fp_report: POPULATION DRIFT: {e}", file=sys.stderr, flush=True)
+        return 1
+    except (FileNotFoundError, OSError) as e:
+        print(f"recall_fp_report: I/O ERROR: {e}", file=sys.stderr, flush=True)
+        return 2
+    except (ValueError, KeyError) as e:
+        print(f"recall_fp_report: INPUT ERROR: {e}", file=sys.stderr, flush=True)
+        return 2
+
+    # The report writes only the parquets; the sidecar manifest is the CLI's job.
+    sidecar = Path(args.out_dir) / f"recall_fp_{args.plm}_{args.representation}.manifest.json"
+    written = atomic_write(
+        sidecar,
+        lambda p: p.write_text(json.dumps(_json_safe_manifest(manifest), indent=2) + "\n"),
+        mode="replace" if overwrite else "timestamp",
+    )
+    print(f"recall_fp_report: {args.plm}/{args.representation} (n={manifest['population_n']}) "
+          f"-> {written}", flush=True)
+    for level, info in manifest["levels"].items():
+        print(
+            f"  {level}: n_scored={info['n_scored']} "
+            f"mean_recall_1stFP={info['mean_recall_1stFP']}",
+            flush=True,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
