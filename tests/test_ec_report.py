@@ -110,3 +110,45 @@ def test_build_matrices_population_drift_raises():
     with pytest.raises(PopulationError, match="missing"):
         _build_matrices(emb, ec_labels, ["P1", "P2", "P3"],
                         distance="euclidean", ec_set_agg="min", allow_capped=False)
+
+
+from evaluation.ec_report import ec_correlation_report
+
+
+def _monotone_cohort(n=24, seed=0):
+    rng = np.random.default_rng(seed)
+    scores = rng.integers(0, 5, size=n)
+    emb = {f"P{i:02d}": np.array([float(scores[i]), 0.0], dtype=np.float32) for i in range(n)}
+    ec_labels = pd.DataFrame({
+        "protein_id": [f"P{i:02d}" for i in range(n)],
+        "ec_set": [frozenset({f"{scores[i]+1}.1.1.1"}) for i in range(n)],
+    })
+    return emb, ec_labels, [f"P{i:02d}" for i in range(n)]
+
+
+def test_report_writes_parquet_and_returns_manifest(tmp_path):
+    emb, ec_labels, ids = _monotone_cohort()
+    manifest = ec_correlation_report(
+        emb, ec_labels, tmp_path, plm="toyplm", distance="euclidean",
+        ec_set_agg="min", wildcard_policy="exclude", statistic="tau_b",
+        expected_ec_ids=ids, seed=42, n_boot=200, n_perm=100, ci_alpha=0.1,
+    )
+    # parquet written
+    pq = tmp_path / "ec_toyplm_raw_euclidean.parquet"
+    assert pq.exists()
+    df = pd.read_parquet(pq)
+    assert list(df.columns)[:5] == list(__import__("evaluation.ec_report", fromlist=["EC_PER_PAIR_COLUMNS"]).EC_PER_PAIR_COLUMNS)
+    assert df["pair_key"].is_unique
+    # manifest fields
+    assert manifest["plm"] == "toyplm"
+    assert manifest["statistic"] == "tau_b"
+    assert manifest["ec_set_agg"] == "min"
+    assert manifest["wildcard_policy"] == "exclude"
+    assert manifest["tau_b"] > 0.5            # monotone cohort
+    assert "ci_lo" in manifest and "ci_hi" in manifest
+    assert "perm_p_value" in manifest
+    assert "ec_dist_histogram" in manifest
+    assert "sensitivity" in manifest and set(manifest["sensitivity"]) == {"min", "mean", "hausdorff"}
+    assert manifest["per_pair_columns"] == list(manifest["per_pair_columns"])
+    assert manifest["n_ec_proteins"] == len(ids)
+    assert "path" in manifest

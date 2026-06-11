@@ -149,3 +149,106 @@ def _build_matrices(
     dist_matrix = _pivot_long_to_matrix(dist_long, ids, "dist")
     ec_matrix = _pivot_long_to_matrix(ec_long, ids, "ec_dist")
     return ids, dist_matrix, ec_matrix, pairs
+
+
+def _stem(plm: str, representation: str, distance: str) -> str:
+    return f"ec_{plm}_{representation}_{distance}"
+
+
+def ec_correlation_report(
+    embeddings: dict,
+    ec_labels: pd.DataFrame,
+    out_dir: Path | str,
+    *,
+    plm: str,
+    distance: str,
+    ec_set_agg: str = "min",
+    wildcard_policy: str = "exclude",
+    statistic: str = "tau_b",
+    representation: str = "raw",
+    expected_ec_ids: list[str],
+    seed: int = 42,
+    n_boot: int = 2000,
+    n_perm: int = 1000,
+    ci_alpha: float = 0.05,
+    allow_capped: bool = False,
+    superfamily: dict | None = None,
+    overwrite: bool = True,
+) -> dict:
+    """Score one (plm, distance) EC cell: writes the per-pair parquet, returns the manifest.
+
+    The CLI (``main``) writes the sidecar; this function writes only the parquet (the
+    "lenient library, strict barrier" split the other arms use). Computes τ-b + ρ with
+    vertex-BCa CIs, the M-permutation null, the ec_dist histogram, class + superfamily
+    stratification, and an ``ec_set_agg`` sensitivity over {min, mean, hausdorff}.
+    """
+    from shared.atomic_io import atomic_write
+
+    ids, dist_matrix, ec_matrix, pairs = _build_matrices(
+        embeddings, ec_labels, expected_ec_ids,
+        distance=distance, ec_set_agg=ec_set_agg, allow_capped=allow_capped,
+    )
+
+    # Per-pair parquet (synthetic single-column unique key).
+    pairs = pairs.copy()
+    pairs.insert(0, "pair_key", pairs["a"] + "\t" + pairs["b"])
+    pairs = pairs[list(EC_PER_PAIR_COLUMNS)]
+    out_dir = Path(out_dir)
+    pq_path = out_dir / f"{_stem(plm, representation, distance)}.parquet"
+    if pq_path.exists() and not overwrite:
+        raise FileExistsError(f"{pq_path} exists; pass overwrite=True")
+    written_pq = atomic_write(pq_path, lambda p: pairs.to_parquet(p, index=False), mode="replace")
+
+    # Primary statistic + CI.
+    lo, hi, point, degenerate, diverged = correlation_vertex_bca_ci(
+        dist_matrix, ec_matrix, statistic=statistic, n_boot=n_boot, alpha=ci_alpha, seed=seed)
+    rho_lo, rho_hi, rho_point, rho_degen, _ = correlation_vertex_bca_ci(
+        dist_matrix, ec_matrix, statistic="spearman", n_boot=n_boot, alpha=ci_alpha, seed=seed)
+    null_vals, perm_p = correlation_permutation_null(
+        dist_matrix, ec_matrix, statistic=statistic, n_perm=n_perm, seed=seed)
+
+    # ec_set_agg sensitivity: ONLY the EC matrix changes with agg — the embedding
+    # distance matrix is identical — so reuse dist_matrix and rebuild only ec_matrix
+    # (avoids redoing the cdist 3x and the misleading implication that dist depends on agg).
+    iu, ju = np.triu_indices(len(ids), k=1)
+    sub_lab_all = ec_labels[ec_labels["protein_id"].isin(ids)].reset_index(drop=True)
+    sensitivity = {}
+    for agg in ("min", "mean", "hausdorff"):
+        ec_long_agg = ec_distance_matrix_set(sub_lab_all, agg=agg)
+        em = _pivot_long_to_matrix(ec_long_agg, ids, "ec_dist")
+        sensitivity[agg] = kendall_tau_b(dist_matrix[iu, ju], em[iu, ju])
+
+    # Class stratification (first EC field; from the labels).
+    ec_class = {
+        row.protein_id: sorted(row.ec_set)[0].split(".")[0]
+        for row in ec_labels.itertuples() if row.ec_set
+    }
+    strat_class = stratify_by_class(pairs, ec_class)
+    strat_sf = stratify_by_superfamily(pairs, superfamily) if superfamily else {}
+
+    manifest = {
+        "plm": plm,
+        "representation": representation,
+        "distance": distance,
+        "statistic": statistic,
+        "ec_set_agg": ec_set_agg,
+        "wildcard_policy": wildcard_policy,
+        "tau_b": point if statistic == "tau_b" else kendall_tau_b(
+            dist_matrix[iu, ju], ec_matrix[iu, ju]),
+        "rho": rho_point,
+        "ci_lo": lo, "ci_hi": hi, "ci_degenerate": degenerate, "ci_percentile_diverged": diverged,
+        "rho_ci_lo": rho_lo, "rho_ci_hi": rho_hi, "rho_ci_degenerate": rho_degen,
+        "perm_p_value": perm_p,
+        "null_mean": float(np.nanmean(null_vals)), "null_std": float(np.nanstd(null_vals)),
+        "ec_dist_histogram": ec_dist_histogram(pairs),
+        "sensitivity": sensitivity,
+        "stratify_class": strat_class,
+        "stratify_superfamily": strat_sf,
+        "n_ec_proteins": len(ids),
+        "n_pairs": int(len(pairs)),
+        "population_n": len(ids),
+        "seed": seed, "n_boot": n_boot, "n_perm": n_perm, "ci_alpha": ci_alpha,
+        "per_pair_columns": list(EC_PER_PAIR_COLUMNS),
+        "path": str(written_pq),
+    }
+    return manifest
