@@ -136,3 +136,67 @@ def test_negative_correlation_interval_on_correct_side():
     assert point < -0.5
     assert hi < 0.0                    # the whole interval is on the negative side
     assert lo <= point <= hi
+
+
+from evaluation.stats import kendall_tau_b
+
+
+def _coverage_population(model: str, rng):
+    """Return a (pop_emb, pop_ec) population pair for the coverage sim.
+
+    ``continuous`` — EC dist = |score_i - score_j| (no ties).
+    ``discrete``   — EC dist is 5-valued (0..4) from a hierarchical class label, so the
+                     bootstrap hits the exact-tie / multiset pathology the REAL EC data
+                     (5-valued ordinal) produces. This is the case BCa validity is least
+                     obvious for; the continuous model alone would not exercise it.
+    """
+    m = 2000
+    if model == "continuous":
+        score = rng.normal(size=m)
+        pop_ec = np.abs(score[:, None] - score[None, :])
+        pop_emb = pop_ec + rng.normal(scale=0.3, size=pop_ec.shape)
+    elif model == "discrete":
+        # 3-level hierarchical class -> EC distance in {0,2,3,4}; embedding dist tracks it.
+        cls = rng.integers(0, 6, size=(m, 3))
+        eq0 = cls[:, None, 0] == cls[None, :, 0]
+        eq1 = eq0 & (cls[:, None, 1] == cls[None, :, 1])
+        eq2 = eq1 & (cls[:, None, 2] == cls[None, :, 2])
+        pop_ec = np.where(eq2, 0.0, np.where(eq1, 1.0, np.where(eq0, 3.0, 4.0)))
+        pop_emb = pop_ec + rng.normal(scale=0.6, size=pop_ec.shape)
+    else:
+        raise ValueError(model)
+    pop_emb = (pop_emb + pop_emb.T) / 2.0
+    np.fill_diagonal(pop_emb, 0.0)
+    np.fill_diagonal(pop_ec, 0.0)
+    return pop_emb, pop_ec
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ["continuous", "discrete"])
+def test_vertex_bca_coverage_is_near_nominal(model):
+    """Empirical coverage of the 90% vertex-BCa CI must be near nominal on BOTH a
+    tie-free and a tie-heavy (discrete-EC) generative model — the second is the one that
+    actually stresses U-statistic BCa validity under the multiset bootstrap."""
+    rng = np.random.default_rng(123)
+    pop_emb, pop_ec = _coverage_population(model, rng)
+    m = pop_emb.shape[0]
+    iu, ju = np.triu_indices(m, k=1)
+    true_tau = kendall_tau_b(pop_emb[iu, ju], pop_ec[iu, ju])
+
+    n, trials, alpha = 30, 400, 0.1
+    covered = 0
+    for t in range(trials):
+        sel = rng.choice(m, size=n, replace=False)
+        dist = pop_emb[np.ix_(sel, sel)].copy()
+        ec = pop_ec[np.ix_(sel, sel)].copy()
+        np.fill_diagonal(dist, 0.0)
+        np.fill_diagonal(ec, 0.0)
+        lo, hi, _, degenerate, _ = correlation_vertex_bca_ci(
+            dist, ec, statistic="tau_b", n_boot=800, alpha=alpha, seed=t)
+        if not degenerate and lo <= true_tau <= hi:
+            covered += 1
+    coverage = covered / trials
+    # Nominal 0.90. At 400 trials the binomial SE is ~0.015, so a true-80% (badly
+    # anticonservative) interval lands ~0.80 < 0.83 and FAILS — the band has teeth while
+    # tolerating ~3 SE of Monte-Carlo noise on a valid interval.
+    assert 0.83 <= coverage <= 0.96, f"[{model}] coverage {coverage:.2f} off nominal 0.90"
