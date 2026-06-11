@@ -83,6 +83,38 @@ def ec_distance_matrix(ec_labels: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["a", "b", "ec_dist"])
 
 
+def ec_distance_set(
+    ec_set_a: "frozenset[str]", ec_set_b: "frozenset[str]", *, agg: str = "min"
+) -> float:
+    """Set-valued EC distance for multifunctional enzymes.
+
+    Aggregates the cross-product ``{ec_distance(a, b) : a in A, b in B}`` by ``agg``:
+
+    * ``min`` (default) — "share ANY function": 0 if the sets share an EC. The
+      analogue of the CATH multi-domain set-intersection rule.
+    * ``mean`` — average hierarchical distance over the cross-product.
+    * ``hausdorff`` — ``max`` of the two directed set distances (each directed
+      distance is the max over one set of the min to the other set).
+
+    ``agg`` is a *recorded* report parameter (it changes the per-pLM number and the
+    ranking — see the design spec D7); the report writes it into the manifest and
+    reports a sensitivity over all three. Raises ``ValueError`` on an unknown ``agg``
+    or an empty set.
+    """
+    if not ec_set_a or not ec_set_b:
+        raise ValueError("ec_distance_set: empty EC set has no defined distance")
+    if agg == "min":
+        return float(min(ec_distance(a, b) for a in ec_set_a for b in ec_set_b))
+    if agg == "mean":
+        vals = [ec_distance(a, b) for a in ec_set_a for b in ec_set_b]
+        return float(sum(vals) / len(vals))
+    if agg == "hausdorff":
+        d_ab = max(min(ec_distance(a, b) for b in ec_set_b) for a in ec_set_a)
+        d_ba = max(min(ec_distance(a, b) for a in ec_set_a) for b in ec_set_b)
+        return float(max(d_ab, d_ba))
+    raise ValueError(f"unknown agg={agg!r}; choose min/mean/hausdorff")
+
+
 def correlate_embedding_distance_with_ec(
     embedding_distances: pd.DataFrame,
     ec_distances: pd.DataFrame,
