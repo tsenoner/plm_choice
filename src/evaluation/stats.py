@@ -12,6 +12,10 @@ Provides:
 * Paired Wilcoxon signed-rank with Cliff's delta effect size.
 * ``grid_test`` — full pairwise (two-sided) paired-Wilcoxon driver over the
   pLM × task grid; emits a tidy long-format DataFrame for figure scripts.
+* ``vertex_bca_ci`` — generic vertex-bootstrap BCa CI for a U-statistic over
+  exchangeable items (resample vertices, not the induced pairs); callers inject the
+  point / resample / jackknife closures. ``correlation_vertex_bca_ci`` is the EC arm's
+  thin wrapper; the orphan (dyadic AUROC) and cross-pLM (agreement) arms bind their own.
 
 Design rules:
 
@@ -633,52 +637,121 @@ def _full_pair_values(dist_matrix, ec_matrix):
     return dist_matrix[iu, ju], ec_matrix[iu, ju], iu, ju
 
 
-def correlation_vertex_bca_ci(
-    dist_matrix: np.ndarray,
-    ec_matrix: np.ndarray,
+def vertex_bca_ci(
+    n: int,
     *,
-    statistic: str = "tau_b",
+    point: float,
+    boot_statistic: Callable[[np.ndarray], float],
+    jackknife_statistic: Callable[[int], float],
     n_boot: int = 2000,
     alpha: float = 0.05,
     seed: int | np.random.Generator | None = 42,
+    clip: tuple[float, float] | None = (-1.0, 1.0),
+    min_vertices: int = MIN_VERTEX_N,
+    min_distinct: int = MIN_BOOTSTRAP_N,
+    divergence_tol: float = 0.05,
+    validate_point: bool = False,
 ):
-    """Vertex-bootstrap BCa CI for a rank correlation of two NxN distance matrices.
+    """Generic vertex-bootstrap BCa CI for a U-statistic over ``n`` exchangeable items.
 
-    Resamples PROTEINS (matrix indices) with replacement — the correct unit, because
-    the C(N,2) pairs are not independent (pairs sharing a protein are correlated). BCa
-    acceleration via leave-one-protein-out jackknife. ``statistic`` is ``"tau_b"`` or
-    ``"spearman"`` (the kernels in this module). Returns
-    ``(lo, hi, point, degenerate, percentile_diverged)``:
+    The shared foundation for every analysis statistic whose sampling unit is a
+    *vertex* (protein) but whose value lives on the induced set of vertex *pairs* —
+    EC's matrix rank correlation, the orphan dyadic AUROC, the cross-pLM agreement
+    statistics. Because the C(n,2) pairs sharing a vertex are correlated, the bootstrap
+    must resample vertices, not pairs; BCa acceleration is the leave-one-vertex-out
+    jackknife. The *generic* machinery — the resample loop, the distinct-vertex floor,
+    the z0 tie stabilisation, the jackknife accelerator, the denom-collapse fallback,
+    the percentile-divergence flag, and the generic degeneracy gates (cohort floor,
+    valid-fraction abort, non-finite-interval) — lives here exactly once. The
+    *statistic-specific* degeneracies (a NaN point, a resample with no usable pairs) are
+    decided by the caller's closures and merely consumed here.
 
-    * ``degenerate`` True (-> lo/hi NaN) when N < MIN_VERTEX_N (12), a constant margin,
-      or BCa fails to form a finite interval;
-    * ``percentile_diverged`` True when the BCa interval and the plain percentile
-      interval disagree by more than 0.05 (a sensitivity flag the report records).
+    Parameters
+    ----------
+    n:
+        Number of vertices (e.g. proteins) in the cohort.
+    point:
+        The point estimate over ALL vertices, precomputed by the caller (so the core
+        need not know how to build the full statistic). May be NaN — that is the
+        constant-margin degeneracy and returns a degenerate result. CONTRACT: ``point``
+        must be computed by the SAME kernel as ``boot_statistic`` evaluated on the
+        identity index ``np.arange(n)`` (same tie handling, same pair induction, same
+        class handling) — otherwise the bootstrap distribution is off-centre from
+        ``point`` and the z0 bias correction is silently wrong. Set ``validate_point`` to
+        have the core assert this.
+    boot_statistic:
+        ``f(idx) -> float`` for a bootstrap index array ``idx`` of length ``n`` drawn
+        with replacement from ``range(n)``. Return a non-finite value (NaN/inf) to mark
+        THIS resample degenerate (e.g. a draw with zero usable pairs); it is skipped and
+        does not count toward the valid fraction. The core applies a generic
+        distinct-vertex floor (``min_distinct``) BEFORE calling this, so the closure need
+        only handle its own statistic-specific degeneracies. NOTE: the per-resample skip
+        count conflates distinct-floor skips and closure NaN-returns — a caller that must
+        report e.g. ``n_boot_undefined`` should track its own NaN-returns inside the
+        closure.
+    jackknife_statistic:
+        ``f(k) -> float`` — the statistic with vertex ``k`` removed (the leave-one-out
+        cohort of ``n - 1`` vertices). Non-finite values are dropped before the
+        accelerator is computed. Called ``n`` times; at large ``n`` (e.g. the orphan
+        arm's ~10k vertices) the closure should update incrementally rather than rebuild
+        from scratch.
+    clip:
+        ``(lo, hi)`` bounds applied to the BCa interval after the z0/a adjustment, or
+        ``None`` to disable. Default ``(-1, 1)`` suits a correlation; pass ``(0, 1)`` for
+        AUROC / R², or ``None`` for an unbounded statistic (e.g. a Wasserstein distance).
+    min_vertices:
+        Cohort floor below which the CI is declared degenerate (default ``MIN_VERTEX_N``).
+    min_distinct:
+        Per-resample distinct-vertex floor (default ``MIN_BOOTSTRAP_N``); a resample with
+        fewer distinct vertices is skipped (too few distinct vertices for the closure's
+        statistic to be computable).
+    divergence_tol:
+        Absolute gap above which the BCa and plain-percentile interval endpoints are
+        called divergent (default 0.05, calibrated for a statistic in ``[-1, 1]``). An
+        UNBOUNDED statistic (W₁) must pass a scale-appropriate value or every cell trips
+        the flag; a bounded statistic in ``[0, 1]`` may keep the default.
+    validate_point:
+        When True, assert ``boot_statistic(np.arange(n))`` matches ``point`` (the
+        full-set identity resample) before bootstrapping, raising ``ValueError`` on a
+        kernel mismatch. Off by default (one extra closure call); turn on in tests.
 
-    The interval is clipped to ``[-1, 1]`` after the BCa z0/a adjustment.
+    Returns
+    -------
+    ``(lo, hi, point, degenerate, percentile_diverged)`` — identical contract to the
+    correlation wrapper:
+
+    * ``degenerate`` True (-> lo/hi NaN) when ``n < min_vertices``, ``point`` is non-finite,
+      too few resamples survive (< ``_MIN_VALID_BOOT_FRAC``), or BCa fails to form a finite
+      interval;
+    * ``percentile_diverged`` True when the BCa and plain-percentile intervals disagree by
+      more than ``divergence_tol``, or the BCa denominator collapsed on either tail.
     """
-    stat_fn = _CORRELATION_KERNELS[statistic]
     rng = _as_rng(seed)
-    n = int(dist_matrix.shape[0])
-
-    d_all, e_all, _, _ = _full_pair_values(dist_matrix, ec_matrix)
-    point = stat_fn(d_all, e_all)
-    if n < MIN_VERTEX_N or not math.isfinite(point):
+    if n < min_vertices or not math.isfinite(point):
         return float("nan"), float("nan"), float(point), True, False
 
-    # Bootstrap distribution over resampled proteins.
+    if validate_point:
+        s0 = boot_statistic(np.arange(n))
+        if not math.isclose(s0, point, rel_tol=1e-7, abs_tol=1e-9):
+            raise ValueError(
+                "validate_point: boot_statistic(arange(n)) = "
+                f"{s0!r} does not match point = {point!r}; the point estimate and the "
+                "resample statistic must use the same kernel (tie/pair/class handling)."
+            )
+
+    # Bootstrap distribution over resampled vertices.
     boot = np.empty(n_boot, dtype=float)
     valid = 0
-    for b in range(n_boot):
+    for _b in range(n_boot):
         idx = rng.integers(0, n, size=n)
-        # Per-resample diversity floor is the SMALL pair-computability floor (>=4 distinct
-        # proteins -> >=6 pairs), NOT the cohort floor MIN_VERTEX_N: a resample of an
-        # n=MIN_VERTEX_N cohort rarely draws MIN_VERTEX_N distinct proteins, so reusing the
-        # cohort floor here would wrongly mark every small-but-valid cohort degenerate.
-        if np.unique(idx).size < MIN_BOOTSTRAP_N:
+        # Per-resample diversity floor is the SMALL computability floor min_distinct (the
+        # distinct vertices the closure's statistic needs), NOT the cohort floor
+        # min_vertices: a resample of a min_vertices-sized cohort rarely draws min_vertices
+        # distinct vertices, so reusing the cohort floor here would wrongly mark every
+        # small-but-valid cohort degenerate.
+        if np.unique(idx).size < min_distinct:
             continue
-        d, e = _induced_pair_values(dist_matrix, ec_matrix, idx)
-        s = stat_fn(d, e)
+        s = boot_statistic(idx)
         if math.isfinite(s):
             boot[valid] = s
             valid += 1
@@ -693,14 +766,10 @@ def correlation_vertex_bca_ci(
     prop = min(max(prop, 1e-6), 1 - 1e-6)
     z0 = _norm.ppf(prop)
 
-    # Leave-one-protein-out jackknife acceleration.
+    # Leave-one-vertex-out jackknife acceleration.
     jack = np.empty(n, dtype=float)
     for k in range(n):
-        keep = np.arange(n) != k
-        sub_d = dist_matrix[np.ix_(keep, keep)]
-        sub_e = ec_matrix[np.ix_(keep, keep)]
-        du, eu, _, _ = _full_pair_values(sub_d, sub_e)
-        jack[k] = stat_fn(du, eu)
+        jack[k] = jackknife_statistic(k)
     jack = jack[np.isfinite(jack)]
     jbar = jack.mean()
     num = np.sum((jbar - jack) ** 3)
@@ -725,13 +794,65 @@ def correlation_vertex_bca_ci(
     # Percentile interval for the divergence flag.
     plo = float(np.quantile(boot, alpha / 2))
     phi = float(np.quantile(boot, 1 - alpha / 2))
-    diverged = denom_collapsed or abs(lo - plo) > 0.05 or abs(hi - phi) > 0.05
+    diverged = (
+        denom_collapsed
+        or abs(lo - plo) > divergence_tol
+        or abs(hi - phi) > divergence_tol
+    )
 
     if not (math.isfinite(lo) and math.isfinite(hi)):
         return float("nan"), float("nan"), float(point), True, False
-    lo = min(max(lo, -1.0), 1.0)
-    hi = min(max(hi, -1.0), 1.0)
+    if clip is not None:
+        lo = min(max(lo, clip[0]), clip[1])
+        hi = min(max(hi, clip[0]), clip[1])
     return lo, hi, float(point), False, diverged
+
+
+def correlation_vertex_bca_ci(
+    dist_matrix: np.ndarray,
+    ec_matrix: np.ndarray,
+    *,
+    statistic: str = "tau_b",
+    n_boot: int = 2000,
+    alpha: float = 0.05,
+    seed: int | np.random.Generator | None = 42,
+):
+    """Vertex-bootstrap BCa CI for a rank correlation of two NxN distance matrices.
+
+    Thin wrapper over :func:`vertex_bca_ci`: the resampling/BCa machinery is generic;
+    this binds the three correlation-specific closures (full-pair point statistic,
+    induced-pair resample statistic, leave-one-protein-out jackknife) for the EC arm.
+    ``statistic`` is ``"tau_b"`` or ``"spearman"`` (the kernels in this module). Returns
+    ``(lo, hi, point, degenerate, percentile_diverged)``; see :func:`vertex_bca_ci` for
+    the flag semantics. The interval is clipped to ``[-1, 1]``.
+    """
+    stat_fn = _CORRELATION_KERNELS[statistic]
+    n = int(dist_matrix.shape[0])
+
+    d_all, e_all, _, _ = _full_pair_values(dist_matrix, ec_matrix)
+    point = stat_fn(d_all, e_all)
+
+    def _boot(idx: np.ndarray) -> float:
+        d, e = _induced_pair_values(dist_matrix, ec_matrix, idx)
+        return stat_fn(d, e)
+
+    def _jack(k: int) -> float:
+        keep = np.arange(n) != k
+        sub_d = dist_matrix[np.ix_(keep, keep)]
+        sub_e = ec_matrix[np.ix_(keep, keep)]
+        du, eu, _, _ = _full_pair_values(sub_d, sub_e)
+        return stat_fn(du, eu)
+
+    return vertex_bca_ci(
+        n,
+        point=point,
+        boot_statistic=_boot,
+        jackknife_statistic=_jack,
+        n_boot=n_boot,
+        alpha=alpha,
+        seed=seed,
+        clip=(-1.0, 1.0),
+    )
 
 
 def _pair_bootstrap_ci_width(
