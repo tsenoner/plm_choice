@@ -51,3 +51,26 @@ def test_stratify_returns_real_stratum_tau_b():
     assert out["n_within"] == 6 and out["n_across"] == 0
     assert out["tau_b_within"] == pytest.approx(1.0)   # the real stratified statistic
     assert np.isnan(out["tau_b_across"])               # empty stratum -> NaN, not 0
+
+
+from evaluation.ec_report import stratify_by_superfamily
+
+
+def test_superfamily_within_across_and_nonhomologous_restriction():
+    pairs = pd.DataFrame({
+        "a": ["P1", "P1", "P2"],
+        "b": ["P2", "P3", "P3"],
+        "dist": [0.1, 0.9, 0.5],
+        "ec_dist": [0.0, 4.0, 4.0],
+    })
+    # superfamily sets per protein (CATH multi-domain frozensets)
+    sfam = {
+        "P1": frozenset({"3.40.50.300"}),
+        "P2": frozenset({"3.40.50.300"}),   # shares with P1 -> homologous
+        "P3": frozenset({"1.10.10.10"}),
+    }
+    out = stratify_by_superfamily(pairs, sfam)
+    assert out["n_within_superfamily"] == 1   # P1-P2
+    assert out["n_across_superfamily"] == 2    # P1-P3, P2-P3
+    # non-homologous restriction == across-superfamily subset
+    assert out["n_nonhomologous"] == 2

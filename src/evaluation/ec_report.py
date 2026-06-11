@@ -65,3 +65,32 @@ def stratify_by_class(pairs: pd.DataFrame, ec_class: dict[str, str]) -> dict:
         "rho_within": spearman_rho(pairs.loc[within, "dist"], pairs.loc[within, "ec_dist"]),
         "rho_across": spearman_rho(pairs.loc[across, "dist"], pairs.loc[across, "ec_dist"]),
     }
+
+
+def stratify_by_superfamily(pairs: pd.DataFrame, superfamily: dict) -> dict:
+    """Within- vs across-CATH-superfamily correlation + non-homologous restriction.
+
+    ``superfamily`` maps protein_id -> frozenset of superfamily codes (the multi-domain
+    set). A pair is *homologous* (within-superfamily) iff the two sets intersect; the
+    non-homologous restriction keeps only the disjoint pairs — isolating function from
+    homology (the 92%-confound control). Returns counts + tau_b/rho per stratum.
+    """
+    def _intersects(a, b):
+        sa, sb = superfamily.get(a), superfamily.get(b)
+        if not sa or not sb:
+            return None  # unknown -> excluded from both strata
+        return len(sa & sb) > 0
+
+    rel = [_intersects(a, b) for a, b in zip(pairs["a"], pairs["b"])]
+    rel = pd.Series(rel, index=pairs.index)
+    within = rel == True  # noqa: E712 (explicit True, not NaN/None)
+    across = rel == False  # noqa: E712
+    return {
+        "n_within_superfamily": int(within.sum()),
+        "n_across_superfamily": int(across.sum()),
+        "n_nonhomologous": int(across.sum()),
+        "tau_b_within_superfamily": kendall_tau_b(pairs.loc[within, "dist"], pairs.loc[within, "ec_dist"]),
+        "tau_b_nonhomologous": kendall_tau_b(pairs.loc[across, "dist"], pairs.loc[across, "ec_dist"]),
+        "rho_within_superfamily": spearman_rho(pairs.loc[within, "dist"], pairs.loc[within, "ec_dist"]),
+        "rho_nonhomologous": spearman_rho(pairs.loc[across, "dist"], pairs.loc[across, "ec_dist"]),
+    }
