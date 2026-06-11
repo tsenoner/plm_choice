@@ -31,6 +31,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 from scipy import stats as _scipy_stats
+from scipy.stats import norm as _norm
 
 
 # ---------------------------------------------------------------------------
@@ -612,3 +613,140 @@ def _induced_pair_values(
     keep = a != b
     a, b = a[keep], b[keep]
     return dist_matrix[a, b], ec_matrix[a, b]
+
+
+# A vertex-bootstrap CI of a U-statistic needs more than the absolute n>=4 floor that
+# guards a mean (a 4-protein cohort yields only C(4,2)=6 pairs -> a coverage-free
+# correlation CI). MIN_VERTEX_N is the protein floor below which the CI is declared
+# degenerate; it guards the stratified / non-homologous sub-cells the design must serve.
+MIN_VERTEX_N = 12
+# Fraction of bootstrap resamples that must survive the diversity/finiteness filter for
+# the interval to be reported (else the surviving set is too conditioned to trust).
+_MIN_VALID_BOOT_FRAC = 0.5
+# Guard on the BCa quantile denominator 1 - a*(z0+zq): when it approaches 0 the adjusted
+# quantile blows up and the interval silently collapses to a clipped boundary.
+_BCA_DENOM_EPS = 1e-6
+
+
+def _full_pair_values(dist_matrix, ec_matrix):
+    iu, ju = np.triu_indices(dist_matrix.shape[0], k=1)
+    return dist_matrix[iu, ju], ec_matrix[iu, ju], iu, ju
+
+
+def correlation_vertex_bca_ci(
+    dist_matrix: np.ndarray,
+    ec_matrix: np.ndarray,
+    *,
+    statistic: str = "tau_b",
+    n_boot: int = 2000,
+    alpha: float = 0.05,
+    seed: int | np.random.Generator | None = 42,
+):
+    """Vertex-bootstrap BCa CI for a rank correlation of two NxN distance matrices.
+
+    Resamples PROTEINS (matrix indices) with replacement — the correct unit, because
+    the C(N,2) pairs are not independent (pairs sharing a protein are correlated). BCa
+    acceleration via leave-one-protein-out jackknife. ``statistic`` is ``"tau_b"`` or
+    ``"spearman"`` (the kernels in this module). Returns
+    ``(lo, hi, point, degenerate, percentile_diverged)``:
+
+    * ``degenerate`` True (-> lo/hi NaN) when N < 4, a constant margin, or BCa fails to
+      form a finite interval;
+    * ``percentile_diverged`` True when the BCa interval and the plain percentile
+      interval disagree by more than 0.05 (a sensitivity flag the report records).
+
+    The interval is clipped to ``[-1, 1]`` after the BCa z0/a adjustment.
+    """
+    stat_fn = _CORRELATION_KERNELS[statistic]
+    rng = _as_rng(seed)
+    n = int(dist_matrix.shape[0])
+
+    d_all, e_all, _, _ = _full_pair_values(dist_matrix, ec_matrix)
+    point = stat_fn(d_all, e_all)
+    if n < MIN_VERTEX_N or not math.isfinite(point):
+        return float("nan"), float("nan"), float(point), True, False
+
+    # Bootstrap distribution over resampled proteins.
+    boot = np.empty(n_boot, dtype=float)
+    valid = 0
+    for b in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        # Per-resample diversity floor is the SMALL pair-computability floor (>=4 distinct
+        # proteins -> >=6 pairs), NOT the cohort floor MIN_VERTEX_N: a resample of an
+        # n=MIN_VERTEX_N cohort rarely draws MIN_VERTEX_N distinct proteins, so reusing the
+        # cohort floor here would wrongly mark every small-but-valid cohort degenerate.
+        if np.unique(idx).size < MIN_BOOTSTRAP_N:
+            continue
+        d, e = _induced_pair_values(dist_matrix, ec_matrix, idx)
+        s = stat_fn(d, e)
+        if math.isfinite(s):
+            boot[valid] = s
+            valid += 1
+    if valid < int(_MIN_VALID_BOOT_FRAC * n_boot):
+        return float("nan"), float("nan"), float(point), True, False
+    boot = boot[:valid]
+
+    # z0: tie-stabilized bias correction.
+    less = np.count_nonzero(boot < point)
+    equal = np.count_nonzero(boot == point)
+    prop = (less + 0.5 * equal) / valid
+    prop = min(max(prop, 1e-6), 1 - 1e-6)
+    z0 = _norm.ppf(prop)
+
+    # Leave-one-protein-out jackknife acceleration.
+    jack = np.empty(n, dtype=float)
+    for k in range(n):
+        keep = np.arange(n) != k
+        sub_d = dist_matrix[np.ix_(keep, keep)]
+        sub_e = ec_matrix[np.ix_(keep, keep)]
+        du, eu, _, _ = _full_pair_values(sub_d, sub_e)
+        jack[k] = stat_fn(du, eu)
+    jack = jack[np.isfinite(jack)]
+    jbar = jack.mean()
+    num = np.sum((jbar - jack) ** 3)
+    den = 6.0 * (np.sum((jbar - jack) ** 2) ** 1.5)
+    a = num / den if den != 0 else 0.0
+
+    denom_collapsed = False
+
+    def _bca_q(q):
+        nonlocal denom_collapsed
+        zq = _norm.ppf(q)
+        denom = 1 - a * (z0 + zq)
+        if abs(denom) < _BCA_DENOM_EPS:
+            denom_collapsed = True
+            return q  # fall back to the plain percentile quantile for this tail
+        return _norm.cdf(z0 + (z0 + zq) / denom)
+
+    lo_q = _bca_q(alpha / 2)
+    hi_q = _bca_q(1 - alpha / 2)
+    lo = float(np.quantile(boot, lo_q))
+    hi = float(np.quantile(boot, hi_q))
+    # Percentile interval for the divergence flag.
+    plo = float(np.quantile(boot, alpha / 2))
+    phi = float(np.quantile(boot, 1 - alpha / 2))
+    diverged = denom_collapsed or abs(lo - plo) > 0.05 or abs(hi - phi) > 0.05
+
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return float("nan"), float("nan"), float(point), True, False
+    lo = min(max(lo, -1.0), 1.0)
+    hi = min(max(hi, -1.0), 1.0)
+    return lo, hi, float(point), False, diverged
+
+
+def _pair_bootstrap_ci_width(
+    dist_matrix, ec_matrix, *, statistic="tau_b", n_boot=2000, alpha=0.05, seed=42
+) -> float:
+    """Test-only: naive i.i.d.-pair percentile-CI width (the vertex CI must exceed this)."""
+    stat_fn = _CORRELATION_KERNELS[statistic]
+    rng = _as_rng(seed)
+    d_all, e_all, _, _ = _full_pair_values(dist_matrix, ec_matrix)
+    m = d_all.size
+    boot = []
+    for _ in range(n_boot):
+        sel = rng.integers(0, m, size=m)
+        s = stat_fn(d_all[sel], e_all[sel])
+        if math.isfinite(s):
+            boot.append(s)
+    boot = np.asarray(boot)
+    return float(np.quantile(boot, 1 - alpha / 2) - np.quantile(boot, alpha / 2))
