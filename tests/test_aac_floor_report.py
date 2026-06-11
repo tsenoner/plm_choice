@@ -265,35 +265,57 @@ def test_tie_heavy_fixture_recall_distribution_is_sane(tmp_path):
     # discards every tied positive -> recall can collapse. Assert the recall distribution
     # is a SANE reading (not silently all-zero, not all-one) and ties are surfaced.
     #
-    # P1,P2,P3 share composition "AC" (identical 50/50 vectors -> distance 0); P1,P2 are
-    # fold-a positives, P3 is fold-b (a false positive AT distance 0). P4 anchors fold-b.
+    # Part 1 — tie-collapse group:
+    #   P1,P2,P3 share composition "AC" (identical 50/50 vectors -> distance 0); P1,P2 are
+    #   fold-a positives, P3 is fold-b (a false positive AT distance 0). P4 anchors fold-b.
+    #
+    # Part 2 — retrievable pair (MUST score nonzero; guards against all-zero degeneracy):
+    #   P5="AAAA" (100% A) and P6="AAAC" (75%A/25%C) are fold-c positives.
+    #   P5's nearest neighbor is P6 (distance ≈ 0.25/√2 in 20-d space); the closest FP
+    #   is one of the 50%A proteins (distance ≈ 0.5/√2), which is farther away.
+    #   So P5 walks to P6 (positive) before hitting any FP -> recall=1 for P5.
+    #   This MUST fail if the metric ever silently returns all-zero recall.
     fasta = _write_fasta(
         tmp_path / "ties.fasta",
         [
             ("P1", "AC"),
             ("P2", "AC"),
-            ("P3", "AC"),   # identical comp, DIFFERENT fold -> FP at distance 0
+            ("P3", "AC"),    # identical comp, DIFFERENT fold -> FP at distance 0
             ("P4", "CCCC"),
+            ("P5", "AAAA"),  # 100% A — nearest positive is P6, no FP at same distance
+            ("P6", "AAAC"),  # 75% A / 25% C — fold-c positive for P5
         ],
     )
-    labels = _labels({"a": ["P1", "P2"], "b": ["P3", "P4"]})
+    labels = _labels({"a": ["P1", "P2"], "b": ["P3", "P4"], "c": ["P5", "P6"]})
     out = tmp_path / "euclidean"
     manifest = aac_floor_report(
         fasta, labels, out,
-        expected_ids=["P1", "P2", "P3", "P4"],
+        expected_ids=["P1", "P2", "P3", "P4", "P5", "P6"],
         distance="euclidean", population_tag="full319",
     )
     df = pd.read_parquet(manifest["levels"]["fold"]["path"])
+    indexed = df.set_index("query_id")
     recalls = df["recall"].to_numpy()
+
     # ties surfaced per query (the floor-quality readout)
     assert "n_ties_at_first_fp" in df.columns
-    # P1 and P2: their only positive (each other) is at distance 0, but the FP P3 is
-    # ALSO at distance 0 -> adversarial walk discards the tied positive -> recall 0.
-    p1 = df.set_index("query_id").loc["P1"]
-    assert p1["recall"] == 0.0  # tie-collapse: a correct-but-tested floor reading
+
+    # Part 1: P1 and P2 — positive (each other) and FP (P3) are at distance 0;
+    # adversarial walk discards the tied positive -> recall 0, tie counted.
+    p1 = indexed.loc["P1"]
+    assert p1["recall"] == 0.0        # tie-collapse: a correct floor reading
     assert int(p1["n_ties_at_first_fp"]) >= 1  # the tie is counted, not hidden
-    # not the silently-all-something degenerate case: distribution has structure
-    assert recalls.min() == 0.0  # the tie-collapsed queries
+
+    # Part 2: P5 — nearest neighbor IS the positive (P6), no FP at the same distance;
+    # recall must be > 0. This assertion FAILS if the metric silently collapses all-zero.
+    p5 = indexed.loc["P5"]
+    assert p5["recall"] > 0.0, (
+        "P5 should reach its positive P6 before any FP — all-zero recall degeneracy detected"
+    )
+
+    # Distribution sanity: there is BOTH a zero (tie-collapsed) AND a nonzero (retrievable).
+    assert recalls.min() == 0.0   # tie-collapsed queries
+    assert recalls.max() > 0.0   # at least one retrievable query (guards against all-zero)
     assert manifest["levels"]["fold"]["n_ties_at_first_fp"] is not None  # summary present
 
 
