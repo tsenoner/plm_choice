@@ -222,6 +222,110 @@ def test_unknown_metric_raises():
         cross_plm_agreement_ci(a, b, metric="not_a_metric", n_boot=50, seed=1)
 
 
+# ── FIX I1a: _zscore constant guard (fp-fragile sd==0 test would corrupt w1_z) ──
+def test_zscore_numerically_constant_maps_to_zeros():
+    # A numerically-constant vector has np.std ~ 1e-16 (NOT exactly 0). The old `sd == 0.0`
+    # guard missed it and divided ~1e-16/~1e-16 -> spurious unit values. The relative
+    # ptp/std guard must map it to all-zeros, not amplified float noise.
+    from evaluation.cross_plm import _zscore
+
+    v = np.full(20, 3.7)
+    out = _zscore(v)
+    assert np.allclose(out, 0.0, atol=1e-12)
+    # explicitly NOT the spurious ±1 the broken guard produces
+    assert float(np.max(np.abs(out))) < 1e-9
+
+
+def test_zscore_varying_vector_standardizes_normally():
+    from evaluation.cross_plm import _zscore
+
+    rng = np.random.default_rng(101)
+    v = rng.normal(size=50)
+    out = _zscore(v)
+    assert abs(float(np.mean(out))) < 1e-9
+    assert float(np.std(out)) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_w1_z_constant_vs_varying_plm_well_defined():
+    # One pLM induces a numerically-constant distance vector, the other varies. w1_z must be
+    # finite and well-defined (the constant column z-scores to all-zeros, NOT spurious ±1
+    # that would corrupt the W₁). A broken _zscore makes this cell garbage.
+    rng = np.random.default_rng(103)
+    n = 30
+    a = np.full((n, n), 2.0)
+    np.fill_diagonal(a, 0.0)  # essentially constant off-diagonal distances
+    b = _scored_matrix(rng.normal(size=n), 0.3, rng)
+    out = cross_plm_agreement_ci(a, b, metric="w1_z", n_boot=200, alpha=0.1, seed=105)
+    assert math.isfinite(out["point"])
+    assert out["point"] >= 0.0
+
+
+# ── FIX I2: jackknife must drop k from BOTH matrices (teeth) ─────────────────────
+def test_jackknife_drops_k_from_both_matrices():
+    # The jackknife closure must recompute the metric on BOTH sub-matrices with vertex k
+    # removed (np.ix_(keep, keep) on each). A sabotage that drops k from only ONE matrix
+    # would survive without this teeth test (at n=12 it moves a CI endpoint up to ~0.068).
+    # We reach into the binding's closure and assert its value at k equals the metric
+    # recomputed on BOTH sub-matrices for a hand fixture.
+    from evaluation.cross_plm import _make_closures
+    from evaluation.stats import _full_pair_values, spearman_rho
+
+    a, b = _correlated_pair(n=12, noise=0.3, seed=201)
+    n, _point, _boot, jack = _make_closures(a, b, spearman_rho)
+    for k in range(n):
+        keep = np.arange(n) != k
+        da, db, _, _ = _full_pair_values(a[np.ix_(keep, keep)], b[np.ix_(keep, keep)])
+        expected = spearman_rho(da, db)
+        got = jack(k)
+        assert got == pytest.approx(expected, abs=1e-12), f"jackknife k={k} mismatch"
+
+    # teeth: a one-sided jackknife (drops k from a only, keeps b whole) must DIFFER —
+    # proving the test would catch that sabotage.
+    def _one_sided_jack(k: int) -> float:
+        keep = np.arange(n) != k
+        sub_a = a[np.ix_(keep, keep)]
+        da, _, _, _ = _full_pair_values(sub_a, sub_a)
+        # b kept whole but truncated to matching pair count (the naive sabotage)
+        _, db_full, _, _ = _full_pair_values(b, b)
+        kk = min(da.size, db_full.size)
+        return spearman_rho(da[:kk], db_full[:kk])
+
+    diffs = [abs(jack(k) - _one_sided_jack(k)) for k in range(n)]
+    assert max(diffs) > 1e-6, "one-sided jackknife sabotage must measurably differ"
+
+
+# ── FIX I3: W₁ clip=None — a large-scale-gap cell yields ci_hi > 1.0 ─────────────
+def test_w1_ci_unbounded_above_one():
+    # W₁ is UNBOUNDED; the binding passes clip=None. A large scale gap pushes the W₁ point
+    # (and CI) well above 1.0. A wrongly-applied (-1, 1) clip would truncate the real CI.
+    rng = np.random.default_rng(207)
+    n = 30
+    score = rng.normal(size=n)
+    a = _scored_matrix(score, 0.05, rng)
+    b = a * 8.0  # big scale gap -> W₁ ~ several units
+    np.fill_diagonal(b, 0.0)
+    out = cross_plm_agreement_ci(a, b, metric="w1_raw", n_boot=400, alpha=0.1, seed=209)
+    assert not out["degenerate"]
+    assert out["point"] > 1.0
+    assert out["ci_hi"] > 1.0
+
+
+# ── FIX I4: W₁ scale-relative divergence_tol does not cry wolf on a clean cell ───
+def test_w1_divergence_flag_false_on_clean_cell():
+    # A clean, large-n, well-behaved W₁ cell must have diverged=False: the scale-relative
+    # divergence_tol (0.25 * |point|) tracks the cell's own magnitude and must NOT trip on a
+    # well-conditioned interval. (A fixed 0.05 tol on an unbounded W₁ would flag everything.)
+    rng = np.random.default_rng(211)
+    n = 60
+    score = rng.normal(size=n)
+    a = _scored_matrix(score, 0.1, rng)
+    b = a * 1.5 + 0.2
+    np.fill_diagonal(b, 0.0)
+    out = cross_plm_agreement_ci(a, b, metric="w1_raw", n_boot=600, alpha=0.1, seed=213)
+    assert not out["degenerate"]
+    assert out["diverged"] is False
+
+
 # ── W₁ coverage simulation (slow) ───────────────────────────────────────────────
 @pytest.mark.slow
 def test_w1_coverage_near_nominal():

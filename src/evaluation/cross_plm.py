@@ -3,9 +3,22 @@
 Descriptive (Supplementary) arm: how similarly do two pLMs order / scale / linearly
 associate the SAME frozen protein pairs? For each unordered pLM-pair and distance it
 reports three symmetric agreement metrics — Spearman ρ, R² (signed-r vertex bootstrap),
-and Wasserstein-1 (raw + per-cohort z-scored) — each as a point + a per-cell vertex BCa CI
-+ a per-cell permutation p-value (U4). This is NOT a pLM ranking (Ivan's call) — the
-"which pLM" answer lives in the ground-truth arms (recall-FP / SNN / EC / pdb-TM).
+and Wasserstein-1 (raw + per-cohort z-scored) — each as a point + a per-cell vertex BCa CI.
+ρ and R² additionally carry a per-cell permutation p-value (U4). This is NOT a pLM ranking
+(Ivan's call) — the "which pLM" answer lives in the ground-truth arms
+(recall-FP / SNN / EC / pdb-TM).
+
+**W₁ has NO permutation p-value, by design.** A symmetric row+column label permutation
+only REORDERS the upper-triangle multiset of a distance matrix; it leaves each matrix's
+marginal distance multiset unchanged. W₁ is a function of those two marginals ONLY, so
+every permuted W₁ equals the observed W₁ → the null is degenerate (``w1_raw`` p≡1.0,
+``w1_z`` float-noise). The permutation null is the wrong null for a distributional
+distance. W₁ is therefore reported as a DESCRIPTIVE distance with its BCa CI only.
+``cross_plm_permutation_null`` RAISES ``ValueError`` for the W₁ metrics.
+
+**Downstream contract (U7 / Holm):** the multiple-comparison families are built ONLY over
+ρ and R² — four families ``{ρ, R²} × {euclidean, cosine}``. W₁ carries point + CI ONLY and
+MUST NOT enter any Holm family (it has no p-value).
 
 The CI binds three closures over the SHIPPED ``stats.vertex_bca_ci`` (no new stats.py CI
 fn). Because the two columns of every agreement cell are BOTH pLM-dependent vectors induced
@@ -66,12 +79,21 @@ def _zscore(v: np.ndarray) -> np.ndarray:
     standardised by its own (resample-local) mean/std before W₁, so a pure overall-scale
     difference between the two pLMs cancels and only distribution *shape* differences
     survive.
+
+    Constant guard: a numerically-constant vector has ``np.std`` ≈ 1e-16 (NOT exactly 0),
+    so an ``sd == 0.0`` test misses it and divides ~1e-16/~1e-16 -> spurious unit values
+    that silently corrupt ``w1_z``. Mirror the kernels' relative ``np.ptp(v) == 0`` guard
+    (``spearman_rho`` / the signed-r kernel both use it) and add a relative-std floor so a
+    near-constant column also maps to all-zeros rather than amplified float noise.
     """
     v = np.asarray(v, dtype=float)
+    if v.size == 0:
+        return v
+    mean = float(np.mean(v))
     sd = float(np.std(v))
-    if sd == 0.0:
+    if np.ptp(v) == 0 or sd <= 1e-12 * max(1.0, abs(mean)):
         return np.zeros_like(v)
-    return (v - float(np.mean(v))) / sd
+    return (v - mean) / sd
 
 
 def _w1_raw_kernel(da: np.ndarray, db: np.ndarray) -> float:
@@ -282,7 +304,7 @@ def cross_plm_permutation_null(
     n_perm: int = 1000,
     seed: int | np.random.Generator | None = 42,
 ):
-    """Per-cell permutation null + two-sided p for one cross-pLM agreement metric.
+    """Per-cell permutation null + two-sided p for the ρ / R² cross-pLM agreement metrics.
 
     Mirrors ``stats.correlation_permutation_null``: permutes pLM-B's protein labels with a
     SYMMETRIC row+column permutation (so ``dist_b`` stays a valid distance matrix over
@@ -292,21 +314,30 @@ def cross_plm_permutation_null(
     Returns ``(null_values, p_value)``. Kept in ``cross_plm.py`` (not ``stats.py``) per
     spec §5/§7 option (b) — metric-pluggable for a single consumer.
 
-    Identical-pLM behaviour (documented decision, uniform two-sided ``|null| >= |obs|``
-    rule across metrics):
+    **W₁ is REJECTED here (``metric in {w1_raw, w1_z}`` -> ``ValueError``).** A symmetric
+    row+column protein-label permutation only REORDERS the upper-triangle multiset of a
+    distance matrix; it leaves each matrix's marginal distance multiset UNCHANGED. W₁
+    depends only on those two marginals, so every permuted W₁ equals the observed W₁ — the
+    null is degenerate (``w1_raw`` p≡1.0, ``w1_z`` float-noise around it). A permutation
+    null is the wrong null for a distributional distance. W₁ is reported as a descriptive
+    distance with its BCa CI only (see ``cross_plm_agreement_ci``); it has no permutation p
+    by design, and MUST NOT enter any downstream Holm family.
 
-    * ``rho`` / ``r2`` — perfect agreement is the statistic MAXIMUM (1.0). Label
-      permutation breaks it, so ``|null| < |obs|`` almost surely -> p -> the floor
-      ``1/(n_perm+1)``. Perfect agreement is maximally significant — the principled call.
-    * ``w1_raw`` / ``w1_z`` — W₁ is a DISTANCE whose agreement extreme (0) is the lower
-      boundary; every null draw has ``|null| >= 0 = |obs|`` -> p -> 1.0. The
-      magnitude-based two-sided test cannot call the minimum extreme. This opposite
-      polarity is intentional (W₁ small = agreement, ρ/R² large = agreement) and uniform
-      under the one ``|null| >= |obs|`` rule, so no metric needs special-casing.
+    Identical-pLM behaviour for ρ / R² (documented decision, two-sided ``|null| >= |obs|``):
+    perfect agreement is the statistic MAXIMUM (1.0). Label permutation breaks it, so
+    ``|null| < |obs|`` almost surely -> p -> the floor ``1/(n_perm+1)``. Perfect agreement
+    is maximally significant — the principled call.
     """
     if metric not in _METRIC_KERNELS:
         raise ValueError(
             f"unknown metric {metric!r}; expected one of {sorted(_METRIC_KERNELS)}"
+        )
+    if metric in ("w1_raw", "w1_z"):
+        raise ValueError(
+            "permutation null is undefined for W₁ — a symmetric label permutation "
+            "preserves each matrix's marginal distance distribution, so the null is "
+            "degenerate (every permuted W₁ == observed); report W₁ as a descriptive "
+            "distance with its BCa CI only (cross_plm_agreement_ci), not a permutation p."
         )
     kernel = _METRIC_KERNELS[metric]
     dist_a = np.asarray(dist_a, dtype=float)

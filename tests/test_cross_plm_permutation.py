@@ -1,11 +1,17 @@
-"""Unit 4 — the cross-pLM per-cell permutation null (metric-pluggable).
+"""Unit 4 — the cross-pLM per-cell permutation null (rho / R² only).
 
 Mirrors stats.correlation_permutation_null's symmetric row+column protein-label
-permutation, but pluggable over the cross-pLM metrics (rho / r2-signed-r / w1_raw / w1_z):
+permutation, pluggable over the cross-pLM CORRELATION metrics (rho / r2-signed-r):
 permute ONE pLM's protein labels (so its matrix stays a valid distance matrix over
 relabelled proteins), recompute the metric against the other pLM's fixed matrix -> null ->
 two-sided p (1 + #{|null| >= |obs|}) / (n_perm + 1). Lives in cross_plm.py (not stats.py)
 per spec §5/§7 option (b).
+
+W₁ has NO permutation null (FIX C1): a symmetric label permutation preserves each matrix's
+marginal distance distribution, so every permuted W₁ == observed -> the null is degenerate
+(w1_raw p≡1.0, w1_z float-noise). The function RAISES ValueError for the W₁ metrics; W₁ is
+a descriptive distance reported with its BCa CI only. Downstream Holm families are built
+ONLY over {rho, R²} x {euclidean, cosine}, never W₁.
 """
 from __future__ import annotations
 
@@ -16,7 +22,9 @@ import pytest
 
 from evaluation.cross_plm import cross_plm_permutation_null
 
-CORR_METRICS = ("rho", "r2", "w1_raw", "w1_z")
+# the metrics that DO carry a permutation p (W₁ is excluded by design — see FIX C1)
+CORR_METRICS = ("rho", "r2")
+W1_METRICS = ("w1_raw", "w1_z")
 
 
 def _scored_matrix(score, noise_scale, rng):
@@ -57,32 +65,46 @@ def test_r2_noise_pair_p_high():
     assert p > 0.05
 
 
-# ── strong agreement -> p small ─────────────────────────────────────────────────
+# ── strong agreement -> p small (rho AND r2) ────────────────────────────────────
 def test_rho_strong_agreement_p_small():
     a, b = _correlated_pair(n=30, noise=0.05, seed=5)
     _, p = cross_plm_permutation_null(a, b, metric="rho", n_perm=200, seed=6)
     assert p < 0.05
 
 
-def test_w1_strong_disagreement_p_small():
-    # Two pLMs with very DIFFERENT marginal distance distributions -> large observed W1;
-    # permuting labels keeps the marginals the same shape, so the permuted W1 (on the SAME
-    # two marginals, just relabelled) is... actually a label permutation does NOT change a
-    # marginal distribution. So for W1 the permutation null tests whether the OBSERVED W1
-    # between two *fixed marginal shapes* is extreme vs the null of random pairing. We pin
-    # that a large scale gap gives a small p (the marginals differ beyond chance pairing).
+def test_r2_strong_agreement_p_small():
+    a, b = _correlated_pair(n=30, noise=0.05, seed=5)
+    _, p = cross_plm_permutation_null(a, b, metric="r2", n_perm=200, seed=6)
+    assert p < 0.05
+
+
+# ── FIX C1: W₁ has NO permutation null — it RAISES (was a vacuous p≡1.0 / float-noise) ──
+@pytest.mark.parametrize("metric", W1_METRICS)
+def test_w1_permutation_null_raises(metric):
+    # A symmetric label permutation preserves each matrix's marginal distance distribution,
+    # so every permuted W₁ == observed -> the null is degenerate and the p meaningless.
+    # The function must REFUSE to compute it (FIX C1), not bless a vacuous p.
     rng = np.random.default_rng(7)
     n = 30
     score = rng.normal(size=n)
     a = _scored_matrix(score, 0.05, rng)
     b = a * 6.0
     np.fill_diagonal(b, 0.0)
-    null, p = cross_plm_permutation_null(a, b, metric="w1_raw", n_perm=200, seed=8)
-    assert len(null) == 200
-    assert 0.0 <= p <= 1.0
+    with pytest.raises(ValueError, match="W₁"):
+        cross_plm_permutation_null(a, b, metric=metric, n_perm=200, seed=8)
 
 
-# ── identical-pLM behavior (documented) ─────────────────────────────────────────
+@pytest.mark.parametrize("metric", W1_METRICS)
+def test_w1_permutation_null_raises_even_when_identical(metric):
+    # identical pLMs is exactly the degenerate case the old softened test blessed (p≡1.0);
+    # it must now raise rather than return a meaningless number.
+    a, _ = _correlated_pair(n=30, seed=11)
+    b = a.copy()
+    with pytest.raises(ValueError):
+        cross_plm_permutation_null(a, b, metric=metric, n_perm=200, seed=12)
+
+
+# ── identical-pLM behavior for rho/r2 (documented) ──────────────────────────────
 def test_identical_plm_rho_p_is_floor():
     # identical pLMs -> obs rho = 1 (the max). Permutation breaks agreement so |null| < 1
     # almost always -> #{|null|>=1} ~ 0 -> p ~ floor 1/(n_perm+1). Documented: perfect
@@ -93,15 +115,18 @@ def test_identical_plm_rho_p_is_floor():
     assert p == pytest.approx(1.0 / 201.0, abs=1e-6)
 
 
-def test_identical_plm_w1_p_is_one():
-    # identical pLMs -> obs W1 = 0 (the MIN). A two-sided |null| >= |obs| test with obs=0
-    # is satisfied by EVERY null draw (all W1 >= 0) -> p ~ 1.0. Documented: W1 is a distance
-    # whose agreement extreme (0) is the lower boundary, so the magnitude-based two-sided
-    # test cannot call it extreme — opposite polarity to rho/r2 by design.
-    a, _ = _correlated_pair(n=30, seed=11)
-    b = a.copy()
-    _, p = cross_plm_permutation_null(a, b, metric="w1_raw", n_perm=200, seed=12)
-    assert p == pytest.approx(1.0, abs=1e-9)
+# ── FIX C1: the rho/r2 null is NON-DEGENERATE (it actually moves, spread > 0) ────
+@pytest.mark.parametrize("metric", CORR_METRICS)
+def test_rho_r2_null_is_non_degenerate(metric):
+    # The valid (rho/r2) permutation null must be a real distribution that MOVES — unlike
+    # the vacuous W₁ null where every draw == observed. Assert finite spread > 0 and that
+    # not all draws collapse onto a single value.
+    a, b = _correlated_pair(n=30, noise=0.3, seed=37)
+    null, _ = cross_plm_permutation_null(a, b, metric=metric, n_perm=200, seed=39)
+    finite = null[np.isfinite(null)]
+    assert finite.size > 0
+    assert float(np.ptp(finite)) > 1e-6
+    assert np.unique(np.round(finite, 9)).size > 1
 
 
 # ── reproducibility + dispatch ──────────────────────────────────────────────────
