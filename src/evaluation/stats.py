@@ -593,3 +593,22 @@ def spearman_rho(x: np.ndarray, y: np.ndarray) -> float:
 
 
 _CORRELATION_KERNELS = {"tau_b": kendall_tau_b, "spearman": spearman_rho}
+
+
+def _induced_pair_values(
+    dist_matrix: np.ndarray, ec_matrix: np.ndarray, idx: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectors over the induced unordered pairs of a resampled protein-index array.
+
+    For all resample positions ``p < q`` take the matrix entry between the *original*
+    proteins ``idx[p], idx[q]``, dropping self-pairs (``idx[p] == idx[q]``). Repeated
+    distinct indices reproduce the correct multiplicity (the vertex-bootstrap induced
+    multiset). Returns ``(dist_vals, ec_vals)`` aligned 1-D arrays.
+    """
+    idx = np.asarray(idx)
+    pi, qi = np.triu_indices(idx.size, k=1)
+    a = idx[pi]
+    b = idx[qi]
+    keep = a != b
+    a, b = a[keep], b[keep]
+    return dist_matrix[a, b], ec_matrix[a, b]
