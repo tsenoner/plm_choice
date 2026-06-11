@@ -15,6 +15,8 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+from scipy.spatial.distance import cdist
 
 
 def load_embeddings_h5(path: Path | str) -> dict[str, np.ndarray]:
@@ -82,3 +84,39 @@ def json_safe(obj):
     if isinstance(obj, (list, tuple)):
         return [json_safe(v) for v in obj]
     return obj
+
+
+# Single source of truth for the metric-name mapping shared by every arm that
+# needs a pairwise distance table (EC, pdb-TM). Mirrors recall_fp._DISTANCE_METRIC_MAP
+# so "cosine"/"euclidean" mean the same thing everywhere (no `1 - cossim` hand-roll).
+_DISTANCE_METRIC_MAP = {
+    "cosine": "cosine",
+    "euclidean": "euclidean",
+    "manhattan": "cityblock",
+}
+
+
+def pairwise_distance_long(
+    embeddings: dict[str, np.ndarray], *, distance: str
+) -> pd.DataFrame:
+    """All unordered-pair embedding distances in long form ``[a, b, dist]``.
+
+    One row per unordered pair with ``a < b`` lexicographically (the canonical key
+    every downstream join uses). Reused by the EC arm and the future pdb-TM arm —
+    both consume ``[a, b, dist]``. ``distance`` is one of ``cosine``/``euclidean``/
+    ``manhattan`` (the shared metric-name mapping).
+
+    Raises ``ValueError`` on an unknown distance or fewer than 2 proteins.
+    """
+    if distance not in _DISTANCE_METRIC_MAP:
+        raise ValueError(
+            f"distance={distance!r} not in {list(_DISTANCE_METRIC_MAP)}"
+        )
+    ids = sorted(embeddings)  # lexicographic, so the row key is canonical by construction
+    if len(ids) < 2:
+        raise ValueError(f"need >=2 proteins for a pairwise table (got {len(ids)})")
+    matrix = np.stack([np.asarray(embeddings[pid], dtype=np.float32) for pid in ids])
+    dmat = cdist(matrix, matrix, metric=_DISTANCE_METRIC_MAP[distance])
+    iu, ju = np.triu_indices(len(ids), k=1)  # upper triangle, no diagonal
+    records = [(ids[i], ids[j], float(dmat[i, j])) for i, j in zip(iu, ju)]
+    return pd.DataFrame(records, columns=["a", "b", "dist"])
