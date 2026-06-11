@@ -597,6 +597,32 @@ def spearman_rho(x: np.ndarray, y: np.ndarray) -> float:
     return float(_scipy_stats.spearmanr(x, y).statistic)
 
 
+def wasserstein_w1(x: np.ndarray, y: np.ndarray) -> float:
+    """Wasserstein-1 (earth-mover) distance between two 1-D samples — the single owner.
+
+    Wraps ``scipy.stats.wasserstein_distance`` so there is exactly one W₁ of record in the
+    codebase (the cross-pLM marginal-agreement metric and the pdb-TM bias both route
+    through this; previously inlined only in ``pdb_tm_bias``). W₁ is symmetric and the two
+    samples may differ in size (they are compared as empirical distributions, not paired).
+
+    Degenerate policy (explicit):
+
+    * both sides empty -> ``0.0`` (no mass to move);
+    * one side empty, the other non-empty -> ``nan`` (no defined transport plan);
+    * all-equal on both sides (or genuinely identical distributions) -> ``0.0`` —
+      scipy already returns this, but we state it as the contract callers may rely on.
+
+    Returns a plain ``float``.
+    """
+    x = np.asarray(x, dtype=float).ravel()
+    y = np.asarray(y, dtype=float).ravel()
+    if x.size == 0 and y.size == 0:
+        return 0.0
+    if x.size == 0 or y.size == 0:
+        return float("nan")
+    return float(_scipy_stats.wasserstein_distance(x, y))
+
+
 _CORRELATION_KERNELS = {"tau_b": kendall_tau_b, "spearman": spearman_rho}
 
 

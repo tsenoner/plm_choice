@@ -29,9 +29,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr, wasserstein_distance
+from scipy.stats import pearsonr
 
-from evaluation.stats import bca_bootstrap, r2_ci_via_r
+from evaluation.stats import bca_bootstrap, r2_ci_via_r, wasserstein_w1
 
 
 def _inner_join_pairs(left: pd.DataFrame, right: pd.DataFrame, value_cols: tuple[str, str]) -> pd.DataFrame:
@@ -87,7 +87,7 @@ def paired_tm_delta(
 
     median = float(np.median(delta))
     _, ci_low, ci_high = bca_bootstrap(delta, statistic=np.median, B=10_000, rng=rng)
-    w1 = float(wasserstein_distance(pred, exp))
+    w1 = wasserstein_w1(pred, exp)
     r = float(pearsonr(pred, exp).statistic) if len(pred) >= 2 else float("nan")
 
     return {
