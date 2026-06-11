@@ -72,8 +72,13 @@ def _stem(plm: str, representation: str, distance: str) -> str:
     return f"orphan_{plm}_{representation}_{distance}"
 
 
-def _naive_pair_bca_ci(per_pair: pd.DataFrame, *, n_boot: int, alpha: float, seed: int):
+def _naive_pair_percentile_ci(per_pair: pd.DataFrame, *, n_boot: int, alpha: float, seed: int):
     """The naive i.i.d.-pair bootstrap CI for AUROC (the FLAGGED comparison field).
+
+    Uses plain ``np.quantile`` percentiles (NOT BCa) — anticonservative on two counts:
+    i.i.d.-pair resampling ignores the dyadic dependence, and percentile (vs BCa) skips
+    the bias/acceleration correction. The manifest's ``naive_ci_*`` + ``ci_note`` already
+    flag it as the anticonservative comparison.
 
     Resamples ROWS (pairs) i.i.d. — anticonservative because pairs are dyadic. Returns
     ``(lo, hi)`` or ``(nan, nan)`` if the AUROC is degenerate. Skips draws that lose a
@@ -140,7 +145,7 @@ def orphan_correlation_report(
     ci = orphan_auroc_vertex_bca_ci(
         per_pair, n_boot=n_boot, alpha=ci_alpha, seed=seed,
     )
-    naive_lo, naive_hi = _naive_pair_bca_ci(
+    naive_lo, naive_hi = _naive_pair_percentile_ci(
         per_pair, n_boot=n_boot, alpha=ci_alpha, seed=seed,
     )
 
