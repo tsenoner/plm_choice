@@ -252,3 +252,82 @@ def ec_correlation_report(
         "path": str(written_pq),
     }
     return manifest
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI: score one (plm, distance) EC cell + sidecar. Exit 0 / 1 (drift) / 2 (config)."""
+    from shared.atomic_io import atomic_write
+
+    ap = argparse.ArgumentParser(
+        prog="ec_report",
+        description="Score one pLM's embedding-distance vs EC-distance correlation "
+        "against the frozen EC-positive cohort; write a per-pair parquet + sidecar JSON.",
+    )
+    ap.add_argument("--plm", required=True)
+    ap.add_argument("--emb-h5", required=True)
+    ap.add_argument("--freeze", required=True, help="EC-positive freeze JSON (its 'ids').")
+    ap.add_argument("--ec-tsv", required=True, help="UniProt-style label TSV for parse_ec.")
+    ap.add_argument("--ec-col", default=None, help="Structured EC column in the TSV (optional).")
+    ap.add_argument(
+        "--superfamily-source", default=None,
+        help="CATH labels TSV (Gene3D column) for the D9 homology control: enables the "
+        "within/across-superfamily + non-homologous strata. Without it those strata are "
+        "empty (the metric then cannot separate function from homology — the 92%% confound).",
+    )
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--distance", required=True, choices=("cosine", "euclidean", "manhattan"))
+    ap.add_argument("--statistic", default="tau_b", choices=("tau_b", "spearman"))
+    ap.add_argument("--ec-set-agg", default="min", choices=("min", "mean", "hausdorff"))
+    ap.add_argument("--wildcard-policy", default="exclude", choices=("exclude", "include"))
+    ap.add_argument("--representation", default="raw")
+    ap.add_argument("--allow-capped", action="store_true")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--n-boot", type=int, default=2000)
+    ap.add_argument("--n-perm", type=int, default=1000)
+    ap.add_argument("--ci-alpha", type=float, default=0.05)
+    args = ap.parse_args(argv)
+
+    try:
+        embeddings = load_embeddings_h5(args.emb_h5)
+        expected_ids = load_frozen_ids(args.freeze)
+        label_df = pd.read_csv(args.ec_tsv, sep="\t", dtype=str)
+        ec_labels = parse_ec(label_df, ec_col=args.ec_col, wildcard_policy=args.wildcard_policy)
+        superfamily = None
+        if args.superfamily_source:
+            from evaluation.label_adapters import load_cath_labels
+            cath = load_cath_labels(args.superfamily_source)
+            superfamily = dict(zip(cath["protein_id"], cath["superfamily"]))
+        manifest = ec_correlation_report(
+            embeddings, ec_labels, args.out_dir,
+            plm=args.plm, distance=args.distance, statistic=args.statistic,
+            ec_set_agg=args.ec_set_agg, wildcard_policy=args.wildcard_policy,
+            representation=args.representation, expected_ec_ids=expected_ids,
+            seed=args.seed, n_boot=args.n_boot, n_perm=args.n_perm,
+            ci_alpha=args.ci_alpha, allow_capped=args.allow_capped,
+            superfamily=superfamily, overwrite=True,
+        )
+    except PopulationError as e:
+        print(f"ec_report: POPULATION DRIFT: {e}", file=sys.stderr, flush=True)
+        return 1
+    except (FileNotFoundError, OSError) as e:
+        print(f"ec_report: I/O ERROR: {e}", file=sys.stderr, flush=True)
+        return 2
+    except (ValueError, KeyError) as e:
+        print(f"ec_report: INPUT ERROR: {e}", file=sys.stderr, flush=True)
+        return 2
+
+    sidecar = Path(args.out_dir) / f"{_stem(args.plm, args.representation, args.distance)}.manifest.json"
+    written = atomic_write(
+        sidecar,
+        lambda p: p.write_text(json.dumps(json_safe(manifest), indent=2) + "\n"),
+        mode="replace",
+    )
+    print(f"ec_report: {args.plm} / {args.distance} (n={manifest['n_ec_proteins']}) "
+          f"tau_b={manifest['tau_b']} rho={manifest['rho']} "
+          f"[{manifest['ci_lo']}, {manifest['ci_hi']}] perm_p={manifest['perm_p_value']} "
+          f"-> {written}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

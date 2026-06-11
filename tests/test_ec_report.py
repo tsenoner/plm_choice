@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -152,3 +154,107 @@ def test_report_writes_parquet_and_returns_manifest(tmp_path):
     assert manifest["per_pair_columns"] == list(manifest["per_pair_columns"])
     assert manifest["n_ec_proteins"] == len(ids)
     assert "path" in manifest
+
+
+import h5py
+from evaluation.ec_report import main as ec_main
+
+
+def _write_h5(path, emb):
+    with h5py.File(path, "w") as f:
+        for k, v in emb.items():
+            f.create_dataset(k, data=np.asarray(v, dtype=np.float32))
+
+
+def _write_freeze(path, ids):
+    path.write_text(json.dumps({"set_name": "ec_positive_subset", "ids": ids,
+                                "n_proteins": len(ids)}))
+
+
+def test_cli_exit0_writes_sidecar(tmp_path, capsys):
+    emb, ec_labels, ids = _monotone_cohort()
+    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    tsv = tmp_path / "labels.tsv"
+    # Build a UniProt-style TSV the CLI's parse_ec reads.
+    pd.DataFrame({
+        "Entry": ids,
+        "Protein names": [f"enzyme (EC {list(s)[0]})" for s in ec_labels["ec_set"]],
+    }).to_csv(tsv, sep="\t", index=False)
+    rc = ec_main([
+        "--plm", "toyplm", "--emb-h5", str(h5), "--freeze", str(freeze),
+        "--ec-tsv", str(tsv), "--out-dir", str(tmp_path),
+        "--distance", "euclidean", "--n-boot", "200", "--n-perm", "100", "--ci-alpha", "0.1",
+    ])
+    assert rc == 0
+    sidecar = tmp_path / "ec_toyplm_raw_euclidean.manifest.json"
+    assert sidecar.exists()
+    m = json.loads(sidecar.read_text())
+    assert m["plm"] == "toyplm" and m["statistic"] == "tau_b"
+
+
+def test_cli_exit2_on_missing_input(tmp_path):
+    rc = ec_main([
+        "--plm", "x", "--emb-h5", str(tmp_path / "nope.h5"),
+        "--freeze", str(tmp_path / "nope.json"), "--ec-tsv", str(tmp_path / "nope.tsv"),
+        "--out-dir", str(tmp_path), "--distance", "euclidean",
+    ])
+    assert rc == 2
+
+
+def test_cli_exit1_on_population_drift(tmp_path):
+    emb, ec_labels, ids = _monotone_cohort()
+    del emb[ids[0]]  # drop a frozen id from the embeddings
+    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    tsv = tmp_path / "labels.tsv"
+    pd.DataFrame({"Entry": ids,
+                  "Protein names": [f"enzyme (EC {list(s)[0]})" for s in ec_labels["ec_set"]]
+                  }).to_csv(tsv, sep="\t", index=False)
+    rc = ec_main(["--plm", "toyplm", "--emb-h5", str(h5), "--freeze", str(freeze),
+                  "--ec-tsv", str(tsv), "--out-dir", str(tmp_path), "--distance", "euclidean"])
+    assert rc == 1
+
+
+def test_cli_exit2_on_malformed_freeze(tmp_path):
+    # A freeze with an empty 'ids' list -> load_frozen_ids raises ValueError -> exit 2
+    # (the ValueError arm of the exit-code matrix, distinct from the I/O FileNotFound arm).
+    emb, ec_labels, ids = _monotone_cohort()
+    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
+    bad_freeze = tmp_path / "bad.json"; bad_freeze.write_text(json.dumps({"ids": []}))
+    tsv = tmp_path / "labels.tsv"
+    pd.DataFrame({"Entry": ids,
+                  "Protein names": [f"enzyme (EC {list(s)[0]})" for s in ec_labels["ec_set"]]
+                  }).to_csv(tsv, sep="\t", index=False)
+    rc = ec_main(["--plm", "toyplm", "--emb-h5", str(h5), "--freeze", str(bad_freeze),
+                  "--ec-tsv", str(tsv), "--out-dir", str(tmp_path), "--distance", "euclidean"])
+    assert rc == 2
+
+
+def test_cli_with_ec_col_and_superfamily_populates_strata(tmp_path):
+    # Integration: the structured --ec-col path AND the --superfamily-source homology
+    # control are both reachable from the CLI and populate the manifest strata (D8 + D9).
+    emb, ec_labels, ids = _monotone_cohort()
+    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    # Structured EC column (not the name regex).
+    tsv = tmp_path / "labels.tsv"
+    pd.DataFrame({"Entry": ids,
+                  "EC number": [list(s)[0] for s in ec_labels["ec_set"]]}).to_csv(
+        tsv, sep="\t", index=False)
+    # CATH labels TSV (Gene3D column) for the superfamily control: give two superfamilies.
+    cath = tmp_path / "cath.tsv"
+    pd.DataFrame({
+        "Entry": ids,
+        "Gene3D": ["3.40.50.300" if i % 2 == 0 else "1.10.10.10" for i in range(len(ids))],
+    }).to_csv(cath, sep="\t", index=False)
+    rc = ec_main([
+        "--plm", "toyplm", "--emb-h5", str(h5), "--freeze", str(freeze),
+        "--ec-tsv", str(tsv), "--ec-col", "EC number",
+        "--superfamily-source", str(cath), "--out-dir", str(tmp_path),
+        "--distance", "euclidean", "--n-boot", "200", "--n-perm", "100", "--ci-alpha", "0.1",
+    ])
+    assert rc == 0
+    m = json.loads((tmp_path / "ec_toyplm_raw_euclidean.manifest.json").read_text())
+    assert m["stratify_superfamily"] != {}          # homology control actually ran
+    assert "n_within_superfamily" in m["stratify_superfamily"]
