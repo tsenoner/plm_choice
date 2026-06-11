@@ -89,16 +89,17 @@ def read_sidecar_dict(path: Path | str) -> dict:
 
 
 def check_per_query_columns_drift(manifest: dict, contract: Sequence[str],
-                                  path: Path | str) -> None:
-    """Fail loud if the sidecar's per_query_columns disagree with the arm's contract.
+                                  path: Path | str, *, key: str = "per_query_columns") -> None:
+    """Fail loud if the sidecar's recorded column list disagrees with the arm's contract.
 
-    A sidecar predating the field (key absent or value ``None``) legitimately skips
-    the check.
+    ``key`` is the manifest field holding the column list (default ``per_query_columns``
+    for the per-query arms; the EC arm passes ``per_pair_columns``). A sidecar predating
+    the field (key absent or value ``None``) legitimately skips the check.
     """
-    cols = manifest.get("per_query_columns")
+    cols = manifest.get(key)
     if cols is not None and (not isinstance(cols, list) or tuple(cols) != tuple(contract)):
         raise SpecBuildError(
-            f"sidecar per_query_columns {cols!r} disagree with the contract "
+            f"sidecar {key} {cols!r} disagree with the contract "
             f"{list(contract)} ({path}); schema drift."
         )
 
