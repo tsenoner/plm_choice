@@ -200,3 +200,25 @@ def test_vertex_bca_coverage_is_near_nominal(model):
     # anticonservative) interval lands ~0.80 < 0.83 and FAILS — the band has teeth while
     # tolerating ~3 SE of Monte-Carlo noise on a valid interval.
     assert 0.83 <= coverage <= 0.96, f"[{model}] coverage {coverage:.2f} off nominal 0.90"
+
+
+from evaluation.stats import correlation_permutation_null
+
+
+def test_permutation_null_centers_near_zero_and_p_high_for_noise():
+    rng = np.random.default_rng(5)
+    n = 30
+    dist = rng.random((n, n)); dist = (dist + dist.T) / 2; np.fill_diagonal(dist, 0)
+    ec = rng.integers(0, 5, (n, n)).astype(float); ec = np.triu(ec) + np.triu(ec, 1).T
+    np.fill_diagonal(ec, 0)
+    null_vals, p = correlation_permutation_null(
+        dist, ec, statistic="tau_b", n_perm=200, seed=1)
+    assert len(null_vals) == 200
+    assert abs(np.mean(null_vals)) < 0.1     # null centers near 0
+    assert 0.0 <= p <= 1.0
+
+
+def test_permutation_p_small_for_strong_signal():
+    dist, ec = _monotone_matrices(n=30, seed=2)
+    _, p = correlation_permutation_null(dist, ec, statistic="tau_b", n_perm=200, seed=1)
+    assert p < 0.05

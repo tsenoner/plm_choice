@@ -750,3 +750,41 @@ def _pair_bootstrap_ci_width(
             boot.append(s)
     boot = np.asarray(boot)
     return float(np.quantile(boot, 1 - alpha / 2) - np.quantile(boot, alpha / 2))
+
+
+def correlation_permutation_null(
+    dist_matrix: np.ndarray,
+    ec_matrix: np.ndarray,
+    *,
+    statistic: str = "tau_b",
+    n_perm: int = 1000,
+    seed: int | np.random.Generator | None = 42,
+):
+    """M-permutation null for the matrix rank correlation + a two-sided p-value.
+
+    Permutes the EC-matrix protein labels (a symmetric row+column permutation, so the
+    EC matrix stays a valid distance matrix over relabelled proteins) ``n_perm`` times,
+    recomputing the statistic against the fixed embedding-distance matrix → the null
+    distribution. The two-sided permutation p-value is
+    ``(1 + #{|null| >= |obs|}) / (n_perm + 1)`` (the add-one keeps it strictly positive).
+    Returns ``(null_values, p_value)``.
+    """
+    stat_fn = _CORRELATION_KERNELS[statistic]
+    rng = _as_rng(seed)
+    n = int(dist_matrix.shape[0])
+    d_all, e_all, _, _ = _full_pair_values(dist_matrix, ec_matrix)
+    obs = stat_fn(d_all, e_all)
+
+    null = np.empty(n_perm, dtype=float)
+    iu, ju = np.triu_indices(n, k=1)
+    d_fixed = dist_matrix[iu, ju]
+    for m in range(n_perm):
+        perm = rng.permutation(n)
+        e_perm = ec_matrix[np.ix_(perm, perm)]
+        null[m] = stat_fn(d_fixed, e_perm[iu, ju])
+    finite = null[np.isfinite(null)]
+    if not math.isfinite(obs) or finite.size == 0:
+        return null, float("nan")
+    extreme = np.count_nonzero(np.abs(finite) >= abs(obs))
+    p = (1 + extreme) / (finite.size + 1)
+    return null, float(p)
