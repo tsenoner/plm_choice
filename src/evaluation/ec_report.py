@@ -145,6 +145,11 @@ def _build_matrices(
     dist_long = pairwise_distance_long(sub_emb, distance=distance)
     ec_long = ec_distance_matrix_set(sub_lab, agg=ec_set_agg)
     pairs = dist_long.merge(ec_long, on=["a", "b"], how="inner")
+    # Both long frames enumerate the same C(N,2) pairs over the same ids, so the inner
+    # merge must not drop rows; assert it so a future producer divergence fails loud.
+    assert len(pairs) == len(dist_long) == len(ec_long), (
+        f"pair-set divergence: dist={len(dist_long)} ec={len(ec_long)} merged={len(pairs)}"
+    )
 
     dist_matrix = _pivot_long_to_matrix(dist_long, ids, "dist")
     ec_matrix = _pivot_long_to_matrix(ec_long, ids, "ec_dist")
@@ -219,6 +224,7 @@ def ec_correlation_report(
         sensitivity[agg] = kendall_tau_b(dist_matrix[iu, ju], em[iu, ju])
 
     # Class stratification (first EC field; from the labels).
+    # Class label = first field of the lexicographically-smallest EC (a stable convention for multifunctional enzymes spanning >1 class).
     ec_class = {
         row.protein_id: sorted(row.ec_set)[0].split(".")[0]
         for row in ec_labels.itertuples() if row.ec_set

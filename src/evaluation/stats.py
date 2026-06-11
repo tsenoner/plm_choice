@@ -650,8 +650,8 @@ def correlation_vertex_bca_ci(
     ``"spearman"`` (the kernels in this module). Returns
     ``(lo, hi, point, degenerate, percentile_diverged)``:
 
-    * ``degenerate`` True (-> lo/hi NaN) when N < 4, a constant margin, or BCa fails to
-      form a finite interval;
+    * ``degenerate`` True (-> lo/hi NaN) when N < MIN_VERTEX_N (12), a constant margin,
+      or BCa fails to form a finite interval;
     * ``percentile_diverged`` True when the BCa interval and the plain percentile
       interval disagree by more than 0.05 (a sensitivity flag the report records).
 
