@@ -198,6 +198,30 @@ def bounded_mean_bca_ci(
     return float(lo), float(hi), False
 
 
+def _r2_from_r_ci(r_lo: float, r_hi: float) -> tuple[float, float]:
+    """Map a signed-r CI ``(r_lo, r_hi)`` to an R²-CI ``(r2_lo, r2_hi)``, B1 rule.
+
+    The single zero-crossing-aware ``r -> r²`` interval mapping in the codebase (the
+    standalone counterpart to the in-resample fix in ``evaluation.metrics``). Used by
+    ``r2_ci_via_r`` (the predicted-TM path) and the cross-pLM R² agreement binding, so the
+    "if the r-CI brackets 0 then r2_lo = 0" convention lives in exactly one place:
+
+    * ``r2_hi = max(r_lo², r_hi²)``;
+    * ``r2_lo = 0`` if the r-CI brackets 0 (``r_lo <= 0 <= r_hi``), else ``min(r_lo², r_hi²)``;
+    * both clipped to ``[0, 1]`` against floating-point spill (a signed-r CI may spill
+      slightly past ±1 on skewed BCa output).
+    """
+    r2_hi = max(r_lo * r_lo, r_hi * r_hi)
+    if r_lo <= 0.0 <= r_hi:
+        r2_lo = 0.0
+    else:
+        r2_lo = min(r_lo * r_lo, r_hi * r_hi)
+    # Guard against floating-point spill outside [0, 1].
+    r2_lo = max(0.0, min(1.0, r2_lo))
+    r2_hi = max(0.0, min(1.0, r2_hi))
+    return r2_lo, r2_hi
+
+
 def r2_ci_via_r(
     d: np.ndarray,
     t: np.ndarray,
@@ -250,14 +274,7 @@ def r2_ci_via_r(
         d_arr, statistic=_pearson_r, B=B, alpha=alpha, paired=t_arr, rng=rng
     )
 
-    r2_hi = max(r_lo * r_lo, r_hi * r_hi)
-    if r_lo <= 0.0 <= r_hi:
-        r2_lo = 0.0
-    else:
-        r2_lo = min(r_lo * r_lo, r_hi * r_hi)
-    # Guard against floating-point spill outside [0, 1].
-    r2_lo = max(0.0, min(1.0, r2_lo))
-    r2_hi = max(0.0, min(1.0, r2_hi))
+    r2_lo, r2_hi = _r2_from_r_ci(r_lo, r_hi)
 
     return {
         "r": float(r_point),
