@@ -36,6 +36,7 @@ import numpy as np
 from scipy import stats as _scipy_stats
 
 from evaluation.stats import (
+    _as_rng,
     _full_pair_values,
     _induced_pair_values,
     _r2_from_r_ci,
@@ -266,3 +267,66 @@ def _w1_record(metric, point, lo, hi, degenerate, diverged) -> dict:
         "degenerate": bool(degenerate),
         "diverged": bool(diverged),
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-cell permutation null (U4) — cross_plm-local, metric-pluggable
+# ---------------------------------------------------------------------------
+
+
+def cross_plm_permutation_null(
+    dist_a: np.ndarray,
+    dist_b: np.ndarray,
+    *,
+    metric: str,
+    n_perm: int = 1000,
+    seed: int | np.random.Generator | None = 42,
+):
+    """Per-cell permutation null + two-sided p for one cross-pLM agreement metric.
+
+    Mirrors ``stats.correlation_permutation_null``: permutes pLM-B's protein labels with a
+    SYMMETRIC row+column permutation (so ``dist_b`` stays a valid distance matrix over
+    relabelled proteins), recomputes ``metric(da_fixed, db_perm)`` on the upper-triangle
+    pairs ``n_perm`` times -> the null distribution. The two-sided permutation p-value is
+    ``(1 + #{|null| >= |obs|}) / (n_perm + 1)`` (the add-one keeps it strictly positive).
+    Returns ``(null_values, p_value)``. Kept in ``cross_plm.py`` (not ``stats.py``) per
+    spec §5/§7 option (b) — metric-pluggable for a single consumer.
+
+    Identical-pLM behaviour (documented decision, uniform two-sided ``|null| >= |obs|``
+    rule across metrics):
+
+    * ``rho`` / ``r2`` — perfect agreement is the statistic MAXIMUM (1.0). Label
+      permutation breaks it, so ``|null| < |obs|`` almost surely -> p -> the floor
+      ``1/(n_perm+1)``. Perfect agreement is maximally significant — the principled call.
+    * ``w1_raw`` / ``w1_z`` — W₁ is a DISTANCE whose agreement extreme (0) is the lower
+      boundary; every null draw has ``|null| >= 0 = |obs|`` -> p -> 1.0. The
+      magnitude-based two-sided test cannot call the minimum extreme. This opposite
+      polarity is intentional (W₁ small = agreement, ρ/R² large = agreement) and uniform
+      under the one ``|null| >= |obs|`` rule, so no metric needs special-casing.
+    """
+    if metric not in _METRIC_KERNELS:
+        raise ValueError(
+            f"unknown metric {metric!r}; expected one of {sorted(_METRIC_KERNELS)}"
+        )
+    kernel = _METRIC_KERNELS[metric]
+    dist_a = np.asarray(dist_a, dtype=float)
+    dist_b = np.asarray(dist_b, dtype=float)
+    rng = _as_rng(seed)
+    n = int(dist_a.shape[0])
+
+    iu, ju = np.triu_indices(n, k=1)
+    da_fixed = dist_a[iu, ju]
+    obs = kernel(da_fixed, dist_b[iu, ju])
+
+    null = np.empty(n_perm, dtype=float)
+    for p in range(n_perm):
+        perm = rng.permutation(n)
+        db_perm = dist_b[np.ix_(perm, perm)]
+        null[p] = kernel(da_fixed, db_perm[iu, ju])
+
+    finite = null[np.isfinite(null)]
+    if not math.isfinite(obs) or finite.size == 0:
+        return null, float("nan")
+    extreme = np.count_nonzero(np.abs(finite) >= abs(obs))
+    p_value = (1 + extreme) / (finite.size + 1)
+    return null, float(p_value)
