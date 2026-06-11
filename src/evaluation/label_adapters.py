@@ -204,3 +204,58 @@ def make_cath_is_positive_fn(labels: pd.DataFrame, level: str):
         return len(q & t) > 0
 
     return is_positive
+
+
+def _is_wildcard_ec(ec: str) -> bool:
+    """True if any of the 4 EC fields is a wildcard ``-`` (a partial / class-only EC)."""
+    fields = ec.split(".")
+    return any(f == "-" for f in fields) or len(fields) < 4
+
+
+def _ec_tokens(text: str) -> list[str]:
+    """All 4-field EC numbers in a free-text string (uses the shared name regex)."""
+    return _EC_RE.findall(text)
+
+
+def parse_ec(
+    df: pd.DataFrame,
+    *,
+    ec_col: str | None = None,
+    id_col: str = "Entry",
+    name_col: str = "Protein names",
+    wildcard_policy: str = "exclude",
+) -> pd.DataFrame:
+    """Set-valued EC adapter: one frozenset of EC numbers per protein.
+
+    Prefers a structured ``ec_col`` (a ``;``-separated UniProt "EC number" cell) when
+    given; otherwise falls back to the name regex on ``name_col`` (delegating the
+    per-string match to the same ``_EC_RE`` the scalar parser uses, so there is one
+    regex of record). Returns ``[protein_id, ec_set]`` with one row per protein that
+    has >=1 valid EC after policy filtering; proteins with none are omitted (caller
+    computes coverage as ``len(result) / len(df)``).
+
+    ``wildcard_policy`` (D8): ``"exclude"`` (default) drops any EC with a ``-`` field
+    or fewer than 4 fields (a partial EC has no well-defined hierarchical distance);
+    ``"include"`` keeps it verbatim. Preliminary serials (``n1``) are kept either way
+    (they have 4 fields). This is additive — the scalar ``parse_ec_from_protein_names``
+    is untouched.
+    """
+    if wildcard_policy not in {"exclude", "include"}:
+        raise ValueError(f"wildcard_policy={wildcard_policy!r} must be exclude/include")
+    records: list[tuple[str, frozenset]] = []
+    for _, row in df.iterrows():
+        pid = row[id_col]
+        if not isinstance(pid, str) or not pid.strip():
+            continue
+        if ec_col is not None and isinstance(row.get(ec_col), str):
+            raw = [tok.strip() for tok in row[ec_col].split(";") if tok.strip()]
+        else:
+            name = row.get(name_col)
+            raw = _ec_tokens(name) if isinstance(name, str) else []
+        kept = {
+            ec for ec in raw
+            if wildcard_policy == "include" or not _is_wildcard_ec(ec)
+        }
+        if kept:
+            records.append((pid, frozenset(kept)))
+    return pd.DataFrame(records, columns=["protein_id", "ec_set"])
