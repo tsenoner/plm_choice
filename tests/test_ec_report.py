@@ -74,3 +74,39 @@ def test_superfamily_within_across_and_nonhomologous_restriction():
     assert out["n_across_superfamily"] == 2    # P1-P3, P2-P3
     # non-homologous restriction == across-superfamily subset
     assert out["n_nonhomologous"] == 2
+
+
+from evaluation.ec_report import PopulationError, _build_matrices
+
+
+def test_build_matrices_aligned_and_symmetric():
+    emb = {
+        "P1": np.array([0.0, 0.0], dtype=np.float32),
+        "P2": np.array([3.0, 4.0], dtype=np.float32),
+        "P3": np.array([0.0, 1.0], dtype=np.float32),
+    }
+    ec_labels = pd.DataFrame({
+        "protein_id": ["P1", "P2", "P3"],
+        "ec_set": [frozenset({"1.1.1.1"}), frozenset({"1.1.1.1"}), frozenset({"2.7.11.1"})],
+    })
+    ids, dist, ec, pairs = _build_matrices(
+        emb, ec_labels, ["P1", "P2", "P3"], distance="euclidean", ec_set_agg="min")
+    assert ids == ["P1", "P2", "P3"]
+    assert dist.shape == (3, 3) and ec.shape == (3, 3)
+    assert np.allclose(dist, dist.T) and np.allclose(ec, ec.T)
+    assert dist[0, 1] == pytest.approx(5.0)   # P1-P2
+    assert ec[0, 1] == 0.0                      # share 1.1.1.1
+    assert ec[0, 2] == 4.0                      # class differs
+    # pairs frame carries the per-pair long form
+    assert set(pairs.columns) >= {"a", "b", "dist", "ec_dist"}
+
+
+def test_build_matrices_population_drift_raises():
+    emb = {"P1": np.array([0.0]), "P2": np.array([1.0])}  # missing P3
+    ec_labels = pd.DataFrame({
+        "protein_id": ["P1", "P2", "P3"],
+        "ec_set": [frozenset({"1.1.1.1"})] * 3,
+    })
+    with pytest.raises(PopulationError, match="missing"):
+        _build_matrices(emb, ec_labels, ["P1", "P2", "P3"],
+                        distance="euclidean", ec_set_agg="min", allow_capped=False)

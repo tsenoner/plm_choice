@@ -94,3 +94,58 @@ def stratify_by_superfamily(pairs: pd.DataFrame, superfamily: dict) -> dict:
         "rho_within_superfamily": spearman_rho(pairs.loc[within, "dist"], pairs.loc[within, "ec_dist"]),
         "rho_nonhomologous": spearman_rho(pairs.loc[across, "dist"], pairs.loc[across, "ec_dist"]),
     }
+
+
+class PopulationError(RuntimeError):
+    """A pLM is silently missing frozen EC-positive ids and was not flagged capped."""
+
+
+def _pivot_long_to_matrix(long_df: pd.DataFrame, ids: list[str], value_col: str) -> np.ndarray:
+    """Symmetric NxN matrix (id order = ``ids``) from a long ``[a, b, value]`` frame."""
+    pos = {pid: i for i, pid in enumerate(ids)}
+    n = len(ids)
+    mat = np.zeros((n, n), dtype=float)
+    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col]):
+        i, j = pos[a], pos[b]
+        mat[i, j] = mat[j, i] = float(v)
+    return mat
+
+
+def _build_matrices(
+    embeddings: dict,
+    ec_labels: pd.DataFrame,
+    expected_ids: list[str],
+    *,
+    distance: str,
+    ec_set_agg: str,
+    allow_capped: bool = False,
+):
+    """D12 seam: embeddings + EC labels -> (ids, dist_matrix, ec_matrix, pairs_df).
+
+    ``ids`` is the intersection of (expected frozen EC-positive ids) ∩ (embeddings) ∩
+    (labelled), in the frozen order. Raises :class:`PopulationError` if a frozen id is
+    missing from the embeddings and ``allow_capped`` is False (the population-drift
+    contract shared with the other arms).
+    """
+    label_ids = set(ec_labels["protein_id"])
+    present = [pid for pid in expected_ids if pid in embeddings and pid in label_ids]
+    missing = [pid for pid in expected_ids if pid not in embeddings]
+    if missing and not allow_capped:
+        raise PopulationError(
+            f"{len(missing)} frozen EC-positive id(s) missing from embeddings "
+            f"(e.g. {missing[:3]}); pass allow_capped for an arch-capped pLM."
+        )
+    ids = present
+    if len(ids) < 2:
+        raise ValueError(f"need >=2 common EC-positive proteins (got {len(ids)})")
+
+    sub_emb = {pid: embeddings[pid] for pid in ids}
+    sub_lab = ec_labels[ec_labels["protein_id"].isin(ids)].reset_index(drop=True)
+
+    dist_long = pairwise_distance_long(sub_emb, distance=distance)
+    ec_long = ec_distance_matrix_set(sub_lab, agg=ec_set_agg)
+    pairs = dist_long.merge(ec_long, on=["a", "b"], how="inner")
+
+    dist_matrix = _pivot_long_to_matrix(dist_long, ids, "dist")
+    ec_matrix = _pivot_long_to_matrix(ec_long, ids, "ec_dist")
+    return ids, dist_matrix, ec_matrix, pairs
