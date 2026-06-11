@@ -60,9 +60,31 @@ def test_malformed_rows_counted_not_silently_dropped(tmp_path):
 
 
 def test_malformed_count_surfaced_when_tolerated(tmp_path):
-    # When `strict=False` the loader returns (df, n_malformed) so the caller can log it.
+    # When `strict=False` the loader returns (df, n_malformed, n_self) so the caller
+    # can log them.
     rows = _ROWS + ["D\tE\t0.5\n", "F\n"]
     p = _write(tmp_path / "pairs.tsv", rows=rows)
-    df, n_malformed = load_orphan_pairs(p, strict=False)
+    df, n_malformed, n_self = load_orphan_pairs(p, strict=False)
     assert n_malformed == 2
+    assert n_self == 0
     assert df.shape[0] == 3  # only the well-formed rows survive
+
+
+def test_self_pair_dropped_and_counted(tmp_path):
+    # A p1 == p2 row violates the u != v invariant the boot weighting count(u)*count(v)
+    # and the incremental jackknife both assume. It must be dropped + counted, never
+    # scored — Bromberg pairs are distinct orphans.
+    rows = _ROWS + ["A\tA\t0.7\t0.6\tFalse\t40.0\n"]  # self-pair
+    p = _write(tmp_path / "pairs.tsv", rows=rows)
+    df, n_malformed, n_self = load_orphan_pairs(p, strict=False)
+    assert n_self == 1
+    assert n_malformed == 0
+    assert df.shape[0] == 3                      # the 3 well-formed distinct-orphan rows
+    assert not (df["p1"] == df["p2"]).any()      # no self-pair survived
+
+
+def test_self_pair_raises_when_strict(tmp_path):
+    rows = _ROWS + ["A\tA\t0.7\t0.6\tFalse\t40.0\n"]
+    p = _write(tmp_path / "pairs.tsv", rows=rows)
+    with pytest.raises(OrphanPairsError, match="self-pair"):
+        load_orphan_pairs(p)

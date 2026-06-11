@@ -20,6 +20,11 @@ def _pp(rows):
     return pd.DataFrame(rows, columns=["p1", "p2", "cos", "snn", "tm", "sibling"])
 
 
+# Pinned in test_n_boot_undefined_exact_deterministic_count after a one-time observation
+# of the (fixture, seed=777, n_boot=300) triple — a regression wire on the undefined count.
+_EXPECTED_N_BOOT_UNDEFINED = 108  # observed for (fixture, seed=777, n_boot=300)
+
+
 # ── the U-form kernel vs sklearn roc_auc_score (the equivalence the binding relies on) ──
 def test_weighted_auc_equals_sklearn_unit_weights():
     from sklearn.metrics import roc_auc_score
@@ -62,6 +67,156 @@ def test_weighted_auc_nan_when_one_class_empty():
     cos = np.array([0.1, 0.2, 0.3])
     sib = np.array([True, True, True])
     assert np.isnan(weighted_concordance_auc(cos, sib, np.ones(3)))
+
+
+def test_multiplicity_weight_equals_row_duplication_not_presence_mask():
+    # (b) The boot weighting is count(u)*count(v), a MULTISET — NOT a 0/1 presence mask.
+    # Construct a tiny set + a resample drawing one orphan with multiplicity 2, then
+    # assert weighted_concordance_auc on the induced weighted set equals the AUROC over
+    # the PHYSICALLY row-duplicated pair set. This FAILS if the weighting is swapped for
+    # a presence mask (which would weight that orphan's pairs 1, not 2/4).
+    from evaluation.orphan_auroc_ci import _build_boot, _prepare_vertices
+
+    # 4 orphans. Pairs chosen so the AUROC is NOT 1.0 (a discordant low sib exists), and
+    # so up-weighting O0 (which carries the HIGH concordant sibling) shifts the weighted
+    # AUROC away from the unweighted 0.5 — giving a different answer than a presence mask.
+    #   (O0,O1) sib  cos 0.99  -> concordant: above both non-sibs; weight grows with O0
+    #   (O1,O2) sib  cos 0.10  -> discordant: below both non-sibs
+    #   (O0,O2) non  cos 0.50
+    #   (O0,O3) non  cos 0.50
+    # Unweighted presence: 2/4 concordant = 0.5. Weighting O0 x2 -> 0.667.
+    df = _pp([
+        ("O0", "O1", 0.99, 0.5, 0.5, True),
+        ("O1", "O2", 0.10, 0.5, 0.5, True),
+        ("O0", "O2", 0.50, 0.5, 0.5, False),
+        ("O0", "O3", 0.50, 0.5, 0.5, False),
+    ])
+    cos, sibling, n, u, v = _prepare_vertices(df)
+    boot_fn, _ = _build_boot(cos, sibling, n, u, v)
+    # resample index drawing O0 TWICE (multiplicity 2), O1/O2/O3 once each.
+    idx = np.array([0, 0, 1, 2, 3], dtype=np.int64)
+    weighted_val = boot_fn(idx)
+
+    # count = {O0:2, O1:1, O2:1, O3:1}; pair weight = count(a)*count(b), per row:
+    #   r0 (O0,O1):2   r1 (O1,O2):1   r2 (O0,O2):2   r3 (O0,O3):2
+    mult = {0: 2, 1: 1, 2: 2, 3: 2}
+    cos_dup, sib_dup = [], []
+    for r in range(4):
+        for _ in range(mult[r]):
+            cos_dup.append(cos[r])
+            sib_dup.append(sibling[r])
+    dup_val = weighted_concordance_auc(
+        np.asarray(cos_dup), np.asarray(sib_dup), np.ones(len(cos_dup))
+    )
+    assert weighted_val == pytest.approx(dup_val, abs=1e-12)
+
+    # A presence-mask weighting (every active pair weight 1) gives a DIFFERENT answer,
+    # proving the test has teeth against that swap (multiset != presence).
+    active = np.array([2.0, 2.0, 2.0, 1.0]) > 0
+    presence_val = weighted_concordance_auc(cos[active], sibling[active], np.ones(active.sum()))
+    assert presence_val != pytest.approx(weighted_val, abs=1e-12)
+
+
+def test_zero_sibling_induced_set_returns_nan_not_half():
+    # (d) A weighted set whose siblings are all absent (one class) must return NaN — never
+    # the 0.5 a "no information" default would give. Both the kernel AND the boot closure.
+    from evaluation.orphan_auroc_ci import _build_boot, _prepare_vertices
+
+    cos = np.array([0.9, 0.1, 0.5])
+    sib_all_nonsib = np.array([False, False, False])
+    w = np.ones(3)
+    val = weighted_concordance_auc(cos, sib_all_nonsib, w)
+    assert np.isnan(val) and val != 0.5
+
+    # The boot closure: a resample whose induced sparse set has zero sibling pairs.
+    # All three pairs non-sibling -> any non-empty draw induces zero siblings -> NaN.
+    df = _pp([
+        ("O0", "O1", 0.9, 0.5, 0.5, False),
+        ("O0", "O2", 0.1, 0.5, 0.5, False),
+        ("O1", "O2", 0.5, 0.5, 0.5, False),
+    ])
+    c, s, n, u, v = _prepare_vertices(df)
+    boot_fn, undefined = _build_boot(c, s, n, u, v)
+    out = boot_fn(np.array([0, 1, 2], dtype=np.int64))
+    assert np.isnan(out)            # NaN, not 0.5
+    assert undefined[0] == 1        # counted as undefined
+
+
+def test_keeping_degenerate_draws_as_half_would_change_result():
+    # (d) cont. — a few-sibling fixture: pin that the NaN-skip path differs from a
+    # hypothetical "keep degenerate draws as 0.5" path. We compare the real CI against a
+    # reference that artificially substitutes 0.5 for the NaN draws; they must differ when
+    # any draws are undefined.
+    from evaluation.orphan_auroc_ci import _build_boot, _prepare_vertices
+
+    rng = np.random.default_rng(101)
+    n = 14
+    ids = [f"O{i}" for i in range(n)]
+    rows = [
+        ("O0", "O1", 0.9, 0.5, 0.5, True),
+        ("O2", "O3", 0.85, 0.5, 0.5, True),
+    ]
+    for a in range(n):
+        for b in range(a + 1, n):
+            if rng.random() < 0.45 and (a, b) not in {(0, 1), (2, 3)}:
+                rows.append((ids[a], ids[b], rng.normal(scale=0.3), 0.5, 0.5, False))
+    df = _pp(rows)
+    cos, sibling, nn, u, v = _prepare_vertices(df)
+    boot_fn, undefined = _build_boot(cos, sibling, nn, u, v)
+
+    prng = np.random.default_rng(5)
+    nan_skipped, half_kept = [], []
+    for _ in range(400):
+        idx = prng.integers(0, nn, size=nn)
+        val = boot_fn(idx)
+        if np.isnan(val):
+            half_kept.append(0.5)            # the WRONG policy keeps it as 0.5
+        else:
+            nan_skipped.append(val)
+            half_kept.append(val)
+    assert undefined[0] >= 1
+    # the two policies produce different bootstrap distributions (different means)
+    assert float(np.mean(nan_skipped)) != pytest.approx(float(np.mean(half_kept)), abs=1e-9)
+
+
+def test_n_boot_undefined_exact_deterministic_count():
+    # (e) Under a fixed seed, n_boot_undefined is a SPECIFIC integer, not merely >= 1.
+    rng = np.random.default_rng(202)
+    n = 14
+    ids = [f"O{i}" for i in range(n)]
+    rows = [
+        ("O0", "O1", 0.9, 0.5, 0.5, True),
+        ("O2", "O3", 0.85, 0.5, 0.5, True),
+    ]
+    for a in range(n):
+        for b in range(a + 1, n):
+            if rng.random() < 0.45 and (a, b) not in {(0, 1), (2, 3)}:
+                rows.append((ids[a], ids[b], rng.normal(scale=0.3), 0.5, 0.5, False))
+    df = _pp(rows)
+    out = orphan_auroc_vertex_bca_ci(df, n_boot=300, alpha=0.1, seed=777)
+    # Pin the exact count produced by this (fixture, seed, n_boot) triple.
+    assert out["n_boot_undefined"] == _EXPECTED_N_BOOT_UNDEFINED
+
+
+def test_validate_point_under_heavy_ties_does_not_raise():
+    # validate_point asserts the point kernel == the boot kernel on the identity resample.
+    # Under HEAVY cos ties (the case the sklearn-AUROC-vs-U-form mismatch would surface)
+    # it must NOT raise — the U-form's 0.5-tie handling matches sklearn.
+    rng = np.random.default_rng(303)
+    n = 24
+    ids = [f"O{i}" for i in range(n)]
+    rows = []
+    for a in range(n):
+        for b in range(a + 1, n):
+            if rng.random() < 0.3:
+                # round cos to 1 decimal -> many exact ties across rows
+                c = round(float(rng.normal(scale=0.5)), 1)
+                rows.append((ids[a], ids[b], c, 0.5, 0.5, bool(rng.integers(0, 2))))
+    df = _pp(rows)
+    # heavy ties present
+    assert df["cos"].duplicated().any()
+    out = orphan_auroc_vertex_bca_ci(df, n_boot=200, alpha=0.1, seed=9, validate_point=True)
+    assert "point" in out  # reached the end without validate_point raising
 
 
 # ── the vertex-BCa binding ──────────────────────────────────────────────────────────

@@ -40,16 +40,24 @@ def _open_text(path: Path):
 
 def load_orphan_pairs(
     path: Path | str, *, strict: bool = True
-) -> pd.DataFrame | tuple[pd.DataFrame, int]:
+) -> pd.DataFrame | tuple[pd.DataFrame, int, int]:
     """Load the orphan pairs TSV into a typed ``[p1, p2, tm, snn, sibling]`` frame.
 
     Gzip-aware (``.gz`` suffix → ``gzip.open``). The header MUST equal
-    :data:`EXPECTED_HEADER` or :class:`OrphanPairsError` is raised. A malformed row
-    (wrong field count, unparseable float) is counted:
+    :data:`EXPECTED_HEADER` or :class:`OrphanPairsError` is raised. Two row-level
+    pathologies are dropped-and-counted:
 
-    * ``strict=True`` (default): any malformed row raises :class:`OrphanPairsError`.
-    * ``strict=False``: returns ``(df, n_malformed)`` with the well-formed rows only,
-      so a caller can log the count (the legacy path silently dropped them).
+    * **malformed** rows (wrong field count, unparseable float);
+    * **self-pairs** (``p1 == p2``). Bromberg pairs are pairs of *distinct* orphans;
+      the downstream vertex-bootstrap weighting ``count(u)·count(v)`` and the incremental
+      leave-one-orphan-out jackknife both assume ``u != v``, so a self-pair violates an
+      invariant the CI machinery depends on. It is the loader's job to enforce it (the gate).
+
+    * ``strict=True`` (default): any malformed row OR any self-pair raises
+      :class:`OrphanPairsError`.
+    * ``strict=False``: returns ``(df, n_malformed, n_self_pairs)`` with the well-formed,
+      distinct-orphan rows only, so a caller can log the counts (the legacy path silently
+      kept/dropped them).
 
     ``sibling`` is parsed from the literal string ``True``/``False`` (the pairs file's
     own boolean encoding — no custom cutoff), exactly as ``run_pipeline._load_pairs``.
@@ -61,6 +69,7 @@ def load_orphan_pairs(
     snn_l: list[float] = []
     sib_l: list[bool] = []
     n_malformed = 0
+    n_self_pairs = 0
 
     with _open_text(path) as fh:
         header_line = fh.readline().rstrip("\n")
@@ -79,6 +88,9 @@ def load_orphan_pairs(
                 n_malformed += 1
                 continue
             a, b, t, s, sb, _pident = fields
+            if a == b:
+                n_self_pairs += 1  # u != v invariant — never score a self-pair
+                continue
             try:
                 tm_v = float(t)
                 snn_v = float(s)
@@ -95,6 +107,11 @@ def load_orphan_pairs(
         raise OrphanPairsError(
             f"{n_malformed} malformed row(s) in {path}; pass strict=False to tolerate"
         )
+    if strict and n_self_pairs:
+        raise OrphanPairsError(
+            f"{n_self_pairs} self-pair row(s) (p1==p2) in {path}; the orphan metric "
+            f"requires distinct orphans (u != v). Pass strict=False to drop + count them."
+        )
 
     df = pd.DataFrame(
         {
@@ -107,4 +124,4 @@ def load_orphan_pairs(
     )
     if strict:
         return df
-    return df, n_malformed
+    return df, n_malformed, n_self_pairs
