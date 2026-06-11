@@ -562,3 +562,34 @@ def grid_test(
             out.at[idx, "significant"] = bool(pair_to_rej[key])
 
     return out[out_columns]
+
+
+# ---------------------------------------------------------------------------
+# Rank-correlation kernels (the single τ-b / ρ owners) + vertex bootstrap
+# ---------------------------------------------------------------------------
+
+
+def kendall_tau_b(x: np.ndarray, y: np.ndarray) -> float:
+    """Kendall τ-b (tie-corrected) — the one τ-b implementation in the codebase.
+
+    Used by the EC point estimate, every bootstrap resample, and the permutation
+    null, so there is exactly one tie-handling convention. Returns NaN on a constant
+    margin (scipy returns NaN there too; we surface it as a float NaN).
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2 or np.ptp(x) == 0 or np.ptp(y) == 0:
+        return float("nan")
+    return float(_scipy_stats.kendalltau(x, y, variant="b").statistic)
+
+
+def spearman_rho(x: np.ndarray, y: np.ndarray) -> float:
+    """Spearman ρ — the one ρ implementation (NaN on a constant margin)."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2 or np.ptp(x) == 0 or np.ptp(y) == 0:
+        return float("nan")
+    return float(_scipy_stats.spearmanr(x, y).statistic)
+
+
+_CORRELATION_KERNELS = {"tau_b": kendall_tau_b, "spearman": spearman_rho}
