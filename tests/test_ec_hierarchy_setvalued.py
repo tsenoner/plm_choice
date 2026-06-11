@@ -41,3 +41,37 @@ def test_unknown_agg_raises():
 def test_empty_set_raises():
     with pytest.raises(ValueError, match="empty"):
         ec_distance_set(frozenset(), frozenset({"1.1.1.1"}), agg="min")
+
+
+import pandas as pd
+
+from evaluation.ec_hierarchy import (
+    correlate_embedding_distance_with_ec,
+    ec_distance_matrix_set,
+)
+
+
+def test_ec_distance_matrix_set_is_long_lexicographic():
+    labels = pd.DataFrame(
+        {
+            "protein_id": ["P2", "P1"],
+            "ec_set": [frozenset({"1.1.1.1"}), frozenset({"2.7.11.1"})],
+        }
+    )
+    df = ec_distance_matrix_set(labels, agg="min")
+    assert list(df.columns) == ["a", "b", "ec_dist"]
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert (row["a"], row["b"]) == ("P1", "P2")  # lexicographic
+    assert row["ec_dist"] == 4.0  # 1.x vs 2.x -> class differs
+
+
+def test_correlate_guards_zero_variance_ec():
+    # All EC distances identical -> Spearman is undefined; must not return a bogus rho.
+    emb = pd.DataFrame({"a": ["P1", "P1", "P2"], "b": ["P2", "P3", "P3"],
+                        "dist": [0.1, 0.2, 0.3]})
+    ec = pd.DataFrame({"a": ["P1", "P1", "P2"], "b": ["P2", "P3", "P3"],
+                       "ec_dist": [2.0, 2.0, 2.0]})
+    out = correlate_embedding_distance_with_ec(emb, ec)
+    assert out["spearman_rho"] != out["spearman_rho"]  # NaN
+    assert out["n_pairs"] == 3

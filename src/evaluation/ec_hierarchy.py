@@ -115,6 +115,29 @@ def ec_distance_set(
     raise ValueError(f"unknown agg={agg!r}; choose min/mean/hausdorff")
 
 
+def ec_distance_matrix_set(ec_labels: "pd.DataFrame", *, agg: str = "min") -> "pd.DataFrame":
+    """Long-form ``[a, b, ec_dist]`` over set-valued EC labels.
+
+    ``ec_labels`` has columns ``protein_id`` and ``ec_set`` (a frozenset of EC
+    strings per protein). One row per unordered pair (``a < b`` lexicographic);
+    ``ec_dist`` uses :func:`ec_distance_set` with the recorded ``agg``.
+    """
+    if not {"protein_id", "ec_set"}.issubset(ec_labels.columns):
+        raise KeyError("ec_labels must have columns protein_id and ec_set")
+    ids = ec_labels["protein_id"].tolist()
+    sets = ec_labels["ec_set"].tolist()
+    records: list[tuple[str, str, float]] = []
+    n = len(ids)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if ids[i] < ids[j]:
+                a, b, sa, sb = ids[i], ids[j], sets[i], sets[j]
+            else:
+                a, b, sa, sb = ids[j], ids[i], sets[j], sets[i]
+            records.append((a, b, ec_distance_set(sa, sb, agg=agg)))
+    return pd.DataFrame(records, columns=["a", "b", "ec_dist"])
+
+
 def correlate_embedding_distance_with_ec(
     embedding_distances: pd.DataFrame,
     ec_distances: pd.DataFrame,
@@ -130,15 +153,12 @@ def correlate_embedding_distance_with_ec(
     higher embedding distance, so positive rho is the prediction).
     """
     merged = embedding_distances.merge(ec_distances, on=["a", "b"], how="inner")
-    if merged.empty:
-        return {
-            "spearman_rho": float("nan"),
-            "p_value": float("nan"),
-            "n_pairs": 0,
-        }
+    n = int(len(merged))
+    # Spearman is undefined when either margin is constant (zero variance) — scipy
+    # returns NaN with a warning; we return NaN explicitly without pretending it is a
+    # measured 0. The point-estimate path is the smoke check; the CI path (stats) has
+    # its own degeneracy guards.
+    if merged.empty or merged["dist"].nunique() < 2 or merged["ec_dist"].nunique() < 2:
+        return {"spearman_rho": float("nan"), "p_value": float("nan"), "n_pairs": n}
     rho, p = spearmanr(merged["dist"].to_numpy(), merged["ec_dist"].to_numpy())
-    return {
-        "spearman_rho": float(rho),
-        "p_value": float(p),
-        "n_pairs": int(len(merged)),
-    }
+    return {"spearman_rho": float(rho), "p_value": float(p), "n_pairs": n}
