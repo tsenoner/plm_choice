@@ -37,7 +37,7 @@ and implementation boundaries.
 | **AAC floor** | the trivial 20-d amino-acid-composition floor each pLM must beat (one-sided Wilcoxon vs floor) | **shipped to `main`** |
 | **orphan** | Bromberg-orphan AUROC (Mann-Whitney U) with vertex-BCa CI | **shipped to `main`** |
 | **foundation** | generic `stats.vertex_bca_ci` (pluggable-statistic vertex-bootstrap BCa core) that EC/orphan/cross-pLM all bind to | **shipped to `main`** |
-| **cross-pLM agreement matrix** | descriptive: how similarly do two pLMs order/scale/associate the same frozen protein pairs? (ρ, R², W₁) | **compute core committed locally, not yet on remote `main`; report/barrier/assembly wiring in progress** (this doc's focus) — lands on `main` when the arm is pushed |
+| **cross-pLM agreement matrix** | descriptive: how similarly do two pLMs order/scale/associate the same frozen protein pairs? (ρ, R², W₁) | **shipped to `main`** — full arm (compute core U1–U4 + report/CLI + barrier spec + agreement-matrix assembly/Holm) pushed `76c7dae..7a08427`; arm-level fan-reviewed, runs via `python -m evaluation.cross_plm_report` (this doc's focus) |
 | **pdb-TM** | predicted-vs-experimental structure (TM) bias per pLM | **code on `main`, parked behind the B4 gate; data-blocked** (B4 sign-off is recorded out-of-band, not in the repo) |
 
 **Important framing (decided):** the cross-pLM arm is a **descriptive Supplementary agreement
@@ -171,8 +171,9 @@ vanish): the cross-pLM barrier spec must clone the **SNN** barrier (3-element `D
 
 ## 6. Where the detail lives
 
-- **Code:** `src/evaluation/cross_plm.py` (compute core), and the in-progress
-  `cross_plm_report.py` / `cross_plm_barrier_spec.py` (bridge + barrier).
+- **Code (all on `main`):** `src/evaluation/cross_plm.py` (compute core),
+  `cross_plm_report.py` (bridge + CLI), `cross_plm_barrier_spec.py` (fan-in barrier),
+  `cross_plm_matrix.py` (agreement-matrix assembly + Holm over the 6 families).
 - **Full design spec** (with the W₁ reasoning and build units): the companion PEE repo,
   `docs/superpowers/specs/2026-06-11-cross-plm-design.md`, §9 = the 2026-06-12 revision.
 - **The simulation** behind §3.3: `scripts/cross_plm_w1_null_simulation.py` (this repo).
