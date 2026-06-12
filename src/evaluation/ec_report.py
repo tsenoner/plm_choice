@@ -16,7 +16,13 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from evaluation.analysis_io import json_safe, load_embeddings_h5, load_frozen_ids, pairwise_distance_long
+from evaluation.analysis_io import (
+    _pivot_long_to_matrix,
+    json_safe,
+    load_embeddings_h5,
+    load_frozen_ids,
+    pairwise_distance_long,
+)
 from evaluation.ec_hierarchy import ec_distance_matrix_set
 from evaluation.label_adapters import parse_ec
 from evaluation.stats import (
@@ -98,17 +104,6 @@ def stratify_by_superfamily(pairs: pd.DataFrame, superfamily: dict) -> dict:
 
 class PopulationError(RuntimeError):
     """A pLM is silently missing frozen EC-positive ids and was not flagged capped."""
-
-
-def _pivot_long_to_matrix(long_df: pd.DataFrame, ids: list[str], value_col: str) -> np.ndarray:
-    """Symmetric NxN matrix (id order = ``ids``) from a long ``[a, b, value]`` frame."""
-    pos = {pid: i for i, pid in enumerate(ids)}
-    n = len(ids)
-    mat = np.zeros((n, n), dtype=float)
-    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col]):
-        i, j = pos[a], pos[b]
-        mat[i, j] = mat[j, i] = float(v)
-    return mat
 
 
 def _build_matrices(

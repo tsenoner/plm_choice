@@ -120,3 +120,21 @@ def pairwise_distance_long(
     iu, ju = np.triu_indices(len(ids), k=1)  # upper triangle, no diagonal
     records = [(ids[i], ids[j], float(dmat[i, j])) for i, j in zip(iu, ju)]
     return pd.DataFrame(records, columns=["a", "b", "dist"])
+
+
+def _pivot_long_to_matrix(long_df: pd.DataFrame, ids: list[str], value_col: str) -> np.ndarray:
+    """Symmetric NxN matrix (id order = ``ids``) from a long ``[a, b, value]`` frame.
+
+    The inverse of :func:`pairwise_distance_long`: places each unordered-pair ``value`` at
+    both ``(i, j)`` and ``(j, i)`` (``i``/``j`` are the positions of ``a``/``b`` in ``ids``),
+    leaving the diagonal at 0. The id order is taken from ``ids`` verbatim (NOT re-sorted),
+    so the caller controls row/column alignment. Shared by the EC arm and the cross-pLM arm —
+    both turn a per-pair long frame into the square matrix the vertex-bootstrap core consumes.
+    """
+    pos = {pid: i for i, pid in enumerate(ids)}
+    n = len(ids)
+    mat = np.zeros((n, n), dtype=float)
+    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col]):
+        i, j = pos[a], pos[b]
+        mat[i, j] = mat[j, i] = float(v)
+    return mat
