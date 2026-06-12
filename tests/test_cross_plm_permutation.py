@@ -11,7 +11,7 @@ W₁ has NO permutation null (FIX C1): a symmetric label permutation preserves e
 marginal distance distribution, so every permuted W₁ == observed -> the null is degenerate
 (w1_raw p≡1.0, w1_z float-noise). The function RAISES ValueError for the W₁ metrics; W₁ is
 a descriptive distance reported with its BCa CI only. Downstream Holm families are built
-ONLY over {rho, R²} x {euclidean, cosine}, never W₁.
+ONLY over {rho, R²} x {euclidean, cosine, manhattan}, never W₁.
 """
 from __future__ import annotations
 

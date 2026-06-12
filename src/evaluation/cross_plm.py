@@ -17,8 +17,8 @@ distance. W₁ is therefore reported as a DESCRIPTIVE distance with its BCa CI o
 ``cross_plm_permutation_null`` RAISES ``ValueError`` for the W₁ metrics.
 
 **Downstream contract (U7 / Holm):** the multiple-comparison families are built ONLY over
-ρ and R² — four families ``{ρ, R²} × {euclidean, cosine}``. W₁ carries point + CI ONLY and
-MUST NOT enter any Holm family (it has no p-value).
+ρ and R² — six families ``{ρ, R²} × {euclidean, cosine, manhattan}``. W₁ carries point + CI
+ONLY and MUST NOT enter any Holm family (it has no p-value).
 
 The CI binds three closures over the SHIPPED ``stats.vertex_bca_ci`` (no new stats.py CI
 fn). Because the two columns of every agreement cell are BOTH pLM-dependent vectors induced
