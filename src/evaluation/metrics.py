@@ -32,13 +32,17 @@ def _r2_ci_from_r_bounds(r_lower: float, r_upper: float) -> tuple[float, float]:
 
 
 def _bootstrap_worker(args):
-    """Worker function for parallel bootstrap sampling."""
-    targets, predictions, stat_func, value_transform, seed = args
-    np.random.seed(seed)
-    n_samples = len(targets)
+    """Compute the (optionally transformed) statistic for ONE bootstrap resample.
 
-    # Generate bootstrap indices
-    indices = np.random.choice(n_samples, size=n_samples, replace=True)
+    The resample indices are derived from ``worker_seed`` via a local
+    ``np.random.default_rng``. Using a fresh Generator per resample (rather than
+    reseeding the process-global ``np.random``) makes the parallel and
+    sequential paths produce identical results for the same seed and avoids
+    mutating global RNG state in worker processes.
+    """
+    targets, predictions, stat_func, value_transform, n_samples, worker_seed = args
+    rng = np.random.default_rng(worker_seed)
+    indices = rng.integers(0, n_samples, size=n_samples)
     targets_boot, predictions_boot = targets[indices], predictions[indices]
 
     try:
@@ -87,55 +91,46 @@ def _bootstrap_stat(
     ci_upper_key = f"{key_base}_{int(confidence_level * 100)}{ci_key_suffix_upper}"
     results = {se_key: np.nan, ci_lower_key: np.nan, ci_upper_key: np.nan}
 
+    # One child seed per resample, drawn from the single seeded Generator. Both
+    # the parallel and sequential paths rebuild each resample from its child seed
+    # (see ``_bootstrap_worker``), so they agree bit-for-bit at a given ``seed``
+    # and the parallel->sequential fallback below cannot change the result.
+    worker_seeds = rng.integers(0, 2**63 - 1, size=n_bootstrap)
+    worker_args = [
+        (targets, predictions, stat_func, value_transform, n_samples, int(s))
+        for s in worker_seeds
+    ]
+
+    bootstrap_stat_values = None
     # Use parallel processing for large bootstrap samples
     if use_parallel and n_bootstrap >= 100:
         try:
             n_processes = min(cpu_count(), 8)  # Limit to 8 processes max
-
-            # Prepare arguments for parallel processing
-            seeds = rng.integers(0, 2**31, n_bootstrap)
-            worker_args = [
-                (targets, predictions, stat_func, value_transform, seed)
-                for seed in seeds
-            ]
-
             with Pool(processes=n_processes) as pool:
-                bootstrap_stat_values = list(
-                    tqdm(
-                        pool.imap(_bootstrap_worker, worker_args),
-                        total=n_bootstrap,
-                        desc=f"Bootstrap {stat_name} (parallel)",
-                        unit="sample",
+                bootstrap_stat_values = np.array(
+                    list(
+                        tqdm(
+                            pool.imap(_bootstrap_worker, worker_args),
+                            total=n_bootstrap,
+                            desc=f"Bootstrap {stat_name} (parallel)",
+                            unit="sample",
+                        )
                     )
                 )
-
-            bootstrap_stat_values = np.array(bootstrap_stat_values)
-
         except Exception as e:
             print(f"Parallel bootstrap failed ({e}), falling back to sequential...")
-            use_parallel = False
+            bootstrap_stat_values = None
 
     # Sequential processing (fallback or for small n_bootstrap)
-    if not use_parallel or n_bootstrap < 100:
-        bootstrap_stat_values = np.empty(n_bootstrap)
-
-        # Bootstrap sampling with progress bar
-        for i in tqdm(range(n_bootstrap), desc=f"Bootstrap {stat_name}", unit="sample"):
-            indices = rng.integers(0, n_samples, size=n_samples)
-            targets_boot, predictions_boot = targets[indices], predictions[indices]
-            try:
-                if np.var(targets_boot) < 1e-9 or np.var(predictions_boot) < 1e-9:
-                    stat_val = np.nan
-                else:
-                    stat_val, _ = stat_func(targets_boot, predictions_boot)
-            except ValueError:
-                stat_val = np.nan
-            final_val = (
-                value_transform(stat_val)
-                if value_transform and not np.isnan(stat_val)
-                else stat_val
-            )
-            bootstrap_stat_values[i] = final_val
+    if bootstrap_stat_values is None:
+        bootstrap_stat_values = np.array(
+            [
+                _bootstrap_worker(arg)
+                for arg in tqdm(
+                    worker_args, desc=f"Bootstrap {stat_name}", unit="sample"
+                )
+            ]
+        )
 
     valid_bootstrap_stats = bootstrap_stat_values[~np.isnan(bootstrap_stat_values)]
     num_valid = len(valid_bootstrap_stats)

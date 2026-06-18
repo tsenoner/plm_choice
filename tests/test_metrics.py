@@ -18,8 +18,9 @@ Two issues being fixed here:
 from __future__ import annotations
 
 import numpy as np
+from scipy.stats import pearsonr
 
-from evaluation.metrics import calculate_regression_metrics
+from evaluation.metrics import _bootstrap_stat, calculate_regression_metrics
 
 
 def _linear(n: int, noise: float, seed: int):
@@ -50,6 +51,25 @@ def test_r2_ci_strong_correlation_valid_and_brackets_point():
     assert r2 > 0.95
     assert 0.0 <= lo <= r2 <= hi <= 1.0
     assert lo > 0.0  # r-CI does not bracket 0 for a strong correlation
+
+
+def test_bootstrap_parallel_and_sequential_agree_at_same_seed():
+    """Parallel and sequential resampling must produce identical CIs for a fixed
+    seed. Otherwise the published CI silently depends on the execution path (and
+    on the parallel->sequential fallback that triggers on a transient error)."""
+    targets, predictions = _linear(120, noise=0.05, seed=3)
+    common = dict(
+        n_bootstrap=150,
+        confidence_level=0.95,
+        stat_func=pearsonr,
+        stat_name="Pearson_r2",
+        square_after_ci=True,
+        seed=42,
+    )
+    par = _bootstrap_stat(targets, predictions, use_parallel=True, **common)
+    seq = _bootstrap_stat(targets, predictions, use_parallel=False, **common)
+    assert par["Pearson_r2_95_CI_lower"] == seq["Pearson_r2_95_CI_lower"]
+    assert par["Pearson_r2_95_CI_upper"] == seq["Pearson_r2_95_CI_upper"]
 
 
 def test_r2_ci_near_zero_lower_bound_is_zero():
