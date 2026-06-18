@@ -62,6 +62,15 @@ def test_cosine_zero_vector_is_nan():
     assert np.isnan(pairwise_distance(a, b, "cosine"))
 
 
+def test_cosine_nonfinite_is_nan():
+    """A NaN/inf embedding component must make cosine undefined (nan), not a
+    silent 0.0 -- which would rank a corrupt embedding as a perfect match."""
+    good = np.array([1.0, 1.0, 1.0])
+    assert np.isnan(pairwise_distance(np.array([np.nan, 1.0, 1.0]), good, "cosine"))
+    assert np.isnan(pairwise_distance(np.array([np.inf, 1.0, 1.0]), good, "cosine"))
+    assert np.isnan(pairwise_distance(good, np.array([np.nan, 1.0, 1.0]), "cosine"))
+
+
 def test_unknown_metric_raises():
     a = np.array([1.0, 2.0])
     b = np.array([3.0, 4.0])

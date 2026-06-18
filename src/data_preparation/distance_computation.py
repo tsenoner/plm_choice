@@ -67,11 +67,15 @@ def pairwise_distance(a: np.ndarray, b: np.ndarray, metric: str = "euclidean") -
     if metric == "cosine":
         norm_a = float(np.linalg.norm(a))
         norm_b = float(np.linalg.norm(b))
-        if norm_a == 0.0 or norm_b == 0.0:
+        # A zero-norm vector, or a non-finite (NaN/inf) component, makes cosine
+        # similarity undefined -> nan. Without the finiteness check a corrupt
+        # embedding would slip past the zero-norm guard and a NaN-unaware
+        # min/max clip, silently returning 0.0 (a spurious perfect match).
+        if not (np.isfinite(norm_a) and np.isfinite(norm_b)) or norm_a == 0.0 or norm_b == 0.0:
             return float("nan")
         cos_sim = float(np.dot(a, b) / (norm_a * norm_b))
         # Clip for floating-point spill outside [-1, 1].
-        cos_sim = max(-1.0, min(1.0, cos_sim))
+        cos_sim = float(np.clip(cos_sim, -1.0, 1.0))
         return 1.0 - cos_sim
     raise ValueError(
         f"unknown metric: {metric!r} (expected one of {VALID_METRICS})"
