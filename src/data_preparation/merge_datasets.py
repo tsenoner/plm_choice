@@ -321,7 +321,13 @@ class ProteinAnalysisPipeline:
             ]
         ).with_columns(
             [
-                # Compute HFSP score with conditional logic
+                # Compute HFSP score with conditional logic.
+                # Mahlich et al. 2018 (Bioinformatics 34:i304-i312) Eq. 4, for 11 < L <= 450:
+                #   HFSP = PIDE*100 - 770 * L^(-0.33 * (1 + exp(-L/1000)))
+                # The exponent is -0.33 * (1 + exp(-L/1000)) — the "1 +" is OUTSIDE exp(),
+                # and the argument of exp() is -L/1000 (not 1 + L/1000). Getting this wrong
+                # makes the L>450 branch (which subtracts 28.4, = the correct length term at
+                # L=450) discontinuous with the main branch. See tests/test_merge_datasets_hfsp.py.
                 pl.when(pl.col("ungapped_len") <= 11)
                 .then(pl.col("fident") * 100 - 100)
                 .when(pl.col("ungapped_len") <= 450)
@@ -329,7 +335,7 @@ class ProteinAnalysisPipeline:
                     pl.col("fident") * 100
                     - 770
                     * pl.col("ungapped_len").pow(
-                        -0.33 * (1 + pl.col("ungapped_len") / 1000).exp()
+                        -0.33 * (1 + (-pl.col("ungapped_len") / 1000).exp())
                     )
                 )
                 .otherwise(pl.col("fident") * 100 - 28.4)
