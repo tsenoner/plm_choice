@@ -5,11 +5,35 @@ build-backend = "hatchling.build"
 [project]
 name = "plm_choice"
 version = "0.1.0"
-description = "Add your description here"
+description = "Benchmarking framework for protein language model embeddings against sequence, structure and function similarity"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Tobias Senoner", email = "tobias.senoner@tum.de" },
+    { name = "Ivan Koludarov" },
+    { name = "Joshua Günther" },
+    { name = "Amarda Shehu" },
+    { name = "Burkhard Rost" },
+    { name = "Yana Bromberg" },
+]
+keywords = [
+    "protein language models",
+    "protein embeddings",
+    "bioinformatics",
+    "benchmark",
+    "machine learning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "altair>=5.5.0",
+    "diptest>=0.10.0",
     "esm>=3.2.0",
     "h5py>=3.12.1",
     "ijson>=3.4.0",
@@ -27,11 +51,32 @@ dependencies = [
     "sentencepiece>=0.2.0",
     "torch>=2.5.1",
     "tqdm>=4.67.1",
+    "typer>=0.15.1",
     "wandb>=0.21.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/tsenoner/plm_choice"
+Repository = "https://github.com/tsenoner/plm_choice"
+Preprint = "https://doi.org/10.1101/2025.10.30.685515"
+Dataset = "https://doi.org/10.5281/zenodo.17469267"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+# Each "src/<pkg>" entry is hatchling sugar for only-include + sources=["src"], so the
+# wheel exposes evaluation/, training/, ... at top level — exactly the layout pytest
+# already sees via pythonpath=["src"]. A bare packages=["src"] instead ships a package
+# literally named `src`, whose own `from evaluation....` imports then cannot resolve.
+packages = [
+    "src/data_preparation",
+    "src/evaluation",
+    "src/plm_choice",
+    "src/shared",
+    "src/training",
+    "src/visualization",
+]
+
+[project.scripts]
+plm = "plm_choice.cli:app"
 
 [dependency-groups]
 dev = [
@@ -43,7 +88,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 pythonpath = [".", "src"]
 markers = [
     "slow: long-running statistical coverage simulations (deselect with -m 'not slow')",
+    "integration: needs GPU, network, or bulk data that is not in the repo (skipped by default)",
 ]

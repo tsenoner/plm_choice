@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from tqdm import tqdm
 
-from src.shared.experiment_manager import ExperimentManager
+from shared.experiment_manager import ExperimentManager
 
 
 def main(args):

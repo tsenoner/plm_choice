@@ -43,13 +43,13 @@ import pytorch_lightning as pl
 
 # --------------------------------------------------------------------------- #
 # Project-specific imports – adjust package path if needed
-from src.shared.datasets import create_single_loader
-from src.training.models import (
+from shared.datasets import create_single_loader
+from training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,
 )
-from src.shared.helpers import get_device
+from shared.helpers import get_device
 # --------------------------------------------------------------------------- #
 
 MODEL_CLASSES = {

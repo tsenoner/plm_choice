@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from src.evaluation import infer_pairs as infer_mod
+from evaluation import infer_pairs as infer_mod
 
 
 # --------------------------------------------------------------------------- #

@@ -25,7 +25,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.visualization.pairwise_embedding_comparison import (
+from visualization.pairwise_embedding_comparison import (
     EmbeddingComparisonVisualizer,
     logger,
 )

@@ -16,9 +16,9 @@ from torch.utils.data import DataLoader
 import wandb
 import yaml
 
-from src.shared.datasets import create_single_loader, get_embedding_size
-from src.shared.experiment_manager import ExperimentManager, ExperimentPaths
-from src.training.models import (
+from shared.datasets import create_single_loader, get_embedding_size
+from shared.experiment_manager import ExperimentManager, ExperimentPaths
+from training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,

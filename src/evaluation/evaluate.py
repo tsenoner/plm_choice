@@ -10,16 +10,16 @@ from tqdm import tqdm
 import wandb
 
 # Project specific imports
-from src.shared.datasets import create_single_loader
-from src.shared.experiment_manager import ExperimentManager
-from src.evaluation.metrics import calculate_regression_metrics
-from src.training.models import (
+from shared.datasets import create_single_loader
+from shared.experiment_manager import ExperimentManager
+from evaluation.metrics import calculate_regression_metrics
+from training.models import (
     FNNPredictor,
     LinearRegressionPredictor,
     LinearDistancePredictor,
 )
-from src.visualization.plot_utils import plot_true_vs_predicted
-from src.shared.helpers import get_device
+from visualization.plot_utils import plot_true_vs_predicted
+from shared.helpers import get_device
 
 
 # --- Computation and Caching Helpers ---
