@@ -9,15 +9,45 @@ wheels/
 # Virtual environments
 .venv
 
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
 # macOS specific
 .DS_Store
 
-# Directories
+# Bulk data, model artifacts and generated outputs (archived on Zenodo, not in git)
 /data/
 /out/
 /models/
 /notebooks/
 /logs/
+/zenodo/*
+/bin/
+tests/test_outputs/
 
 # Scratch (one-off inspection scripts; never a reproducible artifact)
 scripts/tmp/
+scripts/backup/
+
+# Internal working docs — kept local; origin is PUBLIC.
+# resubmission_plan.html holds reviewer strategy, journal/APC decisions and
+# co-author coordination notes. A copy lives outside the repo at
+# ~/Documents/projects/_plm_choice_internal_backup/.
+/docs/resubmission_plan.html
+/docs/talks/
+/docs/lrz_setup.md
+/revisit/
+
+# Conference poster sources — large binaries, not part of the code release
+/docs/ismb_poster/
+
+# Large binaries / data artifacts
+*.h5
+*.ckpt
+*.pt
+*.npy
+*.ai
+*.parquet

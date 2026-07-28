@@ -346,4 +346,4 @@ Potential improvements:
 
 - [Pairwise Embedding Visualization](./PAIRWISE_EMBEDDING_VISUALIZATION_SUMMARY.md)
 - [Project Specification](./SPECIFICATION.md)
-- [Visualization README](../src/unknown_unknowns/visualization/README_pairwise_comparison.md)
+- [Visualization README](../src/visualization/README_pairwise_comparison.md)

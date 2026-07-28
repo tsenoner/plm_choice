@@ -1,0 +1,82 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper (preferred-citation) and, where relevant, the dataset DOI."
+title: "plm_choice: a benchmarking framework for protein language model embeddings"
+abstract: |
+  Analysis code accompanying the manuscript "Which pLM to choose?". The framework
+  systematically compares protein language model (pLM) embeddings against sequence,
+  structure and function similarity targets across multiple probe architectures
+  (feed-forward, linear, linear-on-difference, and training-free distance baselines).
+type: software
+license: MIT
+repository-code: "https://github.com/tsenoner/plm_choice"
+url: "https://github.com/tsenoner/plm_choice"
+keywords:
+  - protein language models
+  - protein embeddings
+  - sequence similarity
+  - structure similarity
+  - functional similarity
+  - benchmark
+  - machine learning
+  - bioinformatics
+authors:
+  - family-names: Senoner
+    given-names: Tobias
+    affiliation: "Technical University of Munich"
+    orcid: "https://orcid.org/0000-0002-6315-0458"
+  - family-names: Koludarov
+    given-names: Ivan
+    affiliation: "Technical University of Munich"
+    orcid: "https://orcid.org/0000-0002-9073-4758"
+  - family-names: Günther
+    given-names: Joshua
+    affiliation: "Technical University of Munich"
+  - family-names: Shehu
+    given-names: Amarda
+    affiliation: "George Mason University"
+  - family-names: Rost
+    given-names: Burkhard
+    affiliation: "Technical University of Munich"
+    orcid: "https://orcid.org/0000-0001-7780-3785"
+  - family-names: Bromberg
+    given-names: Yana
+    affiliation: "Emory University"
+    orcid: "https://orcid.org/0000-0002-8980-7194"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.17469267
+    description: "Zenodo concept DOI — always resolves to the latest version of the dataset"
+  - type: doi
+    value: 10.1101/2025.10.30.685515
+    description: "bioRxiv preprint of the accompanying manuscript"
+preferred-citation:
+  type: article
+  title: "Which pLM to choose?"
+  doi: 10.1101/2025.10.30.685515
+  url: "https://www.biorxiv.org/content/10.1101/2025.10.30.685515"
+  journal: "bioRxiv"
+  year: 2025
+  month: 10
+  authors:
+    - family-names: Senoner
+      given-names: Tobias
+      affiliation: "Technical University of Munich"
+      orcid: "https://orcid.org/0000-0002-6315-0458"
+    - family-names: Koludarov
+      given-names: Ivan
+      affiliation: "Technical University of Munich"
+      orcid: "https://orcid.org/0000-0002-9073-4758"
+    - family-names: Günther
+      given-names: Joshua
+      affiliation: "Technical University of Munich"
+    - family-names: Shehu
+      given-names: Amarda
+      affiliation: "George Mason University"
+    - family-names: Rost
+      given-names: Burkhard
+      affiliation: "Technical University of Munich"
+      orcid: "https://orcid.org/0000-0001-7780-3785"
+    - family-names: Bromberg
+      given-names: Yana
+      affiliation: "Emory University"
+      orcid: "https://orcid.org/0000-0002-8980-7194"

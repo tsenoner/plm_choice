@@ -1,0 +1,237 @@
+================================================================================
+ZENODO UPLOAD INSTRUCTIONS - FINAL (INDIVIDUAL FILES FORMAT)
+================================================================================
+DOI: 10.5281/zenodo.17469268
+Date: 2025-10-30
+================================================================================
+
+FILES UPLOADED TO ZENODO (19 files total):
+================================================================================
+
+Documentation files (always visible):
+1. README.md (~5 KB)
+   - Main documentation, visible on Zenodo without extraction
+
+2. DATA_DICTIONARY.md (~9 KB)
+   - Detailed format specifications, visible on Zenodo
+
+3. CITATION.cff (~2 KB)
+   - Citation metadata with DOI and ORCIDs
+
+Embedding files (uploaded individually, 15 files, ~29 GB total):
+4. ankh_base.h5 (1.9 GB)
+5. ankh_large.h5 (3.5 GB)
+6. clean.h5 (471 MB)
+7. esm1b.h5 (2.9 GB)
+8. esm2_8m.h5 (890 MB)
+9. esm2_35m.h5 (1.2 GB)
+10. esm2_150m.h5 (1.6 GB)
+11. esm2_650m.h5 (3.0 GB)
+12. esm2_3b.h5 (4.6 GB)
+13. esm3_open.h5 (3.5 GB)
+14. esmc_300m.h5 (2.3 GB)
+15. esmc_600m.h5 (2.7 GB)
+16. prott5.h5
+17. prottucker.h5
+18. random_1024.h5
+
+Supplementary data (single archive):
+19. supplementary_data.zip (~2.3 GB)
+    - Contains: datasets/sets/, model_checkpoints/, performance_metrics/,
+      pairwise_analysis/, data_quality/
+
+TOTAL UPLOAD SIZE: ~31 GB (19 files)
+
+================================================================================
+WHY INDIVIDUAL EMBEDDING FILES?
+================================================================================
+
+- Upload reliability: Large zip archives (25+ GB) kept failing during upload
+- Individual files (500 MB - 4.6 GB) upload more reliably
+- Selective downloading: Users can download only the models they need
+- No extraction needed: Files are immediately usable after download
+- Better error recovery: If one file fails, only re-upload that specific file
+
+================================================================================
+ZENODO UPLOAD STEPS:
+================================================================================
+
+1. Go to: https://zenodo.org/deposit/17469268/edit
+   (Your reserved DOI deposit)
+
+2. Upload these 19 files IN THIS ORDER:
+   a. Documentation first (small, fast):
+      - README.md
+      - DATA_DICTIONARY.md
+      - CITATION.cff
+
+   b. Supplementary data:
+      - supplementary_data.zip (~2.3 GB)
+
+   c. Embedding files (15 files, upload individually):
+      - ankh_base.h5, ankh_large.h5, clean.h5
+      - esm1b.h5, esm2_8m.h5, esm2_35m.h5, esm2_150m.h5, esm2_650m.h5, esm2_3b.h5
+      - esm3_open.h5, esmc_300m.h5, esmc_600m.h5
+      - prott5.h5, prottucker.h5, random_1024.h5
+
+3. Metadata (should already be filled):
+   - Title: "Which pLM to choose? - Complete Dataset and Analysis Results"
+   - Authors: Senoner, Tobias (0000-0002-6315-0458),
+             Koludarov, Ivan (0000-0002-9073-4758), et al.
+   - Description: See abstract in CITATION.cff
+   - License: CC-BY 4.0
+   - Keywords: protein language models, embeddings, benchmarking
+
+4. Publish the deposit
+
+5. Verify:
+   - Check all 19 files are accessible
+   - README and DATA_DICTIONARY are readable without extraction
+   - All .h5 files are downloadable
+   - supplementary_data.zip downloads and extracts correctly
+
+================================================================================
+USER INSTRUCTIONS (what users will do):
+================================================================================
+
+1. Download files from Zenodo:
+   - README.md (read this first)
+   - DATA_DICTIONARY.md (reference)
+   - CITATION.cff (citation info)
+   - supplementary_data.zip (2.3 GB - essential data)
+   - Individual .h5 files as needed (optional, ~1-5 GB each)
+
+2. Extract supplementary data:
+   ```bash
+   unzip supplementary_data.zip
+   ```
+
+3. Optional: Organize embeddings
+   ```bash
+   mkdir -p datasets/embeddings
+   mv *.h5 datasets/embeddings/
+   ```
+
+4. Use the data:
+   ```python
+   import pandas as pd
+   import h5py
+
+   # Load protein pairs
+   pairs = pd.read_parquet('datasets/sets/test.parquet')
+
+   # Load embeddings (direct from downloaded files)
+   with h5py.File('prott5.h5', 'r') as f:
+       embedding = f['A0A023YYV9'][:]
+   ```
+
+================================================================================
+WHAT'S IN EACH FILE:
+================================================================================
+
+Individual .h5 embedding files (~29 GB total):
+├── ankh_base.h5 (1.9 GB) - Ankh-base embeddings, 768-dim
+├── ankh_large.h5 (3.5 GB) - Ankh-large embeddings, 1536-dim
+├── clean.h5 (471 MB) - CLEAN embeddings, 128-dim
+├── esm1b.h5 (2.9 GB) - ESM-1b embeddings, 1280-dim
+├── esm2_8m.h5 (890 MB) - ESM2-8M embeddings, 320-dim
+├── esm2_35m.h5 (1.2 GB) - ESM2-35M embeddings, 480-dim
+├── esm2_150m.h5 (1.6 GB) - ESM2-150M embeddings, 640-dim
+├── esm2_650m.h5 (3.0 GB) - ESM2-650M embeddings, 1280-dim
+├── esm2_3b.h5 (4.6 GB) - ESM2-3B embeddings, 2560-dim
+├── esm3_open.h5 (3.5 GB) - ESM3-open embeddings, 1536-dim
+├── esmc_300m.h5 (2.3 GB) - ESMC-300M embeddings, 960-dim
+├── esmc_600m.h5 (2.7 GB) - ESMC-600M embeddings, 1152-dim
+├── prott5.h5 - ProtT5 embeddings, 1024-dim
+├── prottucker.h5 - ProtTucker embeddings, 128-dim
+└── random_1024.h5 - Random baseline embeddings, 1024-dim
+
+Each file contains 542,627 protein embeddings (UniProt IDs → vectors)
+
+supplementary_data.zip (~2.3 GB):
+├── datasets/
+│   └── sets/ - 3 parquet files with protein pairs
+│       ├── train.parquet
+│       ├── val.parquet
+│       └── test.parquet
+│
+├── model_checkpoints/ (1.1 GB)
+│   ├── euclidean/ - baseline results
+│   └── fnn/ - trained model weights
+│
+├── performance_metrics/ (~3 MB)
+│   ├── parsed_metrics_all.csv
+│   ├── parsed_metrics_all_pca.csv
+│   ├── trendline_statistics.csv
+│   └── *.png (2 plots)
+│
+├── pairwise_analysis/ (~5 MB)
+│   ├── *.csv (2 files)
+│   └── *.png (3 plots)
+│
+└── data_quality/ (~850 KB)
+    └── combined_distributions.png
+
+================================================================================
+POST-UPLOAD TASKS:
+================================================================================
+
+☐ Verify all 5 files uploaded correctly
+☐ Test download from Zenodo (both zip files)
+☐ Test extraction: unzip embeddings.zip && unzip supplementary_data.zip
+☐ Update GitHub README with Zenodo DOI badge
+☐ Share DOI with co-authors
+☐ Submit manuscript
+
+================================================================================
+GITHUB README UPDATE:
+================================================================================
+
+Add to the top of your GitHub README:
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17469268.svg)](https://doi.org/10.5281/zenodo.17469268)
+
+**Data Availability**: All data and results are available on Zenodo:
+https://doi.org/10.5281/zenodo.17469268
+
+The dataset is split into two archives for easier downloading:
+- `embeddings.zip` (25 GB) - pLM embeddings
+- `supplementary_data.zip` (7 GB) - all other data and results
+
+================================================================================
+NOTES:
+================================================================================
+
+- Documentation files (README, DATA_DICTIONARY, CITATION) are NOT in the
+  ZIPs - they are separate files visible on Zenodo without extraction
+
+- This provides best user experience: users can read docs before downloading
+
+- Two-file split allows users to:
+  1. Download only supplementary_data.zip if they don't need embeddings
+  2. Download embeddings separately if needed
+  3. Easier to resume failed downloads
+
+- Total of 5 files to upload: 3 documentation + 2 data archives
+
+- ZIP format is more universally compatible than tar.gz
+
+- Embeddings inside the ZIP remain as .tar.gz for better compression
+
+================================================================================
+UPLOAD TIME ESTIMATES (approximate):
+================================================================================
+
+With 10 Mbps upload speed:
+- Documentation files: < 1 minute
+- supplementary_data.zip (7 GB): ~90 minutes
+- embeddings.zip (25 GB): ~5-6 hours
+
+With 100 Mbps upload speed:
+- Documentation files: < 1 minute
+- supplementary_data.zip (7 GB): ~10 minutes
+- embeddings.zip (25 GB): ~30-40 minutes
+
+Tip: Upload during off-hours for better stability
+
+================================================================================

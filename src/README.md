@@ -138,7 +138,7 @@ python src/visualization/create_embedding_comparison_plots.py \
 
 ## Migration Notes
 
-This structure replaces the previous mixed `scripts/` and `src/unknown_unknowns/` organization with a cleaner, function-based layout. All import statements have been updated to use the new `src.*` namespace.
+This structure replaces the previous mixed `scripts/` and `src/unknown_unknowns/` organization with a cleaner, function-based layout. Modules are imported by their top-level package name (`evaluation.*`, `training.*`, `shared.*`, `visualization.*`, `data_preparation.*`), which is exactly how the installed wheel exposes them.
 
 ## Dependencies
 

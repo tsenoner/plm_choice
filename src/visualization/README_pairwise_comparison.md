@@ -1,6 +1,6 @@
 # Pairwise Embedding Comparison Visualizations
 
-This module provides comprehensive visualizations for comparing protein language model (PLM) embeddings through various analytical approaches. The implementation converts the functionality from the original Jupyter notebook (`src/unknown_unknowns/visualization/pairwise_embedding_comparison.ipynb`) into a robust, production-ready Python module that follows the project's structure and styling conventions.
+This module provides comprehensive visualizations for comparing protein language model (PLM) embeddings through various analytical approaches. The implementation converts the functionality from the original Jupyter notebook (`src/visualization/pairwise_embedding_comparison.ipynb`) into a robust, production-ready Python module that follows the project's structure and styling conventions.
 
 ## Overview
 
@@ -10,7 +10,7 @@ This system successfully transforms the exploratory Jupyter notebook into a prod
 
 ### Core Visualization Module
 
-**File**: `src/unknown_unknowns/visualization/pairwise_embedding_comparison.py`
+**File**: `src/visualization/pairwise_embedding_comparison.py`
 
 A complete Python class (`EmbeddingComparisonVisualizer`) that provides five different types of analysis with automatic caching of computationally expensive intermediate results and consistent color scheme matching project standards.
 
@@ -120,7 +120,7 @@ Implemented automatic caching of computationally expensive intermediate results:
 ### Basic Usage
 
 ```python
-from unknown_unknowns.visualization.pairwise_embedding_comparison import EmbeddingComparisonVisualizer
+from visualization.pairwise_embedding_comparison import EmbeddingComparisonVisualizer
 
 # Initialize visualizer
 visualizer = EmbeddingComparisonVisualizer(
@@ -172,7 +172,7 @@ uv run python scripts/create_pairwise_embedding_visualizations.py \
 
 ```python
 # Use the main visualization class directly
-uv run python -m unknown_unknowns.visualization.pairwise_embedding_comparison \
+uv run plm figures pairwise \
     --data_path data/processed/sprot_train/train.csv \
     --output_dir out/embedding_comparison \
     --visualizations all
@@ -368,7 +368,7 @@ The system provides a solid foundation for additional features:
 ## File Structure
 
 ```
-src/unknown_unknowns/visualization/
+src/visualization/
 ├── pairwise_embedding_comparison.py          # Main visualization class (1,541 lines)
 └── README_pairwise_comparison.md             # This comprehensive documentation
 
