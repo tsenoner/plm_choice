@@ -228,7 +228,7 @@ def test_cli_malformed_spec_file_returns_2(tmp_path):
 
 
 def test_cross_arm_merge_passes_real_barrier_and_attributes_failures(tmp_path):
-    from evaluation.barrier_spec import build_recall_fp_barrier_spec
+    from evaluation.recall_fp_barrier_spec import build_recall_fp_barrier_spec
     from evaluation.snn_barrier_spec import build_snn_barrier_spec
     from evaluation.barrier_spec_base import write_barrier_spec
 

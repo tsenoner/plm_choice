@@ -43,81 +43,14 @@ logger = logging.getLogger(__name__)
 logging.getLogger("matplotlib").setLevel(logging.INFO)
 
 # --- Project Constants & Configuration ---
-# These match the constants from create_performance_summary_plots.py for consistency
-
-PLM_SIZES: Dict[str, int] = {
-    "prott5": 1_500_000_000,
-    "prottucker": 1_500_000_000,
-    "prostt5": 1_500_000_000,
-    "clean": 650_000_000,
-    "esm1b": 650_000_000,
-    "esm2_8m": 8_000_000,
-    "esm2_35m": 35_000_000,
-    "esm2_150m": 150_000_000,
-    "esm2_650m": 650_000_000,
-    "esm2_3b": 3_000_000_000,
-    "esmc_300m": 300_000_000,
-    "esmc_600m": 600_000_000,
-    "esm3_open": 1_400_000_000,
-    "ankh_base": 450_000_000,
-    "ankh_large": 1_150_000_000,
-    "random_1024": 0,
-}
-
-EMBEDDING_FAMILY_MAP: Dict[str, str] = {
-    "prott5": "ProtT5",
-    "prottucker": "ProtT5",
-    "prostt5": "ProtT5",
-    "clean": "ESM-1",
-    "esm1b": "ESM-1",
-    "esm2_8m": "ESM-2",
-    "esm2_35m": "ESM-2",
-    "esm2_150m": "ESM-2",
-    "esm2_650m": "ESM-2",
-    "esm2_3b": "ESM-2",
-    "esmc_300m": "ESM-C",
-    "esmc_600m": "ESM-C",
-    "esm3_open": "ESM-3",
-    "ankh_base": "Ankh",
-    "ankh_large": "Ankh",
-    "random_1024": "Random",
-}
-
-# Color map for embedding families (consistent with create_performance_summary_plots.py)
-EMBEDDING_FAMILY_COLOR_MAP: Dict[str, str] = {
-    "ProtT5": "#ff1493",
-    "ESM-1": "#4daf4a",
-    "ESM-2": "#ff7f00",
-    "ESM-C": "#1f77b4",
-    "ESM-3": "#984ea3",
-    "Ankh": "#ffd700",
-    "Random": "#808080",
-}
-
-# Assign family color to each embedding
-EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
-    for embedding, family in EMBEDDING_FAMILY_MAP.items()
-}
-
-EMBEDDING_DISPLAY_NAMES: Dict[str, str] = {
-    "ankh_base": "Ankh\nBase",
-    "ankh_large": "Ankh\nLarge",
-    "clean": "CLEAN",
-    "esm1b": "ESM\n1b",
-    "esm2_8m": "ESM2\n8M",
-    "esm2_35m": "ESM2\n35M",
-    "esm2_150m": "ESM2\n150M",
-    "esm2_650m": "ESM2\n650M",
-    "esm2_3b": "ESM2\n3B",
-    "esm3_open": "ESM3",
-    "esmc_300m": "ESM C\n300M",
-    "esmc_600m": "ESM C\n600M",
-    "prostt5": "Prost\nT5",
-    "prott5": "Prot\nT5",
-    "prottucker": "Prot\nTucker",
-    "random_1024": "Random",
-}
+# Shared with create_performance_summary_plots.py — see visualization/plm_constants.py.
+from visualization.plm_constants import (
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_DISPLAY_NAMES,
+    EMBEDDING_FAMILY_COLOR_MAP,
+    EMBEDDING_FAMILY_MAP,
+    PLM_SIZES,
+)
 
 DEFAULT_STYLE = {
     "figure_size": (15, 12),

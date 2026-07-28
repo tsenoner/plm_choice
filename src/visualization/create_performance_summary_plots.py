@@ -32,63 +32,14 @@ PLOT_CONFIG = {
 }
 
 # --- Project Constants & Configuration ---
-
-# PLM Parameter Sizes (Update as needed)
-PLM_SIZES: Dict[str, int] = {
-    "prott5": 1_500_000_000,
-    "prottucker": 1_500_000_000,
-    "prostt5": 1_500_000_000,
-    "clean": 650_000_000,
-    "esm1b": 650_000_000,
-    "esm2_8m": 8_000_000,
-    "esm2_35m": 35_000_000,
-    "esm2_150m": 150_000_000,
-    "esm2_650m": 650_000_000,
-    "esm2_3b": 3_000_000_000,
-    "esmc_300m": 300_000_000,
-    "esmc_600m": 600_000_000,
-    "esm3_open": 1_400_000_000,
-    "ankh_base": 450_000_000,
-    "ankh_large": 1_150_000_000,
-    "random_1024": 0,
-}
-
-# Mapping from embedding name (lowercase stem) to family
-EMBEDDING_FAMILY_MAP: Dict[str, str] = {
-    "prott5": "ProtT5",
-    "prottucker": "ProtT5",
-    "prostt5": "ProtT5",
-    "clean": "ESM-1",
-    "esm1b": "ESM-1",
-    "esm2_8m": "ESM-2",
-    "esm2_35m": "ESM-2",
-    "esm2_150m": "ESM-2",
-    "esm2_650m": "ESM-2",
-    "esm2_3b": "ESM-2",
-    "esmc_300m": "ESM-C",
-    "esmc_600m": "ESM-C",
-    "esm3_open": "ESM-3",
-    "ankh_base": "Ankh",
-    "ankh_large": "Ankh",
-    "random_1024": "Random",
-}
-
-# Color map for embedding families
-EMBEDDING_FAMILY_COLOR_MAP: Dict[str, str] = {
-    "ProtT5": "#ff1493",
-    "ESM-1": "#4daf4a",
-    "ESM-2": "#ff7f00",
-    "ESM-C": "#1f77b4",
-    "ESM-3": "#984ea3",
-    "Ankh": "#ffd700",
-    "Random": "#808080",
-}
-
-# Assign family color to each embedding
-EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
-    for embedding, family in EMBEDDING_FAMILY_MAP.items()
-}
+# Sizes, families and colours are shared with pairwise_embedding_comparison.py;
+# a divergence would draw the same model in two colours across figures.
+from visualization.plm_constants import (
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_FAMILY_COLOR_MAP,
+    EMBEDDING_FAMILY_MAP,
+    PLM_SIZES,
+)
 
 # Marker map for model types
 MODEL_MARKER_MAP: Dict[str, str] = {

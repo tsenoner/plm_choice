@@ -1,6 +1,6 @@
 """Fan-in barrier spec-builder for the AAC-floor grid (population_tag x level).
 
-The AAC analogue of :mod:`evaluation.barrier_spec` / :mod:`evaluation.ec_barrier_spec`:
+The AAC analogue of :mod:`evaluation.recall_fp_barrier_spec` / :mod:`evaluation.ec_barrier_spec`:
 walks the ``population_tag × level`` grid (for one per-distance ``sidecar_dir``),
 reads each per-population sidecar that :func:`evaluation.aac_floor_report.main` wrote,
 and emits the ``{"artifacts": [...]}`` payload the generic

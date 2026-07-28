@@ -1,6 +1,6 @@
 """Fan-in barrier spec-builder for the cross-pLM SNN grid (pLM-pair x rep x distance).
 
-The SNN analogue of :mod:`evaluation.barrier_spec`. :mod:`evaluation.analysis_barrier`
+The SNN analogue of :mod:`evaluation.recall_fp_barrier_spec`. :mod:`evaluation.analysis_barrier`
 is generic by design — it validates whatever ``ArtifactSpec`` grid the caller hands it.
 This module IS that caller for the SNN step: it walks the
 ``pLM-pair x representation x distance`` grid, reads the per-cell sidecar manifests that

@@ -33,7 +33,7 @@ this step builds a spec, it does not validate data — that is the barrier's job
 
 CLI::
 
-    python -m evaluation.barrier_spec --sidecar-dir <dir> \\
+    python -m evaluation.recall_fp_barrier_spec --sidecar-dir <dir> \\
         --plms prott5 esm2 ... --representations raw ffn --out barrier_spec.json
 """
 from __future__ import annotations
@@ -190,7 +190,7 @@ def build_recall_fp_barrier_spec(
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="barrier_spec",
+        prog="recall_fp_barrier_spec",
         description="Build the fan-in barrier spec for the recall-fp grid from the "
         "per-(pLM,representation) sidecar manifests.",
     )
@@ -230,15 +230,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The spec is a regenerable build product; the DAG always replaces in place.
         written = write_barrier_spec(spec, args.out, overwrite=True)
     except SpecBuildError as e:
-        print(f"barrier_spec: CONFIG ERROR: {e}", file=sys.stderr, flush=True)
+        print(f"recall_fp_barrier_spec: CONFIG ERROR: {e}", file=sys.stderr, flush=True)
         return 2
     except OSError as e:
-        print(f"barrier_spec: I/O ERROR: {e}", file=sys.stderr, flush=True)
+        print(f"recall_fp_barrier_spec: I/O ERROR: {e}", file=sys.stderr, flush=True)
         return 2
 
     meta = spec["_meta"]
     print(
-        f"barrier_spec: {meta['n_cells']} cell(s) -> {written}", flush=True
+        f"recall_fp_barrier_spec: {meta['n_cells']} cell(s) -> {written}", flush=True
     )
     if meta["n_cells_without_sidecar"]:
         # "no silent caps": surface the gaps the barrier will report as missing.

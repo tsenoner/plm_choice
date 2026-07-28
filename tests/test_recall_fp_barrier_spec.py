@@ -1,4 +1,4 @@
-"""Tests for evaluation.barrier_spec — the fan-in barrier spec-builder.
+"""Tests for evaluation.recall_fp_barrier_spec — the fan-in barrier spec-builder.
 
 The spec-builder is the *caller* the generic ``analysis_barrier`` defers to: it
 walks the recall-fp grid (pLM × representation × CATH level), reads each per-(pLM,
@@ -24,7 +24,7 @@ import pandas as pd
 import pytest
 
 from evaluation.analysis_barrier import _load_specs, run_barrier
-from evaluation.barrier_spec import (
+from evaluation.recall_fp_barrier_spec import (
     SpecBuildError,
     build_recall_fp_barrier_spec,
     main,

@@ -10,7 +10,7 @@ import h5py
 import numpy as np
 import pytest
 
-import evaluation.barrier_spec as live_recall
+import evaluation.recall_fp_barrier_spec as live_recall
 import evaluation.snn_barrier_spec as live_snn
 import tests._barrier_spec_head as head_recall
 import tests._snn_barrier_spec_head as head_snn
