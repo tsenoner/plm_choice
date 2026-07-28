@@ -1,0 +1,17 @@
+Task-specific training distorts the protein-embedding space. Kernel-density ridges show the
+distribution of all-vs-all Euclidean distances between protein embeddings, after min-max
+normalization [0, 1] within each model. Rows are ordered by overall performance ranking
+(best-performing models at top), based on average Spearman correlation across sequence
+(PIDE), structure (TM-score), and function (HFSP) prediction tasks. Vertical lines indicate
+quartiles: dashed lines show medians, dotted lines show Q25 and Q75. Colors represent model
+families (shared across all family members): ESM-2 (orange), ESM-C (blue), ProtT5 (pink),
+ESM-3 (purple), Ankh (gold), ESM-1 (green). Top-performing models (ESM C-600M, ProtT5,
+ESM C-300M) show narrow, left-shifted distributions (median ~0.20-0.25), indicating more
+discriminative embeddings. Foundation models within families display similar distance profiles
+(e.g., ESM-2 variants share a common peak at ~0.23). Task-specific training shifts and
+broadens distributions: CLEAN (green, median ~0.54) is markedly broader than its parent
+ESM-1b, while ProtTucker (pink, median ~0.36) shows similar broadening compared to ProtT5,
+suggesting that task-specific fine-tuning reduces the discriminative power of embedding
+distances for general protein relationships.
+
+
