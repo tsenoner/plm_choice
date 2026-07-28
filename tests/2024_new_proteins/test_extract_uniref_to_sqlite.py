@@ -19,8 +19,10 @@ _SOURCE_DATA_INPUT_FILENAME = "uniref50_2025_01.xml.gz"
 
 # --- Derived Paths ---
 TEST_DIR = THIS_FILE_DIR
+# These scripts moved out of scripts/ into the package; the old path made every
+# test in this module ERROR rather than skip.
 SCRIPT_TO_TEST = (
-    PROJECT_ROOT / "scripts" / _FEATURE_NAME_PART / _SCRIPT_TO_TEST_FILENAME
+    PROJECT_ROOT / "src" / "data_preparation" / _FEATURE_NAME_PART / _SCRIPT_TO_TEST_FILENAME
 )
 SAMPLE_CREATOR_SCRIPT = TEST_DIR / _SAMPLE_CREATOR_FILENAME
 SOURCE_DATA_FOR_SAMPLE = (
@@ -28,6 +30,20 @@ SOURCE_DATA_FOR_SAMPLE = (
 )
 SAMPLE_XML_GZ = TEST_DIR / f"{_SAMPLE_BASENAME}.xml.gz"
 SAMPLE_XML = TEST_DIR / f"{_SAMPLE_BASENAME}.xml"  # May be used by other logic
+
+# The sample is cut from a ~10 GB UniRef50 XML dump that lives under the
+# gitignored data/ tree, so this module cannot run on a fresh clone.
+pytestmark = pytest.mark.integration
+
+if not SCRIPT_TO_TEST.is_file():
+    pytest.skip(f"script not found at {SCRIPT_TO_TEST}", allow_module_level=True)
+
+if not (SAMPLE_XML_GZ.is_file() or SOURCE_DATA_FOR_SAMPLE.is_file()):
+    pytest.skip(
+        f"needs either the prebuilt sample {SAMPLE_XML_GZ.name} or the UniRef50 "
+        f"dump at {SOURCE_DATA_FOR_SAMPLE} (bulk data, not in the repo).",
+        allow_module_level=True,
+    )
 SAMPLE_DB = TEST_DIR / f"{_SAMPLE_BASENAME}.db"
 
 EXPECTED_DATA = [

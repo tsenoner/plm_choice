@@ -4,6 +4,7 @@ The dyadic-dependence CI: each Bromberg pair has BOTH endpoints in the orphan se
 pairs sharing an orphan are correlated. The CI resamples ORPHANS (vertices) and
 recomputes AUROC over the induced sparse pair set, reusing the shipped vertex_bca_ci core.
 """
+import os
 import time
 
 import numpy as np
@@ -398,8 +399,15 @@ def test_incremental_jackknife_is_fast_at_scale():
             if t != h:
                 rows.append((ids[h], ids[t], rng.normal(), 0.5, 0.5, bool(rng.random() < 0.3)))
     df = _pp(rows)
-    t0 = time.time()
+    t0 = time.perf_counter()
     out = orphan_auroc_vertex_bca_ci(df, n_boot=200, alpha=0.1, seed=1)
-    elapsed = time.time() - t0
+    elapsed = time.perf_counter() - t0
     assert not out["degenerate"]
-    assert elapsed < 20.0, f"vertex-AUROC CI too slow ({elapsed:.1f}s) — jackknife not incremental?"
+    # This guards against an algorithmic regression (a from-scratch O(n x pairs)
+    # jackknife), which at this size costs minutes rather than seconds — so a
+    # generous ceiling still catches it while staying robust on a shared or
+    # throttled CI runner. Override with PLM_JACKKNIFE_BUDGET_S if needed.
+    budget = float(os.environ.get("PLM_JACKKNIFE_BUDGET_S", "120"))
+    assert elapsed < budget, (
+        f"vertex-AUROC CI too slow ({elapsed:.1f}s > {budget:.0f}s) — jackknife not incremental?"
+    )

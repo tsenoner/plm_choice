@@ -1,7 +1,6 @@
-from pathlib import Path
 import numpy as np
-import shutil  # Added for copying the file
-from unknown_unknowns.visualization.plot import plot_true_vs_predicted
+
+from visualization.plot_utils import plot_true_vs_predicted
 
 
 def test_plot_generation(tmp_path):
@@ -24,12 +23,27 @@ def test_plot_generation(tmp_path):
     )
 
     assert output_file.exists(), f"Plot file was not generated at {output_file}"
+    assert output_file.stat().st_size > 0, "Plot file is empty"
 
-    # For inspection: Print path and copy to a persistent location
-    print(f"Temporary plot saved to: {output_file.resolve()}")
 
-    persistent_output_dir = Path("test_outputs")
-    persistent_output_dir.mkdir(parents=True, exist_ok=True)
-    inspect_file_path = persistent_output_dir / "inspect_latest_plot.png"
-    shutil.copy(output_file, inspect_file_path)
-    print(f"Plot copied for inspection to: {inspect_file_path.resolve()}")
+def test_plot_generation_with_metrics(tmp_path):
+    """The metrics annotation is an optional code path — exercise it too.
+
+    plot_true_vs_predicted only reads the ``Pearson_r2`` / ``Pearson_r2_SE``
+    keys, so use those rather than arbitrary metric names.
+    """
+    rng = np.random.default_rng(0)
+    targets = np.linspace(0, 1, 1000)
+    predictions = targets + rng.normal(0, 0.05, 1000)
+    output_file = tmp_path / "with_metrics.png"
+
+    plot_true_vs_predicted(
+        targets,
+        predictions,
+        output_file,
+        metrics={"Pearson_r2": 0.97, "Pearson_r2_SE": 0.01},
+        title="Test: Plot With Metrics",
+    )
+
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0

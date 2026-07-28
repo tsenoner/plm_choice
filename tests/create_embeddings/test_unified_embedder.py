@@ -1,16 +1,38 @@
-import pytest
+import os
 import subprocess
-import h5py
 from pathlib import Path
 from typing import Optional
+
+import h5py
+import pytest
 
 
 # Define project root and script paths relative to this test file
 TEST_DIR = Path(__file__).parent
 PROJECT_ROOT = TEST_DIR.parent.parent
-SCRIPT_PATH = PROJECT_ROOT / "scripts" / "create_embeddings" / "unified_embedder.py"
+# The embedder moved out of scripts/ into the package; this path was stale and
+# made every test in this module ERROR rather than skip.
+SCRIPT_PATH = (
+    PROJECT_ROOT / "src" / "data_preparation" / "embeddings" / "embedding_generation.py"
+)
 FASTA_FILE = TEST_DIR / "dummy_proteins.fasta"
 DEFAULT_HF_TOKEN_PATH = Path.home() / ".cache" / "huggingface" / "token"
+
+# Running these means downloading five pLM checkpoints from HuggingFace (several
+# GB, two of them gated) and doing real inference, so they are opt-in rather
+# than part of the default suite.
+pytestmark = pytest.mark.integration
+
+if not os.environ.get("PLM_RUN_INTEGRATION"):
+    pytest.skip(
+        "pLM inference integration tests are opt-in: set PLM_RUN_INTEGRATION=1 "
+        "(needs a GPU, ~10 GB of HuggingFace downloads and a token for the "
+        "gated ESM3/ESM-C models).",
+        allow_module_level=True,
+    )
+
+if not SCRIPT_PATH.is_file():
+    pytest.skip(f"embedder not found at {SCRIPT_PATH}", allow_module_level=True)
 
 # Models to test, covering each family_key for broader coverage.
 # Dimensions should be verified if tests fail.
