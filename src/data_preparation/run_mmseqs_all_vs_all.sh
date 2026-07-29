@@ -52,6 +52,19 @@ else
 fi
 
 # Step 2: Run All-Against-All Search
+
+# --- Search breadth (affects WHICH PAIRS EXIST, not just runtime) -------------
+# MAX_SEQS caps how many prefilter hits per query reach the alignment stage.
+# At the default of 1000, any query whose family has more than 1000 detectable
+# relatives silently loses the rest, so the "all-vs-all" in this script's name
+# is bounded. The value is echoed below so it lands in the run log, and it is
+# overridable:  MAX_SEQS=10000 ./run_mmseqs_all_vs_all.sh ...
+# The resubmission plan (Track B5) recommends 10000 for the stringent rebuild.
+# The default is left at 1000 so previously generated pair tables remain
+# reproducible - raise it deliberately, and regenerate everything downstream.
+MAX_SEQS="${MAX_SEQS:-1000}"
+
+echo "  search breadth: --max-seqs $MAX_SEQS (queries with more relatives than this lose the remainder)"
 echo "Step 2: Running all-against-all search..."
 if [ ! -f "${RESULT_DB_NAME}.dbtype" ]; then
     mmseqs search "$DB_NAME" "$DB_NAME" "$RESULT_DB_NAME" "$SEARCH_TMP_DIR" \
@@ -59,7 +72,7 @@ if [ ! -f "${RESULT_DB_NAME}.dbtype" ]; then
         -e 0.001 \
         -a \
         --alignment-mode 3 \
-        --max-seqs 1000 \
+        --max-seqs "$MAX_SEQS" \
         --num-iterations 3 \
         --e-profile 1e-10 \
         --threads "$THREADS"

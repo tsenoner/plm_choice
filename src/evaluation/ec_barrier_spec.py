@@ -29,6 +29,17 @@ from evaluation.barrier_spec_base import (
     write_barrier_spec,
 )
 
+# NOTE (2026-07-29): this is the ONLY spec-builder with a 2-element distance
+# axis — snn_barrier_spec, cross_plm_barrier_spec and cross_plm_matrix all use
+# ("cosine", "euclidean", "manhattan"), and cross_plm_barrier_spec's docstring
+# explicitly warns that cloning this 2-element default "would silently drop the
+# entire manhattan column". ec_report itself accepts --distance manhattan, so an
+# EC run on manhattan produces a sidecar that this spec never asks for and the
+# barrier therefore never checks.
+#
+# Left as-is deliberately: the value is pinned by tests/test_ec_barrier_spec.py
+# and widening it changes the expected grid size, i.e. the analysis contract.
+# Decide whether the EC arm should carry manhattan before changing it.
 DEFAULT_DISTANCES: tuple[str, ...] = ("euclidean", "cosine")
 
 

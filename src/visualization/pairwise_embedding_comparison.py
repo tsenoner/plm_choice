@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 # Suppress matplotlib DEBUG messages
 logging.getLogger("matplotlib").setLevel(logging.INFO)
 
+# Bump when the shape or semantics of a cached JSON changes (e.g. the density
+# grid size), so old caches are recomputed instead of silently reused.
+CACHE_SCHEMA_VERSION = 2
+
 # --- Project Constants & Configuration ---
 # Shared with create_performance_summary_plots.py — see visualization/plm_constants.py.
 from visualization.plm_constants import (
@@ -210,9 +214,29 @@ class EmbeddingComparisonVisualizer:
         boundaries.append(len(dist_cols))
         return boundaries
 
+    def _cache_fingerprint(self) -> Dict:
+        """Identify the inputs a cache entry was computed from.
+
+        A cache keyed on filename alone cannot tell a full run from a
+        ``--sample_size 5000`` debug run, or a cache written by an older version
+        of this code from a current one. That is not hypothetical: the caches
+        that produced the published ridge figure carry a 200-point density grid
+        that no current code path emits, and nothing detected it.
+        """
+        return {
+            "n_rows": int(len(self.df)),
+            "dist_cols": list(self.dist_cols),
+            "sample_size": self.sample_size,
+            "schema_version": CACHE_SCHEMA_VERSION,
+        }
+
     def _save_json_data(self, data: Dict, save_path: Path, description: str):
         """Helper method to save JSON data with consistent logging."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
+        data = dict(data)
+        meta = dict(data.get("metadata") or {})
+        meta["_fingerprint"] = self._cache_fingerprint()
+        data["metadata"] = meta
         with open(save_path, "w") as f:
             json.dump(data, f)
         logger.info(f"{description} saved to {save_path}")
@@ -220,11 +244,43 @@ class EmbeddingComparisonVisualizer:
     def _load_cached_data(
         self, cache_path: Path, force_recompute: bool
     ) -> Optional[Dict]:
-        """Helper method to load cached data if available."""
-        if not force_recompute and cache_path.exists():
-            with open(cache_path, "r") as f:
-                return json.load(f)
-        return None
+        """Load a cache entry only if it was computed from the same inputs.
+
+        Returns None (i.e. recompute) when the cache is stale or unfingerprinted,
+        rather than silently reusing it.
+        """
+        if force_recompute or not cache_path.exists():
+            return None
+
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+
+        stored = (data.get("metadata") or {}).get("_fingerprint")
+        if stored is None:
+            logger.warning(
+                "IGNORING un-fingerprinted cache %s — it predates cache validation "
+                "and there is no way to tell what data or code version wrote it. "
+                "Recomputing.",
+                cache_path.name,
+            )
+            return None
+
+        current = self._cache_fingerprint()
+        if stored != current:
+            differing = [
+                k for k in current if stored.get(k) != current.get(k)
+            ]
+            logger.warning(
+                "IGNORING stale cache %s — %s differ(s) (cached=%s, current=%s). "
+                "Recomputing.",
+                cache_path.name,
+                ", ".join(differing),
+                {k: stored.get(k) for k in differing},
+                {k: current.get(k) for k in differing},
+            )
+            return None
+
+        return data
 
     # --- Hexagonal Distance Comparison ---
 

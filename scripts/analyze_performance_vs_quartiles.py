@@ -14,6 +14,10 @@ import seaborn as sns
 from pathlib import Path
 from scipy import stats
 import argparse
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from visualization.plm_constants import EMBEDDING_DISPLAY_NAMES  # noqa: E402
 
 
 def analyze_performance_quartile_correlation(
@@ -34,34 +38,50 @@ def analyze_performance_quartile_correlation(
     print(f"Loading quartile data from: {quartile_csv}")
     quartile_df = pd.read_csv(quartile_csv)
 
-    # Create mapping from display names to embedding names
+    # Map the plot's display labels back to embedding keys.
+    #
+    # This used to be a hand-written allowlist of single-line names ("Ankh Base",
+    # "ESM2-8M", "ProtT5"). The statistics CSV is written from the plot's own
+    # axis labels, which are the TWO-LINE forms ("Ankh\nBase", "ESM2\n8M",
+    # "Prot\nT5"), so almost every row failed to map and was silently dropped by
+    # the inner join below — the analysis ran on CLEAN, ESM1b and ESM3 only.
+    # Inverting EMBEDDING_DISPLAY_NAMES keeps the two in lockstep by construction.
     display_to_embedding = {
-        "Ankh Base": "ankh_base",
-        "Ankh Large": "ankh_large",
-        "CLEAN": "clean",
-        "ESM1b": "esm1b",
-        "ESM2-8M": "esm2_8m",
-        "ESM2-35M": "esm2_35m",
-        "ESM2-150M": "esm2_150m",
-        "ESM2-650M": "esm2_650m",
-        "ESM2-3B": "esm2_3b",
-        "ESM3": "esm3_open",
-        "ESM C-300M": "esmc_300m",
-        "ESM C-600M": "esmc_600m",
-        "ProstT5": "prostt5",
-        "ProtT5": "prott5",
-        "ProtTucker": "prottucker",
-        "Random": "random_1024",
+        display: key for key, display in EMBEDDING_DISPLAY_NAMES.items()
     }
+    # Accept the flattened spellings too, so older CSVs still load.
+    for key, display in EMBEDDING_DISPLAY_NAMES.items():
+        display_to_embedding.setdefault(display.replace("\n", " "), key)
+        display_to_embedding.setdefault(display.replace("\n", "-"), key)
+        display_to_embedding.setdefault(display.replace("\n", ""), key)
 
     # Convert display names to embedding names in quartile_df
     quartile_df["embedding_name"] = quartile_df["plm_name"].map(display_to_embedding)
+
+    unmapped = sorted(
+        quartile_df.loc[quartile_df["embedding_name"].isna(), "plm_name"].unique()
+    )
+    if unmapped:
+        raise SystemExit(
+            "Could not map these plm_name labels to embedding keys: "
+            + ", ".join(repr(u) for u in unmapped)
+            + "\nAdd them to EMBEDDING_DISPLAY_NAMES in src/visualization/plm_constants.py. "
+            "Refusing to continue, because an inner join would silently drop them and "
+            "the correlation would be computed on a subset without saying so."
+        )
 
     # Merge on PLM name
     merged_df = ranking_df.merge(
         quartile_df, left_on="Embedding", right_on="embedding_name", how="inner"
     )
 
+    dropped = len(quartile_df) - len(merged_df)
+    if dropped:
+        missing = sorted(set(quartile_df["embedding_name"]) - set(merged_df["Embedding"]))
+        print(
+            f"WARNING: {dropped} pLM(s) present in the quartile CSV have no ranking row "
+            f"and were dropped: {', '.join(missing)}"
+        )
     print(f"\nMerged {len(merged_df)} PLMs with both performance and quartile data")
 
     # Calculate IQR (Interquartile Range) and distribution width

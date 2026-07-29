@@ -455,7 +455,12 @@ def main():
         "--resolution_cutoff",
         type=float,
         default=3.0,
-        help="Maximum resolution in Angstroms for X-ray structures",
+        help=(
+            "NOT YET APPLIED. Accepted and threaded through, but no resolution "
+            "filter is implemented — SIFTS does not carry resolution and the RCSB "
+            "lookup was never added (see the TODO in load_sifts_mapping). Passing "
+            "this does not filter anything; it only warns."
+        ),
     )
     parser.add_argument(
         "--sample_size",
@@ -465,6 +470,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.resolution_cutoff != 3.0:
+        logger.warning(
+            "--resolution_cutoff=%s is NOT APPLIED: no resolution filter is "
+            "implemented yet, so every matched structure is used regardless of "
+            "resolution. Do not report these TM-scores as resolution-filtered.",
+            args.resolution_cutoff,
+        )
 
     # --- Validate inputs ---
     if not args.pairs_parquet.exists():
