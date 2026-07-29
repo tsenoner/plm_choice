@@ -92,6 +92,34 @@ class GOTerm:
         self.is_obsolete = False
 
 
+# --- GO evidence codes -------------------------------------------------------
+# The reason this arm exists is R2.1: the functional labels must be assigned by
+# EXPERIMENT, not transferred from a homolog. IEA ("Inferred from Electronic
+# Annotation") is homology transfer by definition and is the majority of GO,
+# so including it would reproduce inside the GO axis exactly the circularity the
+# HFSP axis is criticised for. Filtering to experimental codes is the
+# CAFA-standard escape and is a hard requirement, not a tuning knob.
+#
+# https://geneontology.org/docs/guide-go-evidence-codes/
+EXPERIMENTAL_EVIDENCE: frozenset[str] = frozenset({
+    "EXP",  # Inferred from Experiment
+    "IDA",  # Inferred from Direct Assay
+    "IPI",  # Inferred from Physical Interaction
+    "IMP",  # Inferred from Mutant Phenotype
+    "IGI",  # Inferred from Genetic Interaction
+    "IEP",  # Inferred from Expression Pattern
+    # High-throughput variants — experimental, added to GO in 2017
+    "HTP", "HDA", "HMP", "HGI", "HEP",
+})
+
+#: Curator/author statements. Not experimental, but not homology transfer
+#: either. Opt in with --evidence_codes if the cohort needs the coverage.
+AUTHOR_EVIDENCE: frozenset[str] = frozenset({"TAS", "IC"})
+
+#: The single code that must never be trusted for this analysis.
+ELECTRONIC_EVIDENCE: frozenset[str] = frozenset({"IEA"})
+
+
 def download_obo(obo_path: Path) -> None:
     """Download go-basic.obo from Gene Ontology Consortium if not cached."""
     url = "http://purl.obolibrary.org/obo/go/go-basic.obo"
@@ -293,6 +321,7 @@ class WangSimilarity:
 def load_annotations_tsv(
     annotations_path: Path,
     go_terms: Dict[str, GOTerm],
+    evidence_codes: Optional[Set[str]] = None,
 ) -> Dict[str, Dict[str, Set[str]]]:
     """
     Load protein-to-GO-term annotations from a TSV file.
@@ -312,6 +341,8 @@ def load_annotations_tsv(
 
     skipped_terms = 0
     loaded_terms = 0
+    skipped_evidence: Dict[str, int] = defaultdict(int)
+    saw_evidence_column = False
 
     with open(annotations_path) as f:
         for line in f:
@@ -322,18 +353,31 @@ def load_annotations_tsv(
             parts = line.split("\t")
 
             # Auto-detect format
+            evidence = None
             if len(parts) >= 15:
-                # GAF format: col 1 = protein_id (DB_Object_ID), col 4 = GO_id, col 8 = aspect
-                protein_id = parts[1]  # DB_Object_ID
+                # GAF: col 1 = DB_Object_ID, col 4 = GO_ID, col 6 = Evidence Code,
+                # col 8 = Aspect. Column 6 was previously ignored entirely, so
+                # IEA annotations were loaded silently.
+                protein_id = parts[1]
                 go_id = parts[4]
+                evidence = parts[6].strip().upper()
                 aspect_raw = parts[8]
+                saw_evidence_column = True
+            elif len(parts) >= 4:
+                # Simple TSV with evidence: protein_id, GO_term, aspect, evidence
+                protein_id, go_id, aspect_raw = parts[0], parts[1], parts[2]
+                evidence = parts[3].strip().upper()
+                saw_evidence_column = True
             elif len(parts) >= 3:
-                # Simple TSV: protein_id, GO_term, aspect
-                protein_id = parts[0]
-                go_id = parts[1]
-                aspect_raw = parts[2]
+                # Simple TSV: protein_id, GO_term, aspect (no evidence available)
+                protein_id, go_id, aspect_raw = parts[0], parts[1], parts[2]
             else:
                 continue
+
+            if evidence_codes is not None and evidence is not None:
+                if evidence not in evidence_codes:
+                    skipped_evidence[evidence] += 1
+                    continue
 
             # Normalize aspect
             aspect = GO_ASPECTS.get(aspect_raw)
@@ -351,6 +395,45 @@ def load_annotations_tsv(
         f"Loaded {loaded_terms} annotations for {len(annotations)} proteins "
         f"(skipped {skipped_terms} terms not in ontology)"
     )
+
+    if evidence_codes is not None:
+        if not saw_evidence_column:
+            logger.warning(
+                "NO EVIDENCE-CODE COLUMN in %s, so --evidence_codes could not be "
+                "applied and EVERY annotation was kept. If this file contains "
+                "IEA (electronically inferred) annotations, the resulting GO "
+                "similarity is homology-transferred and does NOT answer R2.1. "
+                "Use a GAF file, or a 4-column TSV "
+                "(protein_id, GO_term, aspect, evidence).",
+                annotations_path,
+            )
+        elif skipped_evidence:
+            dropped = sum(skipped_evidence.values())
+            top = ", ".join(
+                f"{code}={count}"
+                for code, count in sorted(
+                    skipped_evidence.items(), key=lambda kv: -kv[1]
+                )[:6]
+            )
+            logger.info(
+                "Evidence filter dropped %d annotation(s): %s "
+                "(kept: %s)",
+                dropped,
+                top,
+                ", ".join(sorted(evidence_codes)),
+            )
+            if "IEA" in skipped_evidence:
+                logger.info(
+                    "  -> %d IEA annotations excluded; these are homology "
+                    "transfer and are what R2.1 objects to.",
+                    skipped_evidence["IEA"],
+                )
+        else:
+            logger.info(
+                "Evidence filter kept every annotation (none matched an "
+                "excluded code)."
+            )
+
     return dict(annotations)
 
 
@@ -431,7 +514,22 @@ def main():
         "--annotations",
         type=Path,
         required=True,
-        help="Path to GO annotations file (TSV: protein_id, GO_term, aspect; or GAF format)",
+        help=(
+            "GO annotations: GAF (21 columns), or TSV of "
+            "protein_id/GO_term/aspect[/evidence]. Evidence filtering needs "
+            "GAF or the 4-column TSV."
+        ),
+    )
+    parser.add_argument(
+        "--evidence_codes",
+        nargs="+",
+        default=sorted(EXPERIMENTAL_EVIDENCE),
+        help=(
+            "GO evidence codes to KEEP. Defaults to the CAFA experimental set, "
+            "which excludes IEA — that exclusion is what makes this axis answer "
+            "R2.1 rather than restating sequence similarity. Pass "
+            "'--evidence_codes ALL' to disable filtering (and say so in Methods)."
+        ),
     )
     parser.add_argument(
         "--pairs_parquet",
@@ -486,7 +584,18 @@ def main():
     go_terms = parse_obo(obo_path)
 
     # --- Load annotations ---
-    annotations = load_annotations_tsv(args.annotations, go_terms)
+    if len(args.evidence_codes) == 1 and args.evidence_codes[0].upper() == "ALL":
+        logger.warning(
+            "--evidence_codes ALL: no evidence filtering. IEA annotations are "
+            "homology-transferred, so the resulting GO similarity is NOT an "
+            "independent functional axis. Disclose this in Methods."
+        )
+        evidence_codes = None
+    else:
+        evidence_codes = {code.upper() for code in args.evidence_codes}
+        logger.info("Keeping GO evidence codes: %s", ", ".join(sorted(evidence_codes)))
+
+    annotations = load_annotations_tsv(args.annotations, go_terms, evidence_codes)
 
     # --- Load protein pairs ---
     pairs_df = pl.read_parquet(args.pairs_parquet)
