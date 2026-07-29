@@ -282,12 +282,15 @@ if __name__ == "__main__":
         choices=["fnn", "linear", "euclidean", "linear_distance"],
         help="List of model types to run (e.g., fnn linear euclidean linear_distance).",
     )
+    # The choices whitelist was removed (Ivan, 2026-03-19) so the grid can train
+    # against the target columns added since: go_wang_mfo / go_wang_bpo /
+    # go_wang_cco (GO semantic similarity) and tmscore_exp (experimental TM).
+    # Validation moves to load time — datasets.py raises if the column is absent.
     parser.add_argument(
         "--target_params",
         nargs="+",
         default=["fident", "alntmscore", "hfsp"],
-        choices=["fident", "alntmscore", "hfsp"],
-        help="List of target parameters to run.",
+        help="Target parameters to run (each must be a column in the parquet files).",
     )
     parser.add_argument(
         "--wandb_project",

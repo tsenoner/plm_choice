@@ -499,7 +499,11 @@ def _human_readable_formatter(x, pos=None):
 
 # --- Main Plotting Function ---
 def generate_metric_plot(
-    df: pd.DataFrame, y_metric: str, se_metric: Optional[str], output_file: Path
+    df: pd.DataFrame,
+    y_metric: str,
+    se_metric: Optional[str],
+    output_file: Path,
+    delta_mode: bool = False,
 ):
     """Generates a summary faceted scatter plot for a specific metric.
 
@@ -566,8 +570,16 @@ def generate_metric_plot(
         ax.tick_params(axis="x", rotation=45, labelsize=PLOT_CONFIG["tick_fontsize"])
         ax.tick_params(axis="y", labelsize=PLOT_CONFIG["tick_fontsize"])
 
-        # Set y-axis to start from 0
-        ax.set_ylim(0, 1)
+        # Metrics are in [0, 1], but a baseline-subtracted metric is a signed
+        # difference, so centre the axis on 0 and draw the zero line.
+        if delta_mode:
+            y_abs_max = max(
+                abs(df_sorted[y_metric].min()), abs(df_sorted[y_metric].max()), 0.1
+            )
+            ax.set_ylim(-y_abs_max * 1.1, y_abs_max * 1.1)
+            ax.axhline(y=0, color="black", linewidth=0.8, linestyle="-", alpha=0.4)
+        else:
+            ax.set_ylim(0, 1)
 
         # Add panel labels (A, B, C)
         if i == 0:  # Panel A (leftmost) - position further left
@@ -659,6 +671,17 @@ def main():
         help="Space-separated list of pLM names (embedding names) to exclude from the plots.",
     )
     parser.add_argument(
+        "--delta_baseline",
+        type=Path,
+        default=None,
+        help=(
+            "Baseline metrics CSV (same format as parsed_metrics_all.csv). When given, "
+            "every metric is plotted as (current - baseline) on a zero-centred axis. "
+            "This is how Sup. Fig. 4 is drawn as a difference to Fig. 1 rather than a "
+            "near-duplicate of it."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose debug output.",
@@ -684,6 +707,53 @@ def main():
     if results_df.empty:
         log.error("No data loaded, exiting.")
         return
+
+    # --- Delta mode: plot the difference against a reference run ---------------
+    # Sup. Fig. 4 is meant to show how a second dataset DIFFERS from Fig. 1, not
+    # to restate it. Subtracting a baseline here is what makes it a difference
+    # plot rather than a near-duplicate.
+    if args.delta_baseline:
+        if not args.delta_baseline.exists():
+            log.error(f"Delta baseline file not found: {args.delta_baseline}")
+            return
+
+        baseline_df = pd.read_csv(args.delta_baseline)
+        log.info(
+            f"Delta baseline: {len(baseline_df)} rows from {args.delta_baseline}"
+        )
+
+        # (Embedding, Parameter, Model Type) is the natural key for one run.
+        join_cols = ["Embedding", "Parameter", "Model Type"]
+        missing = [c for c in join_cols if c not in baseline_df.columns]
+        if missing:
+            log.error(f"Baseline CSV is missing join column(s): {missing}")
+            return
+
+        metric_cols = [
+            c for c in ["Pearson R2", "Spearman", "MAE", "R2"] if c in baseline_df.columns
+        ]
+        renamed = {c: f"_baseline_{c}" for c in metric_cols}
+        baseline_subset = baseline_df[join_cols + metric_cols].rename(columns=renamed)
+
+        before_len = len(results_df)
+        results_df = results_df.merge(baseline_subset, on=join_cols, how="left")
+
+        for col in metric_cols:
+            bl_col = f"_baseline_{col}"
+            if bl_col in results_df.columns and col in results_df.columns:
+                results_df[col] = results_df[col] - results_df[bl_col]
+                results_df.drop(columns=[bl_col], inplace=True)
+
+        matched = int(results_df[metric_cols[0]].notna().sum()) if metric_cols else 0
+        if matched < before_len:
+            # Unmatched rows become NaN and vanish from the plot — say so loudly
+            # rather than letting the figure quietly lose models.
+            log.warning(
+                f"Delta mode matched only {matched}/{before_len} rows against the "
+                f"baseline; unmatched rows will be absent from the plots."
+            )
+        else:
+            log.info(f"Delta mode: subtracted baseline from all {matched} rows.")
 
     # --- Save Full Dataframe ---
     output_dir = args.output
@@ -778,7 +848,10 @@ def main():
         output_path = output_dir / output_filename
         log.info(f"--- Generating plot for {y_metric} -> {output_path} ---")
 
-        trend_stats = generate_metric_plot(results_df, y_metric, se_metric, output_path)
+        trend_stats = generate_metric_plot(
+            results_df, y_metric, se_metric, output_path,
+            delta_mode=bool(args.delta_baseline),
+        )
 
         # Add metric name to each stat and collect
         for stat in trend_stats:
