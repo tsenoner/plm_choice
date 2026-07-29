@@ -57,9 +57,9 @@ import argparse
 import logging
 import sys
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Set
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -193,19 +193,16 @@ def _infer_run_metadata(run_dir: Path, hparams: Dict[str, Any]) -> Optional[RunI
         # Walk backwards: current = timestamp, -1 = embedding, -2 = param,
         # -3 = model_type, -4 = dataset
         if not embedding:
-            embedding = parts[-1] if not model_type else parts[-1]
+            embedding = parts[-1]
         # If run_dir is a timestamp subdir, shift by one
         if not model_type:
             # Heuristic: if the directory name looks like a timestamp or has
             # tensorboard/ inside, the parent is the embedding dir
             if (run_dir / "tensorboard").is_dir() or (run_dir / "checkpoints").is_dir():
                 # This IS the run dir; parent structure = embedding/param/model/dataset
-                if not embedding:
-                    embedding = run_dir.parent.name
                 if not param:
                     param = run_dir.parent.parent.name
-                if not model_type:
-                    model_type = run_dir.parent.parent.parent.name
+                model_type = run_dir.parent.parent.parent.name
 
     if not all([embedding, model_type, param]):
         logger.debug(
@@ -529,8 +526,6 @@ def compute_overtraining_metrics(
     # PL early stopping sets trainer.current_epoch
     stopped_epoch = int(run.hparams.get("stopped_epoch", 0))
     if stopped_epoch == 0 and total_steps > 0:
-        # Rough estimate: total_steps / steps_per_epoch
-        batch_size = int(run.hparams.get("batch_size", 1024))
         # We don't know dataset size, so use the training step count heuristic
         # If val_check_interval is 0.2, there are ~5 val checks per epoch
         val_check_interval = float(run.hparams.get("val_check_interval", 0.2))
@@ -913,6 +908,15 @@ def plot_overtraining_summary(
 # ---------------------------------------------------------------------------
 
 
+def metrics_to_frame(metrics_list: List[OvertrainingMetrics]) -> pl.DataFrame:
+    """One row per run, one column per :class:`OvertrainingMetrics` field.
+
+    Derived from the dataclass rather than a hand-written key list so that adding a
+    metric is a single edit and the aggregated and raw outputs cannot drift apart.
+    """
+    return pl.DataFrame([asdict(m) for m in metrics_list])
+
+
 def aggregate_metrics(
     metrics_list: List[OvertrainingMetrics],
 ) -> pl.DataFrame:
@@ -933,30 +937,7 @@ def aggregate_metrics(
     if not metrics_list:
         return pl.DataFrame()
 
-    # Convert to polars DataFrame
-    records = []
-    for m in metrics_list:
-        records.append({
-            "embedding": m.embedding,
-            "model_type": m.model_type,
-            "param": m.param,
-            "run_path": m.run_path,
-            "final_train_loss": m.final_train_loss,
-            "final_val_loss": m.final_val_loss,
-            "train_val_gap": m.train_val_gap,
-            "train_val_ratio": m.train_val_ratio,
-            "late_train_slope": m.late_train_slope,
-            "late_val_slope": m.late_val_slope,
-            "diverging": m.diverging,
-            "stopped_epoch": m.stopped_epoch,
-            "max_epochs": m.max_epochs,
-            "early_stop_ratio": m.early_stop_ratio,
-            "best_val_loss": m.best_val_loss,
-            "best_val_step": m.best_val_step,
-            "total_steps": m.total_steps,
-        })
-
-    raw_df = pl.DataFrame(records)
+    raw_df = metrics_to_frame(metrics_list)
 
     # Aggregate by embedding x model_type x param
     agg_df = (
@@ -1050,28 +1031,7 @@ def main(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Save raw per-run results
-    raw_records = []
-    for m in all_metrics:
-        raw_records.append({
-            "embedding": m.embedding,
-            "model_type": m.model_type,
-            "param": m.param,
-            "run_path": m.run_path,
-            "final_train_loss": m.final_train_loss,
-            "final_val_loss": m.final_val_loss,
-            "train_val_gap": m.train_val_gap,
-            "train_val_ratio": m.train_val_ratio,
-            "late_train_slope": m.late_train_slope,
-            "late_val_slope": m.late_val_slope,
-            "diverging": m.diverging,
-            "stopped_epoch": m.stopped_epoch,
-            "max_epochs": m.max_epochs,
-            "early_stop_ratio": m.early_stop_ratio,
-            "best_val_loss": m.best_val_loss,
-            "best_val_step": m.best_val_step,
-            "total_steps": m.total_steps,
-        })
-    raw_df = pl.DataFrame(raw_records)
+    raw_df = metrics_to_frame(all_metrics)
 
     # ---- 5. Distance kurtosis (optional) ----
     kurtosis_results: Dict[str, Dict[str, float]] = {}
@@ -1080,8 +1040,16 @@ def main(args: argparse.Namespace) -> None:
         if pairs_path.is_file():
             logger.info(f"Loading pairs from {pairs_path} for kurtosis analysis...")
             try:
-                pairs_df = pl.read_parquet(pairs_path)
-                kurtosis_results = compute_distance_kurtosis(pairs_df)
+                # Only the dist_* columns are used; skipping the rest avoids decoding
+                # the query/target string columns, the bulk of these files.
+                dist_columns = [
+                    c for c in pl.read_parquet_schema(pairs_path) if c.startswith("dist_")
+                ]
+                if dist_columns:
+                    pairs_df = pl.read_parquet(pairs_path, columns=dist_columns)
+                    kurtosis_results = compute_distance_kurtosis(pairs_df, dist_columns)
+                else:
+                    logger.warning(f"No distance columns in {pairs_path.name}")
                 logger.info(f"Computed kurtosis for {len(kurtosis_results)} embeddings")
             except Exception as e:
                 logger.warning(f"Failed to load pairs parquet: {e}")

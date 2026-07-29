@@ -38,11 +38,10 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import polars as pl
-from tqdm import tqdm
 
 # Reuse the canonical implementations from retrieval_metrics.py to avoid
 # duplicated code that could silently diverge during maintenance.

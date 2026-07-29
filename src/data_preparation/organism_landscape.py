@@ -39,7 +39,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -190,15 +190,25 @@ def partition_pairs(
     Returns:
         Dict mapping partition name -> boolean numpy array (mask over pairs_df rows).
     """
-    queries = pairs_df["query"].to_list()
-    targets = pairs_df["target"].to_list()
     n = len(pairs_df)
 
     model_org_ids = set(MODEL_ORGANISMS.keys())
 
-    # Vectorize organism lookups
-    query_org = np.array([organism_map.get(q, -1) for q in queries], dtype=np.int64)
-    target_org = np.array([organism_map.get(t, -1) for t in targets], dtype=np.int64)
+    # Organism lookup as a polars hash join rather than a Python comprehension over
+    # `.to_list()`, which would materialize two Python strings per pair row.
+    # -1 marks "no organism annotation", as before.
+    if organism_map:
+        orgs = pairs_df.select(
+            pl.col(side)
+            .replace_strict(organism_map, default=-1, return_dtype=pl.Int64)
+            .alias(side)
+            for side in ("query", "target")
+        )
+        query_org = orgs["query"].to_numpy()
+        target_org = orgs["target"].to_numpy()
+    else:
+        query_org = np.full(n, -1, dtype=np.int64)
+        target_org = np.full(n, -1, dtype=np.int64)
 
     # Only consider pairs where both proteins have organism annotation
     both_annotated = (query_org != -1) & (target_org != -1)
@@ -262,7 +272,7 @@ def compute_partition_stats(
             logger.warning(f"Column {dist_col} not found in pairs, skipping")
             continue
 
-        all_distances = pairs_df[dist_col].to_numpy().astype(np.float64)
+        all_distances = np.asarray(pairs_df[dist_col].to_numpy(), dtype=np.float64)
 
         for partition_name, mask in masks.items():
             partition_distances = all_distances[mask]
@@ -332,7 +342,7 @@ def compute_ks_tests(
         if dist_col not in pairs_df.columns:
             continue
 
-        all_distances = pairs_df[dist_col].to_numpy().astype(np.float64)
+        all_distances = np.asarray(pairs_df[dist_col].to_numpy(), dtype=np.float64)
 
         # Extract valid distances per partition
         partition_values: Dict[str, np.ndarray] = {}
@@ -406,7 +416,7 @@ def plot_partition_densities(
         output_path: Path to save the PNG figure.
         max_kde_points: Number of points for the KDE evaluation grid.
     """
-    all_distances = pairs_df[dist_col].to_numpy().astype(np.float64)
+    all_distances = np.asarray(pairs_df[dist_col].to_numpy(), dtype=np.float64)
 
     fig, ax = plt.subplots(figsize=(10, 6))
 

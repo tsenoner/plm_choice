@@ -38,10 +38,12 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import polars as pl
+
+from evaluation.stats import cohens_d
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -59,6 +61,11 @@ AMBLER_CLASS_PATTERNS = {
     "Class_C": ["class c", "class-c", "ampc", "cephalosporinase"],
     "Class_D": ["class d", "class-d", "oxa-", "oxacillinase"],
 }
+
+#: Placeholder labels the classifiers emit when they cannot assign a real class.
+#: Pairs touching one carry no functional signal, so they are excluded from the
+#: within- vs between-class comparison rather than treated as a class of their own.
+UNINFORMATIVE_CLASSES = frozenset({"Unclassified", "Unknown"})
 
 
 # --------------------------------------------------------------------------- #
@@ -161,7 +168,7 @@ def classify_beta_lactamases(entries: List[Dict]) -> Dict[str, str]:
                 break
 
         if not assigned:
-            classifications[accession] = "Unclassified"
+            classifications[accession] = "Unclassified"  # see UNINFORMATIVE_CLASSES
 
     # Log distribution
     class_counts = defaultdict(int)
@@ -214,54 +221,60 @@ def validate_hfsp(
 
     Returns dict with validation statistics.
     """
-    queries = pairs_df["query"].to_list()
-    targets = pairs_df["target"].to_list()
-
     # Check if hfsp column exists
     if hfsp_col not in pairs_df.columns:
         logger.error(f"Column '{hfsp_col}' not found. Available: {pairs_df.columns}")
         return {"error": f"Column '{hfsp_col}' not found"}
 
-    hfsp_values = pairs_df[hfsp_col].to_numpy()
+    # Drop the placeholder classes once, per protein, so the per-pair step below is a
+    # hash join in polars rather than a Python loop over tens of millions of rows.
+    usable = {
+        acc: cls
+        for acc, cls in classifications.items()
+        if cls not in UNINFORMATIVE_CLASSES
+    }
 
-    within_class = []
-    between_class = []
-    annotated_pairs = 0
+    if usable:
+        annotated = (
+            pairs_df.select(
+                pl.col("query")
+                .replace_strict(usable, default=None, return_dtype=pl.Utf8)
+                .alias("_q_class"),
+                pl.col("target")
+                .replace_strict(usable, default=None, return_dtype=pl.Utf8)
+                .alias("_t_class"),
+                pl.col(hfsp_col).cast(pl.Float64).alias("_hfsp"),
+            )
+            # A null class means "not annotated"; a null/NaN HFSP means "no value".
+            # Both were `continue` in the row loop.
+            .drop_nulls()
+            .filter(pl.col("_hfsp").is_not_nan())
+        )
+        same = pl.col("_q_class") == pl.col("_t_class")
+        within_arr = annotated.filter(same)["_hfsp"].to_numpy()
+        between_arr = annotated.filter(~same)["_hfsp"].to_numpy()
+    else:
+        within_arr = np.array([])
+        between_arr = np.array([])
 
-    for i in range(len(queries)):
-        q_class = classifications.get(queries[i])
-        t_class = classifications.get(targets[i])
+    annotated_pairs = len(within_arr) + len(between_arr)
 
-        if q_class is None or t_class is None:
-            continue
-        if q_class == "Unclassified" or t_class == "Unclassified":
-            continue
-        if q_class == "Unknown" or t_class == "Unknown":
-            continue
-
-        hfsp = hfsp_values[i]
-        if np.isnan(hfsp):
-            continue
-
-        annotated_pairs += 1
-        if q_class == t_class:
-            within_class.append(hfsp)
-        else:
-            between_class.append(hfsp)
-
-    within_arr = np.array(within_class) if within_class else np.array([])
-    between_arr = np.array(between_class) if between_class else np.array([])
+    def _summary(arr: np.ndarray, prefix: str) -> Dict[str, Optional[float]]:
+        """mean/std/median for one group, or Nones when the group is empty."""
+        if arr.size == 0:
+            return {f"{prefix}_{stat}": None for stat in ("mean", "std", "median")}
+        return {
+            f"{prefix}_mean": float(np.mean(arr)),
+            f"{prefix}_std": float(np.std(arr)),
+            f"{prefix}_median": float(np.median(arr)),
+        }
 
     results = {
         "annotated_pairs": annotated_pairs,
         "within_class_pairs": len(within_arr),
         "between_class_pairs": len(between_arr),
-        "within_class_mean": float(np.mean(within_arr)) if len(within_arr) > 0 else None,
-        "within_class_std": float(np.std(within_arr)) if len(within_arr) > 0 else None,
-        "within_class_median": float(np.median(within_arr)) if len(within_arr) > 0 else None,
-        "between_class_mean": float(np.mean(between_arr)) if len(between_arr) > 0 else None,
-        "between_class_std": float(np.std(between_arr)) if len(between_arr) > 0 else None,
-        "between_class_median": float(np.median(between_arr)) if len(between_arr) > 0 else None,
+        **_summary(within_arr, "within_class"),
+        **_summary(between_arr, "between_class"),
     }
 
     # Statistical tests
@@ -275,17 +288,11 @@ def validate_hfsp(
         results["mann_whitney_u"] = float(u_stat)
         results["mann_whitney_p"] = float(p_value)
 
-        # Cohen's d (effect size)
-        pooled_std = np.sqrt(
-            (np.var(within_arr) * (len(within_arr) - 1)
-             + np.var(between_arr) * (len(between_arr) - 1))
-            / (len(within_arr) + len(between_arr) - 2)
-        )
-        if pooled_std > 0:
-            cohens_d = (np.mean(within_arr) - np.mean(between_arr)) / pooled_std
-            results["cohens_d"] = float(cohens_d)
-        else:
-            results["cohens_d"] = None
+        # Cohen's d (effect size). Positive = within-class HFSP is higher, i.e. the
+        # functional classes separate. Shared with ecod_homology_pairs.py so the two
+        # analyses cannot disagree on sign or on the pooled-SD convention.
+        d = cohens_d(within_arr, between_arr)
+        results["cohens_d"] = None if np.isnan(d) else d
 
         # Separation quality assessment
         if p_value < 0.001 and results.get("cohens_d", 0) and results["cohens_d"] > 0.8:

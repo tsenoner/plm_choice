@@ -34,7 +34,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import urllib.request
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -313,7 +312,7 @@ def select_best_structure(
 
 
 def prepare_structures(
-    pairs_df: pl.DataFrame,
+    all_proteins: Set[str],
     sifts_mapping: Dict[str, List[Dict]],
     pdb_cache_dir: Path,
     chain_cache_dir: Path,
@@ -321,13 +320,13 @@ def prepare_structures(
     """
     Download PDB structures and extract chains for all proteins in the dataset.
 
+    Takes the protein set rather than the pair frame: the caller already computed it
+    to build the SIFTS mapping, and deriving it again means two more unique() passes
+    over both ID columns of a multi-million-row table.
+
     Returns:
         Dict mapping protein_id -> path to extracted chain PDB file
     """
-    all_proteins = set(pairs_df["query"].unique().to_list()) | set(
-        pairs_df["target"].unique().to_list()
-    )
-
     protein_structures: Dict[str, Path] = {}
     download_needed = set()
 
@@ -543,7 +542,7 @@ def main():
 
     # --- Prepare structures ---
     protein_structures = prepare_structures(
-        pairs_df, sifts_mapping, args.pdb_cache_dir, chain_cache_dir
+        all_proteins, sifts_mapping, args.pdb_cache_dir, chain_cache_dir
     )
 
     # --- Compute TM-scores ---

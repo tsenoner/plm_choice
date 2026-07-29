@@ -110,22 +110,27 @@ class ProteinAnalysisPipeline:
             ).with_suffix(".parquet")
             final_merged = self.interm_dir / "merged_protein_similarity_test.parquet"
             plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}_test")
+            low_plddt_ids = self.foldcomp_low_plddt_ids.with_stem(
+                f"{self.foldcomp_low_plddt_ids.stem}_test"
+            )
         else:
             mmseqs_parquet = self.mmseqs_tsv.with_suffix(".parquet")
             foldseek_parquet = self.foldseek_tsv.with_suffix(".parquet")
             final_merged = self.interm_dir / "merged_protein_similarity.parquet"
             plots_dir = self.plots_dir
+            low_plddt_ids = self.foldcomp_low_plddt_ids
 
         return {
             "mmseqs_parquet": mmseqs_parquet,
             "foldseek_parquet": foldseek_parquet,
             "final_merged": final_merged,
             "plots_dir": plots_dir,
+            "low_plddt_ids": low_plddt_ids,
         }
 
     def run(self, test_mode: bool = False, test_size: int = 100_000) -> pl.DataFrame:
-        self._test_mode = test_mode
         """Run the complete analysis pipeline."""
+        self._test_mode = test_mode
         print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
         print("=" * 70)
 
@@ -388,14 +393,12 @@ class ProteinAnalysisPipeline:
 
         # Save to file.
         #
-        # get_file_paths() gives every other artifact a "_test" suffix, but this
-        # path did not have one, so `--test` overwrote the PRODUCTION low-pLDDT
+        # This path is suffixed by get_file_paths() like every other artifact. It
+        # previously was not, so `--test` overwrote the PRODUCTION low-pLDDT
         # exclusion list with one derived from a 100k random sample. A later run
         # entering at the foldseek stage would then apply a ~99%-incomplete
         # exclusion list and silently keep low-confidence structures.
-        target = self.foldcomp_low_plddt_ids
-        if self._test_mode:
-            target = target.with_name(f"{target.stem}_test{target.suffix}")
+        target = self.get_file_paths(self._test_mode)["low_plddt_ids"]
 
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w") as f:
@@ -406,11 +409,10 @@ class ProteinAnalysisPipeline:
 
     def _filter_low_confidence_structures(self, df: pl.DataFrame) -> pl.DataFrame:
         """Remove proteins with low structural confidence."""
-        source = self.foldcomp_low_plddt_ids
-        if self._test_mode:
-            candidate = source.with_name(f"{source.stem}_test{source.suffix}")
-            if candidate.exists():
-                source = candidate
+        source = self.get_file_paths(self._test_mode)["low_plddt_ids"]
+        if self._test_mode and not source.exists():
+            # No test-mode list yet — fall back to the production exclusion list.
+            source = self.foldcomp_low_plddt_ids
         if not source.exists():
             print("⚠️  Low confidence ID file not found, skipping filter")
             return df

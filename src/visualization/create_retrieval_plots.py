@@ -23,12 +23,22 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
+# Sizes, families, colours and labels are shared with every other figure; a divergence
+# here draws the same model in two colours across two panels of the same paper.
+from shared.hierarchies import LEVEL_LABELS
+from visualization.plm_constants import (
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_DISPLAY_NAMES,
+    PLM_SIZES,
+    human_readable_number,
+)
 
 # ---------------------------------------------------------------------------
 #  Logging
@@ -38,74 +48,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-#  Constants — reused from create_performance_summary_plots.py
-# ---------------------------------------------------------------------------
-
-PLM_SIZES: Dict[str, int] = {
-    "prott5": 1_500_000_000,
-    "prottucker": 1_500_000_000,
-    "prostt5": 1_500_000_000,
-    "clean": 650_000_000,
-    "esm1b": 650_000_000,
-    "esm2_8m": 8_000_000,
-    "esm2_35m": 35_000_000,
-    "esm2_150m": 150_000_000,
-    "esm2_650m": 650_000_000,
-    "esm2_3b": 3_000_000_000,
-    "esmc_300m": 300_000_000,
-    "esmc_600m": 600_000_000,
-    "esm3_open": 1_400_000_000,
-    "ankh_base": 450_000_000,
-    "ankh_large": 1_150_000_000,
-    "random_1024": 0,
-}
-
-EMBEDDING_FAMILY_MAP: Dict[str, str] = {
-    "prott5": "ProtT5",
-    "prottucker": "ProtT5",
-    "prostt5": "ProtT5",
-    "clean": "ESM-1",
-    "esm1b": "ESM-1",
-    "esm2_8m": "ESM-2",
-    "esm2_35m": "ESM-2",
-    "esm2_150m": "ESM-2",
-    "esm2_650m": "ESM-2",
-    "esm2_3b": "ESM-2",
-    "esmc_300m": "ESM-C",
-    "esmc_600m": "ESM-C",
-    "esm3_open": "ESM-3",
-    "ankh_base": "Ankh",
-    "ankh_large": "Ankh",
-    "random_1024": "Random",
-}
-
-EMBEDDING_FAMILY_COLOR_MAP: Dict[str, str] = {
-    "ProtT5": "#ff1493",
-    "ESM-1": "#4daf4a",
-    "ESM-2": "#ff7f00",
-    "ESM-C": "#1f77b4",
-    "ESM-3": "#984ea3",
-    "Ankh": "#ffd700",
-    "Random": "#808080",
-}
-
-EMBEDDING_COLOR_MAP: Dict[str, str] = {
-    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
-    for embedding, family in EMBEDDING_FAMILY_MAP.items()
-}
-
-# Friendly display names for hierarchy level columns
-LEVEL_DISPLAY_NAMES: Dict[str, str] = {
-    "fa_id": "Family",
-    "sf_id": "Superfamily",
-    "fold_id": "Fold",
-    "F_group": "F-group",
-    "H_group": "Homology",
-    "X_group": "X-group",
-    "T_group": "Topology",
-}
 
 # ---------------------------------------------------------------------------
 #  Helpers
@@ -122,7 +64,7 @@ def _sort_embeddings_by_size(embeddings: List[str]) -> List[str]:
 
 def _display_level(level: str) -> str:
     """Map a raw level column name to a human-readable label."""
-    return LEVEL_DISPLAY_NAMES.get(level, level)
+    return LEVEL_LABELS.get(level, level)
 
 
 def _get_bar_color(embedding: str) -> str:
@@ -131,27 +73,40 @@ def _get_bar_color(embedding: str) -> str:
     return EMBEDDING_COLOR_MAP.get(key, "#808080")
 
 
-def _format_size(n_params: int) -> str:
-    """Format parameter count to compact string (e.g. '650M', '3B')."""
-    if n_params == 0:
-        return "0"
-    if n_params >= 1_000_000_000:
-        return f"{n_params / 1_000_000_000:.1f}B".replace(".0B", "B")
-    return f"{n_params / 1_000_000:.0f}M"
+def _embedding_tick_labels(embeddings: List[str]) -> List[str]:
+    """Label each pLM the way the other figures do, annotated with its size."""
+    labels = []
+    for emb in embeddings:
+        key = emb.lower()
+        name = EMBEDDING_DISPLAY_NAMES.get(key, emb).replace("\n", " ")
+        size = PLM_SIZES.get(key)
+        labels.append(f"{name}\n({human_readable_number(size)})" if size is not None else name)
+    return labels
 
 
 # ---------------------------------------------------------------------------
-#  Plot 1: AUROC bar chart
+#  Plots 1 & 2: grouped metric bar charts
 # ---------------------------------------------------------------------------
 
 
-def plot_auroc_bars(
+def plot_metric_bars(
     df: pd.DataFrame,
     output_path: Path,
     fmt: str,
     dpi: int,
+    *,
+    value_col: str,
+    ylabel: str,
+    title: str,
+    filename_stem: str,
+    legend_loc: str,
+    baseline: Optional[float] = None,
 ) -> None:
-    """Grouped bar chart: x = pLM (sorted by size), y = AUROC, hue = level."""
+    """Grouped bar chart: x = pLM (sorted by size), y = ``value_col``, hue = level.
+
+    AUROC and recall@1FP are the same figure with a different value column, so they
+    share one implementation — styling changes land on both panels at once.
+    """
     levels = df["level"].unique().tolist()
     embeddings = _sort_embeddings_by_size(df["embedding"].unique().tolist())
     n_levels = len(levels)
@@ -167,82 +122,15 @@ def plot_auroc_bars(
 
     for i, level in enumerate(levels):
         level_data = df[df["level"] == level]
-        values = []
-        for emb in embeddings:
-            row = level_data[level_data["embedding"] == emb]
-            values.append(row["auroc"].values[0] if len(row) > 0 else np.nan)
-
-        offset = (i - n_levels / 2 + 0.5) * bar_width
-        bars = ax.bar(
-            x + offset,
-            values,
-            width=bar_width,
-            label=_display_level(level),
-            color=level_colors[i],
-            edgecolor="white",
-            linewidth=0.5,
+        # reindex fills a missing (embedding, level) combination with NaN, which is
+        # exactly what the bar chart should leave blank. drop_duplicates keeps the
+        # first row per embedding, matching the previous `.values[0]`.
+        values = (
+            level_data.drop_duplicates("embedding")
+            .set_index("embedding")[value_col]
+            .reindex(embeddings)
+            .to_numpy()
         )
-
-    # Random baseline
-    ax.axhline(y=0.5, color="grey", linestyle="--", linewidth=1.0, alpha=0.7,
-               label="Random (0.5)")
-
-    # X-axis: embedding names with size annotation
-    x_labels = []
-    for emb in embeddings:
-        size = PLM_SIZES.get(emb.lower(), None)
-        if size is not None:
-            x_labels.append(f"{emb}\n({_format_size(size)})")
-        else:
-            x_labels.append(emb)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=10)
-    ax.set_ylabel("AUROC", fontsize=14)
-    ax.set_title("AUROC by Embedding and Hierarchy Level", fontsize=16)
-    ax.legend(title="Level", fontsize=10, title_fontsize=11, loc="lower right")
-    ax.set_ylim(0.0, 1.05)
-    ax.grid(axis="y", alpha=0.3)
-
-    plt.tight_layout()
-    out_file = output_path / f"auroc_bars.{fmt}"
-    fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    log.info(f"Saved AUROC bar chart: {out_file}")
-
-
-# ---------------------------------------------------------------------------
-#  Plot 2: Recall-at-first-FP bar chart
-# ---------------------------------------------------------------------------
-
-
-def plot_recall_bars(
-    df: pd.DataFrame,
-    output_path: Path,
-    fmt: str,
-    dpi: int,
-) -> None:
-    """Grouped bar chart: x = pLM (sorted by size), y = recall@1FP, hue = level."""
-    levels = df["level"].unique().tolist()
-    embeddings = _sort_embeddings_by_size(df["embedding"].unique().tolist())
-    n_levels = len(levels)
-    n_embeddings = len(embeddings)
-
-    fig, ax = plt.subplots(figsize=(max(12, n_embeddings * 0.9), 7))
-
-    bar_width = 0.8 / n_levels
-    x = np.arange(n_embeddings)
-
-    level_colors = sns.color_palette("Set2", n_colors=n_levels)
-
-    for i, level in enumerate(levels):
-        level_data = df[df["level"] == level]
-        values = []
-        for emb in embeddings:
-            row = level_data[level_data["embedding"] == emb]
-            values.append(
-                row["recall_at_first_fp"].values[0] if len(row) > 0 else np.nan
-            )
 
         offset = (i - n_levels / 2 + 0.5) * bar_width
         ax.bar(
@@ -255,29 +143,25 @@ def plot_recall_bars(
             linewidth=0.5,
         )
 
-    # X-axis: embedding names with size annotation
-    x_labels = []
-    for emb in embeddings:
-        size = PLM_SIZES.get(emb.lower(), None)
-        if size is not None:
-            x_labels.append(f"{emb}\n({_format_size(size)})")
-        else:
-            x_labels.append(emb)
+    if baseline is not None:
+        ax.axhline(
+            y=baseline, color="grey", linestyle="--", linewidth=1.0, alpha=0.7,
+            label=f"Random ({baseline})",
+        )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=10)
-    ax.set_ylabel("Recall at First FP", fontsize=14)
-    ax.set_title("Recall at First False Positive by Embedding and Hierarchy Level",
-                 fontsize=16)
-    ax.legend(title="Level", fontsize=10, title_fontsize=11, loc="upper left")
+    ax.set_xticklabels(_embedding_tick_labels(embeddings), rotation=45, ha="right", fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=14)
+    ax.set_title(title, fontsize=16)
+    ax.legend(title="Level", fontsize=10, title_fontsize=11, loc=legend_loc)
     ax.set_ylim(0.0, 1.05)
     ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
-    out_file = output_path / f"recall_at_first_fp_bars.{fmt}"
+    out_file = output_path / f"{filename_stem}.{fmt}"
     fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    log.info(f"Saved recall bar chart: {out_file}")
+    log.info(f"Saved {ylabel} bar chart: {out_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -481,10 +365,25 @@ def main() -> None:
 
     # Generate all plots
     log.info("Generating AUROC bar chart...")
-    plot_auroc_bars(df, args.output_dir, args.format, args.dpi)
+    plot_metric_bars(
+        df, args.output_dir, args.format, args.dpi,
+        value_col="auroc",
+        ylabel="AUROC",
+        title="AUROC by Embedding and Hierarchy Level",
+        filename_stem="auroc_bars",
+        legend_loc="lower right",
+        baseline=0.5,
+    )
 
     log.info("Generating recall-at-first-FP bar chart...")
-    plot_recall_bars(df, args.output_dir, args.format, args.dpi)
+    plot_metric_bars(
+        df, args.output_dir, args.format, args.dpi,
+        value_col="recall_at_first_fp",
+        ylabel="Recall at First FP",
+        title="Recall at First False Positive by Embedding and Hierarchy Level",
+        filename_stem="recall_at_first_fp_bars",
+        legend_loc="upper left",
+    )
 
     log.info("Generating AUROC heatmap...")
     plot_auroc_heatmap(df, args.output_dir, args.format, args.dpi)

@@ -20,6 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from visualization.plm_constants import EMBEDDING_DISPLAY_NAMES  # noqa: E402
 
 
+def _display_name(embedding_key: str) -> str:
+    """Single-line label for an embedding, from the shared figure table.
+
+    The table stores two-line labels sized for tick text; annotations in this script
+    want them on one line. Deriving both from one table is what keeps a model from
+    being spelled three different ways across the figures in this file.
+    """
+    return EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key).replace("\n", " ")
+
+
 def analyze_performance_quartile_correlation(
     ranking_csv: Path, quartile_csv: Path, output_dir: Path = None
 ):
@@ -38,25 +48,25 @@ def analyze_performance_quartile_correlation(
     print(f"Loading quartile data from: {quartile_csv}")
     quartile_df = pd.read_csv(quartile_csv)
 
-    # Map the plot's display labels back to embedding keys.
+    # `plm_name` is the embedding key — pairwise_embedding_comparison.py writes the
+    # key and the label as separate columns, so no de-labelling is needed.
     #
-    # This used to be a hand-written allowlist of single-line names ("Ankh Base",
-    # "ESM2-8M", "ProtT5"). The statistics CSV is written from the plot's own
-    # axis labels, which are the TWO-LINE forms ("Ankh\nBase", "ESM2\n8M",
-    # "Prot\nT5"), so almost every row failed to map and was silently dropped by
-    # the inner join below — the analysis ran on CLEAN, ESM1b and ESM3 only.
-    # Inverting EMBEDDING_DISPLAY_NAMES keeps the two in lockstep by construction.
-    display_to_embedding = {
-        display: key for key, display in EMBEDDING_DISPLAY_NAMES.items()
-    }
-    # Accept the flattened spellings too, so older CSVs still load.
-    for key, display in EMBEDDING_DISPLAY_NAMES.items():
-        display_to_embedding.setdefault(display.replace("\n", " "), key)
-        display_to_embedding.setdefault(display.replace("\n", "-"), key)
-        display_to_embedding.setdefault(display.replace("\n", ""), key)
-
-    # Convert display names to embedding names in quartile_df
-    quartile_df["embedding_name"] = quartile_df["plm_name"].map(display_to_embedding)
+    # Older CSVs (written before that split) put the *display label* in plm_name, in
+    # whichever spelling the axis used, so fall back to inverting the label table for
+    # those. Regenerating the statistics CSV retires this branch.
+    known_keys = set(EMBEDDING_DISPLAY_NAMES)
+    if quartile_df["plm_name"].isin(known_keys).all():
+        quartile_df["embedding_name"] = quartile_df["plm_name"]
+    else:
+        display_to_embedding = {
+            display: key for key, display in EMBEDDING_DISPLAY_NAMES.items()
+        }
+        for key, display in EMBEDDING_DISPLAY_NAMES.items():
+            for flattened in (" ", "-", ""):
+                display_to_embedding.setdefault(display.replace("\n", flattened), key)
+        quartile_df["embedding_name"] = quartile_df["plm_name"].map(
+            lambda name: display_to_embedding.get(name, name if name in known_keys else None)
+        )
 
     unmapped = sorted(
         quartile_df.loc[quartile_df["embedding_name"].isna(), "plm_name"].unique()
@@ -212,26 +222,6 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
     # Set style
     sns.set_theme(style="whitegrid")
 
-    # Display name mapping
-    display_name_map = {
-        "ankh_base": "Ankh Base",
-        "ankh_large": "Ankh Large",
-        "clean": "CLEAN",
-        "esm1b": "ESM1b",
-        "esm2_150m": "ESM2-150M",
-        "esm2_3b": "ESM2-3B",
-        "esm2_650m": "ESM2-650M",
-        "esm2_35m": "ESM2-35M",
-        "esm2_8m": "ESM2-8M",
-        "esm3_open": "ESM3",
-        "esmc_300m": "ESMC-300M",
-        "esmc_600m": "ESMC-600M",
-        "prostt5": "ProstT5",
-        "prott5": "ProtT5",
-        "prottucker": "ProtTucker",
-        "random_1024": "Random",
-    }
-
     # --- GRID PLOT FOR AVERAGE RANK ---
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
     axes = axes.flatten()
@@ -254,7 +244,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
 
         # Add model labels
         for _, row in df.iterrows():
-            display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+            display_name = _display_name(row["Embedding"])
             ax.annotate(
                 display_name,
                 (row[col], row["Average_Rank"]),
@@ -326,7 +316,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
 
         # Add model labels
         for _, row in df.iterrows():
-            display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+            display_name = _display_name(row["Embedding"])
             ax.annotate(
                 display_name,
                 (row[col], row["Avg_Spearman"]),
@@ -492,27 +482,7 @@ def create_iqr_performance_plot(df, output_dir):
 
     # Add model names next to each point
     for _, row in df.iterrows():
-        # Convert embedding names to display names
-        display_name_map = {
-            "esmc_600m": "ESM C-600M",
-            "esmc_300m": "ESM C-300M",
-            "prott5": "ProtT5",
-            "esm3_open": "ESM3",
-            "ankh_large": "Ankh Large",
-            "esm1b": "ESM1b",
-            "prostt5": "ProstT5",
-            "esm2_650m": "ESM2-650M",
-            "esm2_150m": "ESM2-150M",
-            "esm2_3b": "ESM2-3B",
-            "prottucker": "ProtTucker",
-            "ankh_base": "Ankh Base",
-            "clean": "CLEAN",
-            "esm2_35m": "ESM2-35M",
-            "esm2_8m": "ESM2-8M",
-            "random_1024": "Random",
-        }
-
-        display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+        display_name = _display_name(row["Embedding"])
 
         ax.annotate(
             display_name,

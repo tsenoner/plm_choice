@@ -122,6 +122,8 @@ STEPS_SKIPPED=()
 
 run_or_skip() {
     # Usage: run_or_skip <step_number> <output_file> <description> <command...>
+    # An empty <output_file> means "no completeness check" — always run the step
+    # unless --step filters it out or --dry-run is set.
     local step_num="$1"
     local output_file="$2"
     local description="$3"
@@ -136,39 +138,11 @@ run_or_skip() {
     echo "  Step ${step_num}: ${description}"
     echo "================================================================"
 
-    if [[ -f "$output_file" && "$FORCE" == false ]]; then
+    if [[ -n "$output_file" && -f "$output_file" && "$FORCE" == false ]]; then
         echo "  SKIP: Output already exists: ${output_file}"
         STEPS_SKIPPED+=("${step_num}: ${description}")
         return 0
     fi
-
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "  DRY-RUN: Would execute:"
-        echo "    $*"
-        STEPS_SKIPPED+=("${step_num}: ${description} (dry-run)")
-        return 0
-    fi
-
-    echo "  Running..."
-    "$@"
-    STEPS_RAN+=("${step_num}: ${description}")
-}
-
-run_or_skip_nocheck() {
-    # Like run_or_skip but does not check for output file (always run unless
-    # --step filters it out, or --dry-run is set).
-    local step_num="$1"
-    local description="$2"
-    shift 2
-
-    if [[ -n "$STEP" && "$STEP" != "$step_num" ]]; then
-        return 0
-    fi
-
-    echo ""
-    echo "================================================================"
-    echo "  Step ${step_num}: ${description}"
-    echo "================================================================"
 
     if [[ "$DRY_RUN" == true ]]; then
         echo "  DRY-RUN: Would execute:"
@@ -385,8 +359,8 @@ mkdir -p "${OUTPUT_DIR}"
 # --- Run steps ---
 
 # Step 1: Download reference data
-# This step has its own idempotency, so we use run_or_skip_nocheck
-run_or_skip_nocheck "1" \
+# This step has its own idempotency, hence the empty output-file argument.
+run_or_skip "1" "" \
     "Download reference data" \
     step_1_download_reference
 
@@ -411,8 +385,8 @@ run_or_skip "5" "${BRENDA_OUTPUT}" \
     step_5_brenda_validation
 
 # Step 6: Random-init baselines
-# Uses its own per-file checks, so we use run_or_skip_nocheck
-run_or_skip_nocheck "6" \
+# Uses its own per-file checks, hence the empty output-file argument.
+run_or_skip "6" "" \
     "Random-init baselines (esm2_650m, prot_t5)" \
     step_6_random_init
 

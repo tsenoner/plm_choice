@@ -60,12 +60,9 @@ EMBEDDING_FAMILY_COLOR_MAP: dict[str, str] = {
     "ESM-3": "#984ea3",
     "Ankh": "#ffd700",
     "Random": "#808080",
-}
-
-#: Family colour projected onto each individual embedding set.
-EMBEDDING_COLOR_MAP: dict[str, str] = {
-    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
-    for embedding, family in EMBEDDING_FAMILY_MAP.items()
+    # Untrained architectures (R1.9) are a *different* control from the i.i.d.
+    # ``random_1024`` floor, so they get their own key rather than reusing "Random".
+    "Untrained": "#b0b0b0",
 }
 
 #: Two-line axis labels, sized for tick text.
@@ -88,6 +85,30 @@ EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
     "random_1024": "Random",
 }
 
+#: Untrained-architecture baselines (reviewer R1.9). ``embedding_generation.py
+#: --random_init`` writes ``random_init_<MODEL_CONFIGS key>.h5``, so the figure key is
+#: the file stem. Each maps to its pretrained twin: the architecture — and therefore the
+#: parameter count and the display label — is the same, only the weights differ. Values
+#: are derived from the twin below rather than restated, so a size fix lands in one place.
+#: Adding a new untrained arm means adding one line here.
+RANDOM_INIT_TWINS: dict[str, str] = {
+    "random_init_esm2_650m": "esm2_650m",
+    "random_init_prot_t5": "prott5",
+}
+
+for _key, _twin in RANDOM_INIT_TWINS.items():
+    PLM_SIZES[_key] = PLM_SIZES[_twin]
+    EMBEDDING_FAMILY_MAP[_key] = "Untrained"
+    _label = EMBEDDING_DISPLAY_NAMES[_twin].replace("\n", " ")
+    EMBEDDING_DISPLAY_NAMES[_key] = _label + "\n(untrained)"
+del _key, _twin, _label
+
+#: Family colour projected onto each individual embedding set.
+EMBEDDING_COLOR_MAP: dict[str, str] = {
+    embedding: EMBEDDING_FAMILY_COLOR_MAP.get(family, "#808080")
+    for embedding, family in EMBEDDING_FAMILY_MAP.items()
+}
+
 #: Marker per probe architecture.
 MODEL_MARKER_MAP: dict[str, str] = {
     "fnn": "o",  # Circle
@@ -96,6 +117,27 @@ MODEL_MARKER_MAP: dict[str, str] = {
     "euclidean": "X",  # X
 }
 
+
+def human_readable_number(x: float, pos=None) -> str:
+    """Format a count with an SI suffix — ``650000000`` -> ``'650M'``.
+
+    Doubles as a matplotlib tick formatter, hence the unused ``pos``. Shared so that a
+    parameter count is spelled the same way on every axis of every figure.
+    """
+    abs_x = abs(x)
+    units = ["", "K", "M", "B", "T", "P", "E", "Z", "Y"]
+    magnitude = 0
+    while abs_x >= 1000 and magnitude < len(units) - 1:
+        abs_x /= 1000.0
+        magnitude += 1
+    if magnitude == 0:
+        return str(int(x))
+    # Show up to 3 significant digits
+    value_str = f"{abs_x:.3g}"
+    sign = "-" if x < 0 else ""
+    return f"{sign}{value_str}{units[magnitude]}"
+
+
 __all__ = [
     "PLM_SIZES",
     "EMBEDDING_FAMILY_MAP",
@@ -103,4 +145,6 @@ __all__ = [
     "EMBEDDING_COLOR_MAP",
     "EMBEDDING_DISPLAY_NAMES",
     "MODEL_MARKER_MAP",
+    "RANDOM_INIT_TWINS",
+    "human_readable_number",
 ]

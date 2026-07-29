@@ -1078,12 +1078,18 @@ class EmbeddingComparisonVisualizer:
                 stats_path = save_path.parent / f"{save_path.stem}_statistics.csv"
 
                 # Convert nested dict to flat structure for CSV
+                # Emit the machine key AND the label, the same convention the dip-test
+                # output below uses. Writing only the label loses the join key, which
+                # forced consumers to guess which spelling of the label a given CSV
+                # carried.
                 rows = []
                 for plm_name, percentiles in percentile_data.items():
-                    plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name)
                     rows.append(
                         {
-                            "plm_name": plm_display_name,
+                            "plm_name": plm_name,
+                            "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                                plm_name, plm_name
+                            ).replace("\n", " "),
                             "q25": percentiles["q25"],
                             "median": percentiles["median"],
                             "q75": percentiles["q75"],

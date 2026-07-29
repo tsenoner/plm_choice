@@ -41,7 +41,7 @@ import sys
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import polars as pl
@@ -137,27 +137,25 @@ def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
     We avoid goatools dependency to keep this self-contained.
     """
     terms: Dict[str, GOTerm] = {}
+    # `current_term is not None` *is* the "inside a [Term] block" flag; a second
+    # boolean would only be one more thing to keep consistent with it.
     current_term: Optional[GOTerm] = None
-    in_term_block = False
 
     with open(obo_path) as f:
         for line in f:
             line = line.strip()
 
             if line == "[Term]":
-                in_term_block = True
                 current_term = GOTerm(id="")
                 continue
             elif line.startswith("[") and line.endswith("]"):
                 # End of a [Term] block, entering [Typedef] or similar
-                if in_term_block and current_term and current_term.id:
-                    if not current_term.is_obsolete:
-                        terms[current_term.id] = current_term
-                in_term_block = False
+                if current_term and current_term.id and not current_term.is_obsolete:
+                    terms[current_term.id] = current_term
                 current_term = None
                 continue
 
-            if not in_term_block or current_term is None:
+            if current_term is None:
                 continue
 
             if line.startswith("id: "):
@@ -177,7 +175,7 @@ def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
                 current_term.is_obsolete = True
 
     # Don't forget the last term if file doesn't end with another block
-    if in_term_block and current_term and current_term.id and not current_term.is_obsolete:
+    if current_term and current_term.id and not current_term.is_obsolete:
         terms[current_term.id] = current_term
 
     logger.info(
@@ -298,17 +296,13 @@ class WangSimilarity:
         if not terms_a or not terms_b:
             return np.nan
 
-        # Forward: for each term in A, find best match in B
-        forward_sum = 0.0
-        for ta in terms_a:
-            best = max(self.term_similarity(ta, tb) for tb in terms_b)
-            forward_sum += best
+        # Build the |A| x |B| similarity matrix once. The forward and backward passes
+        # are its row maxima and column maxima — computing them in two separate loops
+        # evaluates every term pair twice.
+        matrix = [[self.term_similarity(ta, tb) for tb in terms_b] for ta in terms_a]
 
-        # Backward: for each term in B, find best match in A
-        backward_sum = 0.0
-        for tb in terms_b:
-            best = max(self.term_similarity(ta, tb) for ta in terms_a)
-            backward_sum += best
+        forward_sum = sum(max(row) for row in matrix)
+        backward_sum = sum(max(col) for col in zip(*matrix))
 
         return (forward_sum + backward_sum) / (len(terms_a) + len(terms_b))
 
@@ -447,7 +441,6 @@ def compute_pair_similarities(
     annotations: Dict[str, Dict[str, Set[str]]],
     wang: WangSimilarity,
     aspects: List[str],
-    batch_size: int = 1000,
 ) -> Dict[str, List[float]]:
     """
     Compute GO Wang similarity for all protein pairs.
@@ -457,7 +450,6 @@ def compute_pair_similarities(
         annotations: protein_id -> {aspect: {GO terms}}
         wang: WangSimilarity instance
         aspects: which GO aspects to compute (e.g. ["MFO", "BPO", "CCO"])
-        batch_size: pairs to process before logging progress
 
     Returns:
         Dict mapping column name -> list of similarity values

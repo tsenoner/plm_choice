@@ -51,12 +51,17 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from scipy.stats import gaussian_kde
+
+# The level vocabulary is shared with the figures that plot these columns; see
+# shared/hierarchies.py for why it does not live here.
+from evaluation.stats import cohens_d
+from shared.hierarchies import ECOD_LEVEL_LABELS, ECOD_LEVELS
 
 # Configure logging
 logging.basicConfig(
@@ -64,18 +69,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-# ECOD hierarchy levels, from coarsest to finest
-ECOD_LEVELS = ["arch", "x_group", "h_group", "t_group", "f_group"]
-
-# Human-readable labels for plots
-ECOD_LEVEL_LABELS = {
-    "arch": "Architecture",
-    "x_group": "X-group",
-    "h_group": "H-group",
-    "t_group": "T-group",
-    "f_group": "F-group",
-}
 
 # Colors for same-group vs different-group curves (colorblind-safe)
 SAME_GROUP_COLOR = "#2166ac"  # blue
@@ -165,12 +158,14 @@ def parse_ecod_domains(path: Path) -> Dict[str, Dict[str, str]]:
             if "-" in unp_acc:
                 unp_acc = unp_acc.split("-")[0]
 
+            # Columns 9..13 are guaranteed present: rows with < 14 fields were
+            # already skipped above.
             domain = {
-                "arch": parts[9].strip() if len(parts) > 9 else "",
-                "x_group": parts[10].strip() if len(parts) > 10 else "",
-                "h_group": parts[11].strip() if len(parts) > 11 else "",
-                "t_group": parts[12].strip() if len(parts) > 12 else "",
-                "f_group": parts[13].strip() if len(parts) > 13 else "",
+                "arch": parts[9].strip(),
+                "x_group": parts[10].strip(),
+                "h_group": parts[11].strip(),
+                "t_group": parts[12].strip(),
+                "f_group": parts[13].strip(),
             }
 
             if unp_acc not in domains_by_uniprot:
@@ -223,62 +218,33 @@ def _is_classified(label: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def filter_pairs_by_ecod_level(
-    pairs_df: pl.DataFrame,
-    ecod_map: Dict[str, Dict[str, str]],
+def masks_from_annotation(
+    annotated_df: pl.DataFrame,
     level: str,
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Build boolean masks for same-group and different-group pairs at a given
-    ECOD hierarchy level.
+    Read the same-group / different-group masks for one ECOD level off the
+    annotated pairs frame.
 
-    A pair is "same-group" if both proteins have a classified label at the
-    given level AND those labels are identical. A pair is "different-group" if
-    both proteins are classified but the labels differ. Pairs where either
-    protein lacks an ECOD annotation or has an unclassified label at this level
-    are excluded from both masks.
+    A pair is "same-group" if both proteins have a classified label at the given
+    level AND those labels are identical; "different-group" if both are classified
+    but the labels differ. Pairs where either protein lacks a classified label at
+    this level are excluded from both masks — :func:`build_annotated_parquet`
+    already encodes that as a null in ``ecod_{level}_same``.
 
     Args:
-        pairs_df: DataFrame with 'query' and 'target' columns.
-        ecod_map: Dict mapping UniProt accession -> ECOD classification dict.
+        annotated_df: Output of :func:`build_annotated_parquet`.
         level: One of ECOD_LEVELS (e.g. "h_group").
 
     Returns:
-        Tuple of (same_mask, diff_mask, n_annotated) where masks are boolean
-        numpy arrays of length len(pairs_df), and n_annotated is the number of
-        pairs where both proteins have a valid classification at this level.
+        Tuple of (same_mask, diff_mask, n_annotated) where masks are boolean numpy
+        arrays of length len(annotated_df), and n_annotated is the number of pairs
+        where both proteins have a valid classification at this level.
     """
-    queries = pairs_df["query"].to_list()
-    targets = pairs_df["target"].to_list()
-    n = len(queries)
-
-    same_mask = np.zeros(n, dtype=bool)
-    diff_mask = np.zeros(n, dtype=bool)
-    n_annotated = 0
-
-    for i in range(n):
-        q_ecod = ecod_map.get(queries[i])
-        t_ecod = ecod_map.get(targets[i])
-
-        # Both proteins must have ECOD annotation
-        if q_ecod is None or t_ecod is None:
-            continue
-
-        q_label = q_ecod[level]
-        t_label = t_ecod[level]
-
-        # Both must be classified at this level
-        if not _is_classified(q_label) or not _is_classified(t_label):
-            continue
-
-        n_annotated += 1
-
-        if q_label == t_label:
-            same_mask[i] = True
-        else:
-            diff_mask[i] = True
-
-    return same_mask, diff_mask, n_annotated
+    same_col = annotated_df[f"ecod_{level}_same"]
+    same_mask = same_col.fill_null(False).to_numpy()
+    diff_mask = (~same_col).fill_null(False).to_numpy()
+    return same_mask, diff_mask, int(same_mask.sum() + diff_mask.sum())
 
 
 # --------------------------------------------------------------------------- #
@@ -343,24 +309,23 @@ def plot_density_comparison(
     x_max = np.percentile(all_dists, 99.5)
     x_grid = np.linspace(x_min, x_max, n_points)
 
-    kde_same = gaussian_kde(same_dists, bw_method="scott")
-    kde_diff = gaussian_kde(diff_dists, bw_method="scott")
+    # Evaluate each KDE once and reuse the curve for both the fill and the line —
+    # gaussian_kde is O(n_samples x n_grid), which at 10^6+ pairs is the dominant
+    # cost of this figure.
+    y_same = gaussian_kde(same_dists, bw_method="scott")(x_grid)
+    y_diff = gaussian_kde(diff_dists, bw_method="scott")(x_grid)
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    ax.fill_between(
-        x_grid, kde_same(x_grid), alpha=0.3, color=SAME_GROUP_COLOR,
-    )
+    ax.fill_between(x_grid, y_same, alpha=0.3, color=SAME_GROUP_COLOR)
     ax.plot(
-        x_grid, kde_same(x_grid), color=SAME_GROUP_COLOR, linewidth=1.5,
+        x_grid, y_same, color=SAME_GROUP_COLOR, linewidth=1.5,
         label=f"Same {ECOD_LEVEL_LABELS[level]} (n={len(same_dists):,})",
     )
 
-    ax.fill_between(
-        x_grid, kde_diff(x_grid), alpha=0.3, color=DIFF_GROUP_COLOR,
-    )
+    ax.fill_between(x_grid, y_diff, alpha=0.3, color=DIFF_GROUP_COLOR)
     ax.plot(
-        x_grid, kde_diff(x_grid), color=DIFF_GROUP_COLOR, linewidth=1.5,
+        x_grid, y_diff, color=DIFF_GROUP_COLOR, linewidth=1.5,
         label=f"Different {ECOD_LEVEL_LABELS[level]} (n={len(diff_dists):,})",
     )
 
@@ -429,14 +394,14 @@ def plot_level_overlay(
             logger.info(f"  Skipping {level} overlay (n={len(d)} < 10)")
             continue
 
-        kde = gaussian_kde(d, bw_method="scott")
+        y = gaussian_kde(d, bw_method="scott")(x_grid)
         color = LEVEL_COLORS[level]
 
         ax.plot(
-            x_grid, kde(x_grid), color=color, linewidth=2.0,
+            x_grid, y, color=color, linewidth=2.0,
             label=f"{ECOD_LEVEL_LABELS[level]} (n={len(d):,})",
         )
-        ax.fill_between(x_grid, kde(x_grid), alpha=0.15, color=color)
+        ax.fill_between(x_grid, y, alpha=0.15, color=color)
 
     # Also plot the "different" distribution from the coarsest level as baseline
     _, diff_mask_arch = masks_by_level.get("arch", (np.array([]), np.array([])))
@@ -501,15 +466,10 @@ def compute_separation_stats(
 
     mean_same = float(np.mean(same_d))
     mean_diff = float(np.mean(diff_d))
-    std_same = float(np.std(same_d, ddof=1))
-    std_diff = float(np.std(diff_d, ddof=1))
-
-    # Cohen's d: pooled standard deviation
     n_s, n_d = len(same_d), len(diff_d)
-    pooled_std = np.sqrt(
-        ((n_s - 1) * std_same**2 + (n_d - 1) * std_diff**2) / (n_s + n_d - 2)
-    )
-    cohens_d = (mean_diff - mean_same) / pooled_std if pooled_std > 0 else 0.0
+
+    # Positive d = different-group pairs sit at larger distances, i.e. good separation.
+    separation_d = cohens_d(diff_d, same_d)
 
     # Overlap coefficient: integral of min(kde_same, kde_diff)
     all_vals = np.concatenate([same_d, diff_d])
@@ -526,7 +486,7 @@ def compute_separation_stats(
         "mean_diff": mean_diff,
         "median_same": float(np.median(same_d)),
         "median_diff": float(np.median(diff_d)),
-        "cohens_d": float(cohens_d),
+        "cohens_d": separation_d,
         "overlap_coefficient": overlap,
         "n_same": n_s,
         "n_diff": n_d,
@@ -560,39 +520,41 @@ def build_annotated_parquet(
     Returns:
         The annotated DataFrame.
     """
-    queries = pairs_df["query"].to_list()
-    targets = pairs_df["target"].to_list()
-    n = len(queries)
+    # Clean the labels once per *protein* (thousands) rather than once per pair row
+    # (up to 10^8): everything below is then a hash join in polars instead of a
+    # Python loop over the pair table.
+    label_maps = {
+        level: {
+            acc: domain[level]
+            for acc, domain in ecod_map.items()
+            if _is_classified(domain[level])
+        }
+        for level in ECOD_LEVELS
+    }
 
-    new_columns: Dict[str, list] = {}
-
+    result_df = pairs_df
     for level in ECOD_LEVELS:
-        q_labels: List[Optional[str]] = []
-        t_labels: List[Optional[str]] = []
-        same_flags: List[Optional[bool]] = []
+        q_col, t_col = f"ecod_{level}_query", f"ecod_{level}_target"
+        level_map = label_maps[level]
 
-        for i in range(n):
-            q_ecod = ecod_map.get(queries[i])
-            t_ecod = ecod_map.get(targets[i])
+        if level_map:
+            lookup = [
+                pl.col(side)
+                .replace_strict(level_map, default=None, return_dtype=pl.Utf8)
+                .alias(name)
+                for side, name in (("query", q_col), ("target", t_col))
+            ]
+        else:  # nothing classified at this level — every label is null
+            lookup = [
+                pl.lit(None, dtype=pl.Utf8).alias(q_col),
+                pl.lit(None, dtype=pl.Utf8).alias(t_col),
+            ]
 
-            q_label = q_ecod[level] if q_ecod and _is_classified(q_ecod[level]) else None
-            t_label = t_ecod[level] if t_ecod and _is_classified(t_ecod[level]) else None
-
-            q_labels.append(q_label)
-            t_labels.append(t_label)
-
-            if q_label is not None and t_label is not None:
-                same_flags.append(q_label == t_label)
-            else:
-                same_flags.append(None)
-
-        new_columns[f"ecod_{level}_query"] = q_labels
-        new_columns[f"ecod_{level}_target"] = t_labels
-        new_columns[f"ecod_{level}_same"] = same_flags
-
-    result_df = pairs_df.clone()
-    for col_name, values in new_columns.items():
-        result_df = result_df.with_columns(pl.Series(name=col_name, values=values))
+        # `==` propagates null in polars, so ecod_{level}_same is null exactly when
+        # either side is unclassified — the intended "excluded from both masks".
+        result_df = result_df.with_columns(lookup).with_columns(
+            (pl.col(q_col) == pl.col(t_col)).alias(f"ecod_{level}_same")
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result_df.write_parquet(output_path)
@@ -701,15 +663,15 @@ def main():
 
     # --- Write annotated parquet ---
     annotated_path = args.output_dir / "pairs_with_ecod.parquet"
-    build_annotated_parquet(pairs_df, ecod_map, annotated_path)
+    annotated_df = build_annotated_parquet(pairs_df, ecod_map, annotated_path)
 
     # --- Compute masks for all levels ---
+    # The annotated frame already carries ecod_{level}_same for every level, so the
+    # masks are a read of that column rather than a second pass over the pair table.
     masks_by_level: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
     for level in args.levels:
-        same_mask, diff_mask, n_annotated = filter_pairs_by_ecod_level(
-            pairs_df, ecod_map, level
-        )
+        same_mask, diff_mask, n_annotated = masks_from_annotation(annotated_df, level)
         masks_by_level[level] = (same_mask, diff_mask)
         logger.info(
             f"  {ECOD_LEVEL_LABELS[level]}: {n_annotated} annotated pairs "
@@ -752,8 +714,8 @@ def main():
         plot_level_overlay(distances, masks_by_level, dist_col, overlay_path)
 
     # --- Write summary statistics ---
-    if all_stats:
-        stats_df = pl.DataFrame(all_stats)
+    stats_df = pl.DataFrame(all_stats) if all_stats else None
+    if stats_df is not None:
         stats_path = args.output_dir / "ecod_separation_stats.csv"
         stats_df.write_csv(stats_path)
         logger.info(f"\nSaved separation statistics: {stats_path}")
@@ -767,8 +729,7 @@ def main():
     logger.info(f"Distance columns analyzed: {args.distance_columns}")
     logger.info(f"ECOD levels analyzed: {args.levels}")
 
-    if all_stats:
-        stats_df = pl.DataFrame(all_stats)
+    if stats_df is not None:
         # Pivot: show Cohen's d for each (dist_col, level) combination
         logger.info("\nCohen's d summary (higher = better separation):")
         for dist_col in args.distance_columns:

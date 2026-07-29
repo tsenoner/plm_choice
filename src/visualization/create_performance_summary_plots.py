@@ -39,6 +39,7 @@ from visualization.plm_constants import (
     EMBEDDING_FAMILY_COLOR_MAP,
     EMBEDDING_FAMILY_MAP,
     PLM_SIZES,
+    human_readable_number,
 )
 
 # Marker map for model types
@@ -473,30 +474,6 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
     )
 
 
-def _human_readable_formatter(x, pos=None):
-    """Formatter for large numbers with SI suffixes (K, M, B, T, etc).
-
-    Args:
-        x: Number to format
-        pos: Position (unused, for matplotlib compatibility)
-
-    Returns:
-        Formatted string with appropriate SI suffix
-    """
-    abs_x = abs(x)
-    units = ["", "K", "M", "B", "T", "P", "E", "Z", "Y"]
-    magnitude = 0
-    while abs_x >= 1000 and magnitude < len(units) - 1:
-        abs_x /= 1000.0
-        magnitude += 1
-    if magnitude == 0:
-        return str(int(x))
-    # Show up to 3 significant digits
-    value_str = f"{abs_x:.3g}"
-    sign = "-" if x < 0 else ""
-    return f"{sign}{value_str}{units[magnitude]}"
-
-
 # --- Main Plotting Function ---
 def generate_metric_plot(
     df: pd.DataFrame,
@@ -599,7 +576,7 @@ def generate_metric_plot(
 
         # Set custom x-axis labels
         size_labels = [
-            _human_readable_formatter(PLM_SIZES.get(emb.lower()))
+            human_readable_number(PLM_SIZES.get(emb.lower()))
             if emb.lower() in PLM_SIZES
             else emb
             for emb in category_order

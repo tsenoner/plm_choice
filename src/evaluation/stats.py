@@ -395,6 +395,33 @@ def bh_fdr(
 # ---------------------------------------------------------------------------
 
 
+def cohens_d(a: np.ndarray, b: np.ndarray) -> float:
+    """Cohen's d for two independent samples: ``(mean(a) - mean(b)) / pooled_sd``.
+
+    The sign convention is fixed here — positive means ``a`` is larger — because two
+    callers previously rolled their own and disagreed on both the sign and whether the
+    pooled SD used the sample (``ddof=1``) or population variance. Sample variance is
+    the standard definition and is what the ``|d| > 0.8`` "large effect" threshold
+    those callers test against assumes.
+
+    Returns nan if either sample has fewer than two values, and 0.0 when the pooled
+    SD is zero (both samples constant), matching "no separation".
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    n_a, n_b = a.size, b.size
+    if n_a < 2 or n_b < 2:
+        return float("nan")
+
+    pooled_var = (
+        (n_a - 1) * np.var(a, ddof=1) + (n_b - 1) * np.var(b, ddof=1)
+    ) / (n_a + n_b - 2)
+    pooled_sd = np.sqrt(pooled_var)
+    if pooled_sd <= 0:
+        return 0.0
+    return float((np.mean(a) - np.mean(b)) / pooled_sd)
+
+
 def _cliffs_delta(a: np.ndarray, b: np.ndarray) -> float:
     """Cliff's delta effect size for paired data: ``(#{a>b} - #{a<b}) / n``.
 

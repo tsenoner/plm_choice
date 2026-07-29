@@ -29,7 +29,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import polars as pl
 
@@ -39,37 +39,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def load_source_subset(source_path: Path, columns: List[str]) -> Optional[pl.DataFrame]:
+    """
+    Read only the join keys and the columns being merged from the source parquet.
+
+    Read once and reused across every split: the source is the same file for all of
+    them, and projecting at read time skips decoding the columns we never join on.
+
+    Returns None if the source lacks a requested column.
+    """
+    source_columns = pl.read_parquet_schema(source_path).keys()
+    missing = [c for c in columns if c not in source_columns]
+    if missing:
+        logger.error(f"Columns {missing} not found in {source_path}")
+        logger.info(f"Available columns: {list(source_columns)}")
+        return None
+
+    return pl.read_parquet(source_path, columns=["query", "target"] + columns)
+
+
 def merge_columns(
-    source_path: Path,
+    source_subset: pl.DataFrame,
     target_path: Path,
     columns: List[str],
 ) -> int:
     """
-    Merge specific columns from source parquet into target parquet.
+    Merge specific columns from a source frame into target parquet.
 
     Joins on (query, target) pair keys. Overwrites target file in place.
 
     Returns:
         Number of rows with non-null values in the merged columns
     """
-    source_df = pl.read_parquet(source_path)
     target_df = pl.read_parquet(target_path)
-
-    # Validate source has the requested columns
-    missing = [c for c in columns if c not in source_df.columns]
-    if missing:
-        logger.error(f"Columns {missing} not found in {source_path}")
-        logger.info(f"Available columns: {source_df.columns}")
-        return 0
 
     # Drop existing columns in target that we're replacing
     existing = [c for c in columns if c in target_df.columns]
     if existing:
         logger.info(f"  Replacing existing columns in {target_path.name}: {existing}")
         target_df = target_df.drop(existing)
-
-    # Select join keys + new columns from source
-    source_subset = source_df.select(["query", "target"] + columns)
 
     # Left join: keep all target rows, add source columns where matching
     merged = target_df.join(source_subset, on=["query", "target"], how="left")
@@ -126,13 +134,18 @@ def main():
     logger.info(f"Columns to merge: {args.columns}")
     logger.info(f"Target directory: {args.target_dir}")
 
+    # Fail loudly rather than "merging" nothing into every split in turn.
+    source_subset = load_source_subset(args.source, args.columns)
+    if source_subset is None:
+        sys.exit(1)
+
     for split in args.splits:
         target_path = args.target_dir / f"{split}.parquet"
         if not target_path.exists():
             logger.warning(f"  {split}.parquet not found, skipping")
             continue
 
-        valid = merge_columns(args.source, target_path, args.columns)
+        valid = merge_columns(source_subset, target_path, args.columns)
         logger.info(f"  {split}.parquet: merged {len(args.columns)} columns ({valid} total valid values)")
 
     logger.info("Done.")

@@ -179,11 +179,8 @@ else
     NEXT_URL="${UNIPROT_URL}"
     PAGE=0
 
-    # First page — includes the TSV header line
-    HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" -D - \
-        -H "User-Agent: plm_choice/1.0 (reference download)" \
-        "${NEXT_URL}" 2>/dev/null | head -1 | tr -d '\r\n' | tail -c 3)
-    # Proper approach: capture headers separately
+    # First page — includes the TSV header line. Headers go to their own file so the
+    # Link header survives for the pagination loop below.
     HEADER_FILE=$(mktemp)
     HTTP_CODE=$(curl -s -w "%{http_code}" -o "${TEMP_FILE}" \
         -D "${HEADER_FILE}" \
