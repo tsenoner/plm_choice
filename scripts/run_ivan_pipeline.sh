@@ -6,7 +6,7 @@
 # Chains all Ivan infrastructure scripts in the correct order:
 #   1. Download reference data (GO ontology, SIFTS, SCOP, ECOD, EC)
 #   2. GO semantic similarity (Wang method) on test pairs, merge into splits
-#   3. EC hierarchy distances on test pairs, merge into splits
+#   3. EC hierarchy distances  — NOT AVAILABLE, see the step 3 block below
 #   4. PDB experimental TM-scores on test pairs, merge into splits
 #   5. BRENDA/HFSP validation (produces JSON report, no merge)
 #   6. Random-init baselines (esm2_650m and prot_t5)
@@ -89,7 +89,7 @@ while [[ $# -gt 0 ]]; do
             echo "Steps:"
             echo "  1  Download reference data (GO, SIFTS, SCOP, ECOD, EC)"
             echo "  2  GO semantic similarity (Wang method)"
-            echo "  3  EC hierarchy distances"
+            echo "  3  EC hierarchy distances (NOT AVAILABLE — reports and skips)"
             echo "  4  PDB experimental TM-scores"
             echo "  5  BRENDA/HFSP validation"
             echo "  6  Random-init baselines (esm2_650m, prot_t5)"
@@ -200,25 +200,27 @@ step_2_go_similarity() {
 }
 
 # --------------------------------------------------------------------------- #
-#                    STEP 3: EC Hierarchy Distances
+#                    STEP 3: EC Hierarchy Distances  (NOT AVAILABLE)
 # --------------------------------------------------------------------------- #
+#
+# `src/data_preparation/ec_hierarchy_distance.py` was deliberately NOT mined in
+# from feat/ivan-infrastructure: main already carries evaluation/ec_hierarchy.py
+# plus label_adapters.parse_ec, which supersede it (see docs/IVAN_BRANCH_MINING.md,
+# "Not taken"). This step still referenced the file, so with `set -e` a plain
+# `run_ivan_pipeline.sh` aborted here and steps 4-7 never ran at all.
+#
+# It now reports and returns cleanly instead of taking the rest of the pipeline
+# down with it. Re-enable by writing the pairs->columns producer on top of
+# evaluation/ec_hierarchy.py.
 
 EC_OUTPUT="${OUTPUT_DIR}/test_with_ec.parquet"
 
 step_3_ec_distances() {
-    # 3a: Compute EC hierarchy distances on test pairs
-    echo "  [3a] Computing EC hierarchy distances on test.parquet..."
-    uv run python src/data_preparation/ec_hierarchy_distance.py \
-        --annotations "${EC_ANNOTATIONS}" \
-        --pairs_parquet "${SETS_DIR}/test.parquet" \
-        --output_parquet "${EC_OUTPUT}"
-
-    # 3b: Merge EC columns into train/val/test splits
-    echo "  [3b] Merging EC columns into train/val/test..."
-    uv run python src/data_preparation/merge_parquet_columns.py \
-        --source "${EC_OUTPUT}" \
-        --target_dir "${SETS_DIR}" \
-        --columns ec_dist_min ec_dist_max ec_dist_mean
+    echo "  SKIP: EC hierarchy distances are not implemented on this branch." >&2
+    echo "        src/data_preparation/ec_hierarchy_distance.py was superseded by" >&2
+    echo "        src/evaluation/ec_hierarchy.py, which has no pairs->columns CLI." >&2
+    echo "        See docs/IVAN_BRANCH_MINING.md. Continuing with step 4." >&2
+    return 0
 }
 
 # --------------------------------------------------------------------------- #
@@ -369,9 +371,9 @@ run_or_skip "2" "${GO_OUTPUT}" \
     "GO semantic similarity (Wang method)" \
     step_2_go_similarity
 
-# Step 3: EC hierarchy distances
+# Step 3: EC hierarchy distances (reports that it is unavailable, then continues)
 run_or_skip "3" "${EC_OUTPUT}" \
-    "EC hierarchy distances" \
+    "EC hierarchy distances (NOT AVAILABLE)" \
     step_3_ec_distances
 
 # Step 4: PDB experimental TM-scores

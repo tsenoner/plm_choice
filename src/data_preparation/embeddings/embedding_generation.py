@@ -270,23 +270,49 @@ def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
         Linear / Embedding weight ~ N(0, 0.02);  bias = 0
         LayerNorm weight = 1.0;                  bias = 0
         padding_idx embedding row = 0
+
+    Being type-aware means being *incomplete*: any parameter owned by a module
+    that is none of those three keeps the value it was loaded with. This path
+    starts from ``from_pretrained``, so an unhandled module leaves PRETRAINED
+    weights inside a baseline whose entire premise is that nothing was learned —
+    and ESM3/ESMC are exactly the custom-block architectures where that is
+    plausible. Any such parameter is therefore reported loudly rather than left
+    to pass for an untrained model.
     """
     generator = torch.Generator()
     generator.manual_seed(seed)
 
+    handled: set[int] = set()
+
     for submodule in module.modules():
         if isinstance(submodule, torch.nn.Linear):
             torch.nn.init.normal_(submodule.weight, mean=0.0, std=0.02, generator=generator)
+            handled.add(id(submodule.weight))
             if submodule.bias is not None:
                 torch.nn.init.zeros_(submodule.bias)
+                handled.add(id(submodule.bias))
         elif isinstance(submodule, torch.nn.Embedding):
             torch.nn.init.normal_(submodule.weight, mean=0.0, std=0.02, generator=generator)
+            handled.add(id(submodule.weight))
             if submodule.padding_idx is not None:
                 with torch.no_grad():
                     submodule.weight[submodule.padding_idx].fill_(0.0)
         elif isinstance(submodule, torch.nn.LayerNorm):
             torch.nn.init.ones_(submodule.weight)
             torch.nn.init.zeros_(submodule.bias)
+            handled.update((id(submodule.weight), id(submodule.bias)))
+
+    untouched = [name for name, p in module.named_parameters() if id(p) not in handled]
+    if untouched:
+        preview = ", ".join(untouched[:10])
+        suffix = f", ... (+{len(untouched) - 10} more)" if len(untouched) > 10 else ""
+        print(
+            f"⚠️ --random_init: {len(untouched)} parameter tensor(s) are not covered by "
+            f"the Linear/Embedding/LayerNorm re-init and therefore KEEP THEIR "
+            f"PRETRAINED VALUES: {preview}{suffix}\n"
+            f"   This baseline is only an untrained architecture if that list is empty. "
+            f"Extend _reinit_weights before reporting numbers from this model."
+        )
 
 
 def load_model_and_tokenizer(

@@ -94,6 +94,7 @@ def fetch_enzyme_annotations(
     logger.info(f"Fetching UniProt entries for EC {ec_number} ...")
 
     entries = []
+    header: Optional[List[str]] = None
     try:
         while url:
             req = urllib.request.Request(url)
@@ -107,12 +108,16 @@ def fetch_enzyme_annotations(
                 if not lines:
                     break
 
-                if not entries:
-                    # First page — extract header
+                # UniProt repeats the TSV header on EVERY page, so the guard has
+                # to be "have I seen a header", not "do I have entries yet":
+                # keying off `entries` re-ingested each later page's header row as
+                # a data row, adding a bogus accession literally named "Entry"
+                # and inflating the reported entry count by one per page.
+                if header is None:
                     header = lines[0].split("\t")
                     data_lines = lines[1:]
                 else:
-                    data_lines = lines
+                    data_lines = lines[1:] if lines[0].split("\t") == header else lines
 
                 for line in data_lines:
                     parts = line.split("\t")

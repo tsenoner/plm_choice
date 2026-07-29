@@ -197,7 +197,12 @@ else
 
         # Follow pagination via Link header
         while true; do
-            NEXT_URL=$(grep -i '^Link:' "${HEADER_FILE}" | sed 's/.*<\(.*\)>.*/\1/' | tr -d '\r\n')
+            # The LAST page carries no Link header, so grep exits 1 — which under
+            # `set -euo pipefail` killed the whole script at the exact moment the
+            # download finished: no "OK" line, no summary, and step 1 of
+            # run_ivan_pipeline.sh failed on a successful fetch. `|| true` makes
+            # "no more pages" the normal loop exit it was always meant to be.
+            NEXT_URL=$(grep -i '^Link:' "${HEADER_FILE}" | sed 's/.*<\(.*\)>.*/\1/' | tr -d '\r\n' || true)
             if [[ -z "$NEXT_URL" ]]; then
                 break
             fi

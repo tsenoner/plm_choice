@@ -141,17 +141,27 @@ def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
     # boolean would only be one more thing to keep consistent with it.
     current_term: Optional[GOTerm] = None
 
+    def _flush(term: Optional[GOTerm]) -> None:
+        """Store a finished [Term] block, unless it is empty or obsolete."""
+        if term and term.id and not term.is_obsolete:
+            terms[term.id] = term
+
     with open(obo_path) as f:
         for line in f:
             line = line.strip()
 
             if line == "[Term]":
+                # A new block ends the previous one. Without this flush every
+                # term but the last one before a [Typedef] was dropped on the
+                # floor: go-basic.obo parsed down to a single term, so every
+                # protein pair scored 0.0/NaN and the whole GO axis was silent
+                # noise.
+                _flush(current_term)
                 current_term = GOTerm(id="")
                 continue
             elif line.startswith("[") and line.endswith("]"):
                 # End of a [Term] block, entering [Typedef] or similar
-                if current_term and current_term.id and not current_term.is_obsolete:
-                    terms[current_term.id] = current_term
+                _flush(current_term)
                 current_term = None
                 continue
 
@@ -175,8 +185,7 @@ def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
                 current_term.is_obsolete = True
 
     # Don't forget the last term if file doesn't end with another block
-    if current_term and current_term.id and not current_term.is_obsolete:
-        terms[current_term.id] = current_term
+    _flush(current_term)
 
     logger.info(
         f"Parsed {len(terms)} GO terms from {obo_path.name} "

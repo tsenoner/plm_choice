@@ -297,16 +297,22 @@ def _add_trendlines(
 
         # Exclude esm2_3b from FNN trendline
         if model_type == "fnn":
+            n_excluded = int((valid_group["Embedding Key"] == "esm2_3b").sum())
             valid_group = valid_group[valid_group["Embedding Key"] != "esm2_3b"]
             # Loud on purpose: the ESM2-3B embeddings were ~80% complete, so it
             # is dropped from the trendline. This must be either removed once
             # they finish or disclosed in the manuscript (plan item E3) — a
             # debug-level message let it go unnoticed for months.
-            log.warning(
-                "EXCLUDED esm2_3b from the %s trendline (incomplete embeddings) "
-                "— disclose this or finish the embeddings before publishing",
-                model_type,
-            )
+            #
+            # Only warn when something was actually dropped: an unconditional
+            # warning fires on runs that never contained esm2_3b, which teaches
+            # the reader to scroll past exactly the line they must not miss.
+            if n_excluded:
+                log.warning(
+                    "EXCLUDED esm2_3b from the %s trendline (incomplete embeddings) "
+                    "— disclose this or finish the embeddings before publishing",
+                    model_type,
+                )
 
         if len(valid_group) < 2:
             log.debug(f"Skipping trendline for {model_type}: insufficient data points")
@@ -706,14 +712,49 @@ def main():
             log.error(f"Baseline CSV is missing join column(s): {missing}")
             return
 
+        # Only metrics present on BOTH sides can be differenced. A metric that
+        # exists in results but not in the baseline would otherwise be left at
+        # its absolute value and then drawn on the zero-centred delta axis as if
+        # it were a difference.
         metric_cols = [
-            c for c in ["Pearson R2", "Spearman", "MAE", "R2"] if c in baseline_df.columns
+            c
+            for c in ["Pearson R2", "Spearman", "MAE", "R2"]
+            if c in baseline_df.columns and c in results_df.columns
         ]
+        if not metric_cols:
+            log.error(
+                "Delta mode: the baseline CSV and the current run share no metric "
+                "column out of Pearson R2 / Spearman / MAE / R2. Nothing to subtract."
+            )
+            return
+        un_differenced = [
+            c
+            for c in ["Pearson R2", "Spearman", "MAE", "R2"]
+            if c in results_df.columns and c not in metric_cols
+        ]
+        if un_differenced:
+            log.warning(
+                f"Delta mode: {un_differenced} are absent from the baseline and will "
+                f"NOT be plotted, because an absolute value on a zero-centred delta "
+                f"axis would read as a difference."
+            )
+            results_df = results_df.drop(columns=un_differenced)
+
         renamed = {c: f"_baseline_{c}" for c in metric_cols}
         baseline_subset = baseline_df[join_cols + metric_cols].rename(columns=renamed)
 
         before_len = len(results_df)
         results_df = results_df.merge(baseline_subset, on=join_cols, how="left")
+
+        # 'Absolute Spearman' is derived further down as ``Spearman.abs()``. Once
+        # Spearman holds a *difference* that would be |Δρ| — a non-negative number
+        # plotted on a signed axis, which is not the "difference in |ρ|" the panel
+        # claims to show. Derive it here, from the two absolute values, before the
+        # baseline columns are dropped.
+        if "Spearman" in metric_cols:
+            results_df["Absolute Spearman"] = (
+                results_df["Spearman"].abs() - results_df["_baseline_Spearman"].abs()
+            )
 
         for col in metric_cols:
             bl_col = f"_baseline_{col}"
@@ -721,7 +762,7 @@ def main():
                 results_df[col] = results_df[col] - results_df[bl_col]
                 results_df.drop(columns=[bl_col], inplace=True)
 
-        matched = int(results_df[metric_cols[0]].notna().sum()) if metric_cols else 0
+        matched = int(results_df[metric_cols[0]].notna().sum())
         if matched < before_len:
             # Unmatched rows become NaN and vanish from the plot — say so loudly
             # rather than letting the figure quietly lose models.
@@ -733,8 +774,14 @@ def main():
             log.info(f"Delta mode: subtracted baseline from all {matched} rows.")
 
     # --- Save Full Dataframe ---
+    # In delta mode the metric columns hold (current - baseline), so the file must
+    # NOT be called parsed_metrics_all.csv: that is the canonical absolute-metrics
+    # table other tools read (and --delta_baseline itself takes one as input), so
+    # writing differences under that name silently poisons every consumer.
     output_dir = args.output
-    csv_filename = "parsed_metrics_all.csv"
+    csv_filename = (
+        "parsed_metrics_delta.csv" if args.delta_baseline else "parsed_metrics_all.csv"
+    )
     csv_output_path = output_dir / csv_filename
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -785,7 +832,9 @@ def main():
             return
 
     # --- Add absolute Spearman correlation ---
-    if "Spearman" in results_df.columns:
+    # In delta mode this was already computed as the difference of absolutes,
+    # before the baseline column was consumed — do not overwrite it with |Δρ|.
+    if "Spearman" in results_df.columns and "Absolute Spearman" not in results_df.columns:
         results_df["Absolute Spearman"] = results_df["Spearman"].abs()
         log.info("Added 'Absolute Spearman' column to the dataset")
 

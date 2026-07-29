@@ -131,11 +131,22 @@ class EmbeddingComparisonVisualizer:
             if col.startswith("dist_") and not col.startswith("pca_")
         ]
 
-        # Filter out random embeddings and temporarily exclude prostt5
+        # Filter out the i.i.d. random baselines and temporarily exclude prostt5.
+        #
+        # `random_init_*` must survive this filter. Those are the untrained
+        # *architectures* of reviewer R1.9 — a different control from the
+        # i.i.d. `random_1024` noise floor, which is exactly why
+        # plm_constants.py gives them their own "Untrained" family and colour.
+        # A bare `startswith("random")` swallowed them, so the arm this branch
+        # exists to add would have been absent from every pairwise figure while
+        # the log claimed it was "excluded by design".
+        def _is_iid_random_baseline(name: str) -> bool:
+            return name.startswith("random") and not name.startswith("random_init")
+
         dist_cols = [
             col
             for col in all_dist_cols
-            if not col.replace("dist_", "").lower().startswith("random")
+            if not _is_iid_random_baseline(col.replace("dist_", "").lower())
             and not col.replace("dist_", "").lower()
             == "prostt5"  # TEMPORARY: Remove this line to re-include prostt5
         ]
@@ -144,8 +155,9 @@ class EmbeddingComparisonVisualizer:
         if dropped:
             logger.warning(
                 "EXCLUDED %d embedding column(s) from every pairwise figure: %s "
-                "(random baselines are excluded by design; prostt5 is a TEMPORARY "
-                "exclusion — see the Data availability note in the README)",
+                "(i.i.d. random baselines are excluded by design; prostt5 is a "
+                "TEMPORARY exclusion — see the Data availability note in the "
+                "README). random_init_* untrained architectures are NOT excluded.",
                 len(dropped),
                 ", ".join(c.replace("dist_", "") for c in dropped),
             )

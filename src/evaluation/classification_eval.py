@@ -45,7 +45,13 @@ import polars as pl
 
 # Reuse the canonical implementations from retrieval_metrics.py to avoid
 # duplicated code that could silently diverge during maintenance.
-from .retrieval_metrics import auroc_at_level, recall_at_first_fp
+#
+# Absolute, not relative: this module is documented — and driven by
+# scripts/run_ivan_pipeline.sh — as ``python src/evaluation/classification_eval.py``.
+# Run as a script there is no parent package, so a relative import raised
+# "attempted relative import with no known parent package" before argparse was
+# ever reached. Every sibling module in src/ imports this way.
+from evaluation.retrieval_metrics import auroc_at_level, recall_at_first_fp
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -65,9 +71,6 @@ def build_same_level_labels(
     """
     Build boolean labels: True if both proteins share the same classification.
 
-    Uses polars Series.map_elements for vectorized lookup instead of a Python
-    loop, which matters when datasets have millions of pairs.
-
     Args:
         pairs_df: DataFrame with 'query' and 'target' columns
         protein_classifications: dict mapping protein_id -> class label
@@ -75,25 +78,22 @@ def build_same_level_labels(
     Returns:
         boolean numpy array (True = same class, False = different or unknown)
     """
-    # Map protein IDs to class labels via polars replace (vectorized hash lookup)
-    class_series = pl.Series(
-        name="_cls",
-        values=list(protein_classifications.values()),
-    )
-    id_series = pl.Series(
-        name="_id",
-        values=list(protein_classifications.keys()),
-    )
-    mapping_df = pl.DataFrame({"_id": id_series, "_cls": class_series})
+    # `replace_strict` is a positional dictionary lookup — same hash lookup as the
+    # left join this used to do, but it is order-preserving by construction. The
+    # returned mask is indexed positionally against the distance array, and polars
+    # does not guarantee row order out of a join. It is also the form the sibling
+    # producers (ecod_homology_pairs, organism_landscape) already use.
+    if not protein_classifications:
+        return np.zeros(len(pairs_df), dtype=bool)
 
-    q_classes = (
-        pairs_df.select("query")
-        .join(mapping_df, left_on="query", right_on="_id", how="left")["_cls"]
+    classes = pairs_df.select(
+        pl.col(side)
+        .replace_strict(protein_classifications, default=None, return_dtype=pl.Utf8)
+        .alias(side)
+        for side in ("query", "target")
     )
-    t_classes = (
-        pairs_df.select("target")
-        .join(mapping_df, left_on="target", right_on="_id", how="left")["_cls"]
-    )
+    q_classes = classes["query"]
+    t_classes = classes["target"]
 
     # Both must be non-null AND equal
     both_known = q_classes.is_not_null() & t_classes.is_not_null()

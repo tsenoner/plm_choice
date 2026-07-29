@@ -193,7 +193,8 @@ def compute_histogram_batched(embeddings, n_bins, min_val, max_val, batch_size=1
             cols = np.arange(distances.shape[1])
             upper_mask = cols[np.newaxis, :] > np.arange(batch_size_actual)[:, np.newaxis]
 
-            valid_mask = np.isfinite(distances) & upper_mask
+            finite_mask = np.isfinite(distances)
+            valid_mask = finite_mask & upper_mask
             distances_valid = distances[valid_mask]
 
             # Manual binning (faster than np.digitize for large data)
@@ -205,8 +206,13 @@ def compute_histogram_batched(embeddings, n_bins, min_val, max_val, batch_size=1
                 counts = np.bincount(bin_indices.ravel(), minlength=n_bins)
                 histogram += counts[:n_bins].astype(np.int64)
 
-            # Warn if we found invalid values
-            n_invalid = (~valid_mask).sum()
+            # Warn if we found invalid values.
+            #
+            # Count only NON-FINITE distances among the pairs we actually keep.
+            # `(~valid_mask).sum()` also counts every entry the upper-triangle
+            # mask removes, so it reported a five-figure "invalid" count on every
+            # single batch of a perfectly healthy run and buried the real signal.
+            n_invalid = int((~finite_mask & upper_mask).sum())
             if n_invalid > 0:
                 tqdm.write(
                     f"Warning: Found {n_invalid} invalid distance values in batch {i}-{end_i}"

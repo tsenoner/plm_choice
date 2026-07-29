@@ -366,9 +366,16 @@ def plot_level_overlay(
         output_path: Where to save the figure.
         n_points: Number of points for KDE evaluation grid.
     """
+    # Iterate in hierarchy order, but only over the levels the caller actually
+    # asked for: `--levels h_group` builds a one-entry masks_by_level, and
+    # indexing it by the full ECOD_LEVELS list raised KeyError('arch') before a
+    # single curve was drawn.
+    levels = [level for level in ECOD_LEVELS if level in masks_by_level]
+
     # Determine shared x range across all levels
     all_same_dists = []
-    for level, (same_mask, _) in masks_by_level.items():
+    for level in levels:
+        same_mask, _ = masks_by_level[level]
         d = distances[same_mask]
         d = d[~np.isnan(d)]
         if len(d) >= 10:
@@ -385,7 +392,7 @@ def plot_level_overlay(
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
-    for level in ECOD_LEVELS:
+    for level in levels:
         same_mask, _ = masks_by_level[level]
         d = distances[same_mask]
         d = d[~np.isnan(d)]

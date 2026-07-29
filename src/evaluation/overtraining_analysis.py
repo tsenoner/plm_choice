@@ -420,13 +420,22 @@ def parse_training_curves(run_dir: Path) -> Optional[TrainingCurves]:
 # ---------------------------------------------------------------------------
 
 
+#: ``np.polyfit``'s ill-conditioning warning. It lives under ``np.exceptions`` from
+#: NumPy 1.25 on and the top-level alias was deleted in 2.0; resolve it once here so
+#: the call site works on either.
+_RANK_WARNING = getattr(np, "RankWarning", None) or np.exceptions.RankWarning
+
+
 def _linear_slope(values: np.ndarray) -> float:
     """Fit a simple linear regression and return the slope."""
     if len(values) < 2:
         return 0.0
     x = np.arange(len(values), dtype=np.float64)
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", np.RankWarning)
+        # NumPy 2.0 removed the ``np.RankWarning`` alias; reaching for it raised
+        # AttributeError on every call, so this function — and therefore every
+        # late-slope / divergence metric in this module — crashed outright.
+        warnings.simplefilter("ignore", _RANK_WARNING)
         coeffs = np.polyfit(x, values, 1)
     return float(coeffs[0])
 

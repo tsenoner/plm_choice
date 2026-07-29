@@ -21,6 +21,7 @@ from data_preparation.go_semantic_similarity import (
     EXPERIMENTAL_EVIDENCE,
     GOTerm,
     load_annotations_tsv,
+    parse_obo,
 )
 
 # A minimal ontology; only membership matters for the loader.
@@ -138,3 +139,74 @@ def test_three_column_tsv_warns_that_it_cannot_filter(tmp_path, caplog):
     assert annotations["P00001"]["MFO"] == {"GO:0004672", "GO:0005515"}
     assert "NO EVIDENCE-CODE COLUMN" in caplog.text
     assert "R2.1" in caplog.text
+
+
+# ── OBO parsing ───────────────────────────────────────────────────────────────
+# The parser started a new GOTerm on every ``[Term]`` line without storing the
+# previous one, so it kept only the last block before a ``[Typedef]``: a 47k-term
+# go-basic.obo parsed down to ONE term. Every annotation then failed the
+# "is this term in the ontology?" check, every pair scored NaN, and the GO arm
+# would have reported a column of nothing while logging a cheerful summary.
+
+OBO = """format-version: 1.2
+
+[Term]
+id: GO:0000001
+name: alpha
+namespace: molecular_function
+
+[Term]
+id: GO:0000002
+name: beta
+namespace: molecular_function
+is_a: GO:0000001 ! alpha
+
+[Term]
+id: GO:0000003
+name: gamma
+namespace: biological_process
+relationship: part_of GO:0000001 ! alpha
+
+[Term]
+id: GO:0000009
+name: dead
+namespace: molecular_function
+is_obsolete: true
+
+[Typedef]
+id: part_of
+name: part of
+"""
+
+
+@pytest.fixture
+def obo_file(tmp_path):
+    path = tmp_path / "mini.obo"
+    path.write_text(OBO)
+    return path
+
+
+def test_every_term_block_is_kept(obo_file):
+    terms = parse_obo(obo_file)
+    assert set(terms) == {"GO:0000001", "GO:0000002", "GO:0000003"}, (
+        "terms were dropped — a new [Term] block must flush the previous one"
+    )
+
+
+def test_obsolete_terms_are_dropped(obo_file):
+    assert "GO:0000009" not in parse_obo(obo_file)
+
+
+def test_parents_and_namespaces_survive(obo_file):
+    terms = parse_obo(obo_file)
+    assert terms["GO:0000002"].parents == [("GO:0000001", "is_a")]
+    assert terms["GO:0000003"].parents == [("GO:0000001", "part_of")]
+    assert terms["GO:0000001"].namespace == "molecular_function"
+    assert terms["GO:0000003"].namespace == "biological_process"
+
+
+def test_last_term_survives_without_a_trailing_typedef(tmp_path):
+    """A file that ends on a [Term] block must still yield that term."""
+    path = tmp_path / "no_typedef.obo"
+    path.write_text(OBO.split("[Typedef]")[0])
+    assert set(parse_obo(path)) == {"GO:0000001", "GO:0000002", "GO:0000003"}

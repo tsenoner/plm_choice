@@ -29,9 +29,11 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import polars as pl
+
+from shared.atomic_io import atomic_write
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -62,14 +64,14 @@ def merge_columns(
     source_subset: pl.DataFrame,
     target_path: Path,
     columns: List[str],
-) -> int:
+) -> Dict[str, int]:
     """
     Merge specific columns from a source frame into target parquet.
 
-    Joins on (query, target) pair keys. Overwrites target file in place.
+    Joins on (query, target) pair keys. Replaces the target file in place.
 
     Returns:
-        Number of rows with non-null values in the merged columns
+        Per-column count of rows carrying a real (non-null, non-NaN) value.
     """
     target_df = pl.read_parquet(target_path)
 
@@ -83,15 +85,22 @@ def merge_columns(
     merged = target_df.join(source_subset, on=["query", "target"], how="left")
 
     # Count valid values
-    valid_counts = {}
+    valid_counts: Dict[str, int] = {}
     for col in columns:
         valid = len(merged) - merged[col].null_count()
-        nan_count = merged[col].is_nan().sum() if merged[col].dtype == pl.Float64 else 0
-        valid_counts[col] = valid - nan_count
+        # is_nan() is only defined on floats; check the kind, not one exact dtype,
+        # so a Float32 column is not silently counted as NaN-free.
+        nan_count = (
+            merged[col].is_nan().sum() if merged[col].dtype.is_float() else 0
+        )
+        valid_counts[col] = int(valid - nan_count)
 
-    # Write back
-    merged.write_parquet(target_path)
-    return sum(valid_counts.values())
+    # Write back through a tmp file + os.replace. The targets are the canonical
+    # train/val/test splits; a plain write_parquet() over them means a job killed
+    # mid-write (OOM, walltime) leaves a truncated training set that still looks
+    # like a parquet.
+    atomic_write(target_path, merged.write_parquet, mode="replace")
+    return valid_counts
 
 
 def main():
@@ -145,8 +154,28 @@ def main():
             logger.warning(f"  {split}.parquet not found, skipping")
             continue
 
-        valid = merge_columns(source_subset, target_path, args.columns)
-        logger.info(f"  {split}.parquet: merged {len(args.columns)} columns ({valid} total valid values)")
+        valid_counts = merge_columns(source_subset, target_path, args.columns)
+        total = sum(valid_counts.values())
+        logger.info(
+            f"  {split}.parquet: merged {len(args.columns)} columns "
+            f"({total} total valid values)"
+        )
+
+        # An all-null column is the silent failure this tool invites: the source
+        # is typically computed on ONE split (e.g. test_with_go.parquet), so
+        # merging it into train/val adds columns that are 100% null and would
+        # only surface much later, as a training run with no usable targets.
+        empty = [col for col, n in valid_counts.items() if n == 0]
+        if empty:
+            logger.warning(
+                "  %s.parquet: %s came out entirely null — no (query, target) pair "
+                "in %s matched this split. Run the producer on %s.parquet too, or "
+                "restrict --splits.",
+                split,
+                ", ".join(empty),
+                args.source.name,
+                split,
+            )
 
     logger.info("Done.")
 
