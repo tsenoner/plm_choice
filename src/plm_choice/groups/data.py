@@ -28,6 +28,7 @@ _COHORT = "Cohort assembly"
 _FREEZE = "Frozen manifests"
 _NOVEL = "2024-novel cohort"
 _DIST = "Pairwise distances"
+_LABELS = "Functional & structural labels"
 
 _NOVEL_DIR = "src/data_preparation/2024_new_proteins"
 
@@ -186,4 +187,73 @@ def plddt(ctx: typer.Context) -> None:
 def best_pdbs(ctx: typer.Context) -> None:
     run_repo_script(
         "scripts/get_best_colabfold_pdbs.py", ctx.args, prog="plm data best-pdbs"
+    )
+
+
+# ── Functional & structural labels (mined from feat/ivan-infrastructure) ──────
+# These build the experimental-evidence target columns that replace HFSP as the
+# functional axis; merge-columns is the plumbing that gets them into the splits.
+
+
+@_cmd(
+    "go-similarity",
+    panel=_LABELS,
+    help_="GO semantic similarity (Wang 2007, best-match-average) as a target column.",
+)
+def go_similarity(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.go_semantic_similarity", ctx.args, prog="plm data go-similarity"
+    )
+
+
+@_cmd(
+    "ec-distance",
+    panel=_LABELS,
+    help_="Validate HFSP against curated enzyme classes (e.g. beta-lactamase Ambler classes).",
+)
+def ec_distance(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.brenda_hfsp_validation", ctx.args, prog="plm data ec-distance"
+    )
+
+
+@_cmd(
+    "pdb-tmscore",
+    panel=_LABELS,
+    help_="Experimental-PDB TM-scores via SIFTS + RCSB + TMalign (bounds predicted-structure bias).",
+)
+def pdb_tmscore(ctx: typer.Context) -> None:
+    run_module_main("data_preparation.pdb_tmscore", ctx.args, prog="plm data pdb-tmscore")
+
+
+@_cmd(
+    "ecod-pairs",
+    panel=_LABELS,
+    help_="Filter pairs to ECOD structural groups and plot per-group distance densities.",
+)
+def ecod_pairs(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.ecod_homology_pairs", ctx.args, prog="plm data ecod-pairs"
+    )
+
+
+@_cmd(
+    "organisms",
+    panel=_LABELS,
+    help_="Compare distance distributions across organism groups (organism-bias probe).",
+)
+def organisms(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.organism_landscape", ctx.args, prog="plm data organisms"
+    )
+
+
+@_cmd(
+    "merge-columns",
+    panel=_LABELS,
+    help_="Merge new target columns (GO, TM-score, ...) into the train/val/test splits.",
+)
+def merge_columns(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.merge_parquet_columns", ctx.args, prog="plm data merge-columns"
     )

@@ -121,3 +121,14 @@ def ecdf(ctx: typer.Context) -> None:
 )
 def compare_runs(ctx: typer.Context) -> None:
     run_repo_script("scripts/compare_runs.py", ctx.args, prog="plm figures compare-runs")
+
+
+@_cmd(
+    "retrieval",
+    panel=_SUMMARY,
+    help_="Retrieval panels (AUROC / recall@1FP per level) from the classification table.",
+)
+def retrieval(ctx: typer.Context) -> None:
+    run_module_main(
+        "visualization.create_retrieval_plots", ctx.args, prog="plm figures retrieval"
+    )
