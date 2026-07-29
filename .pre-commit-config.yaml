@@ -1,0 +1,22 @@
+# Run once with:  uv run pre-commit install
+# The point is to catch locally what CI would otherwise catch an hour later.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # Heavy artifacts belong on Zenodo. The repo already carried a 16 MB
+        # binary and 21 MB of poster sources before this was in place.
+        args: ["--maxkb=2000"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format

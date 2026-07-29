@@ -11,7 +11,7 @@ PROJECT_ROOT = (
 )  # Assumes tests/<feature_subdir>/this_file.py
 
 # --- Configurable Path Components ---
-_FEATURE_NAME_PART = "2024_new_proteins"
+_FEATURE_NAME_PART = "novel_2024"
 _SAMPLE_BASENAME = "sample_uniref_10"
 _SCRIPT_TO_TEST_FILENAME = "extract_uniref_to_sqlite.py"
 _SAMPLE_CREATOR_FILENAME = "create_test_sample.py"

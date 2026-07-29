@@ -195,6 +195,8 @@ RUNPY_COMMANDS = [
     ("data", "ecod-pairs", "data_preparation.ecod_homology_pairs"),
     ("data", "organisms", "data_preparation.organism_landscape"),
     ("data", "merge-columns", "data_preparation.merge_parquet_columns"),
+    ("data", "uniref-index", "data_preparation.novel_2024.extract_uniref_to_sqlite"),
+    ("data", "novel-2024", "data_preparation.novel_2024.identify_novel_dissimilar_proteins"),
     ("evaluate", "classification", "evaluation.classification_eval"),
     ("evaluate", "overtraining", "evaluation.overtraining_analysis"),
     ("evaluate", "run", "evaluation.evaluate"),
@@ -226,3 +228,49 @@ def test_bridge_normalises_string_exit_payload(capsys):
     assert _exit_code(3) == 3
     assert _exit_code("boom") == 1
     assert "boom" in capsys.readouterr().err
+
+
+# ── source-checkout-only commands ─────────────────────────────────────────────
+
+SCRIPT_COMMANDS = [
+    ("data", "subset"),
+    ("data", "explore-subset"),
+    ("data", "ec-freeze"),
+    ("data", "plddt"),
+    ("data", "best-pdbs"),
+    ("data", "distance-histogram"),
+    ("embed", "pca"),
+    ("figures", "rank"),
+    ("figures", "quartiles"),
+    ("figures", "compare-runs"),
+    ("figures", "distance-distribution"),
+]
+
+
+@pytest.mark.parametrize("group,command", SCRIPT_COMMANDS)
+def test_script_backed_command_is_registered(group, command):
+    assert command in _command_names(_group(group))
+
+
+def test_the_streaming_all_vs_all_is_reachable_from_the_cli():
+    """The file that carried the silent [:500] cap must not sit outside the CLI.
+
+    A single documented entry point is the argument for having a CLI at all; the
+    module that already caused a truncation incident is exactly the one that has
+    to be inside it.
+    """
+    assert "distance-histogram" in _command_names(_group("data"))
+    assert "distance-distribution" in _command_names(_group("figures"))
+
+
+def test_novel_2024_package_is_importable():
+    """It used to start with a digit and lack __init__.py, so it could only be
+    reached by file path — which broke from an installed wheel."""
+    import importlib.util
+
+    for module in (
+        "data_preparation.novel_2024",
+        "data_preparation.novel_2024.extract_uniref_to_sqlite",
+        "data_preparation.novel_2024.identify_novel_dissimilar_proteins",
+    ):
+        assert importlib.util.find_spec(module) is not None, module

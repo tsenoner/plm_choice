@@ -82,9 +82,11 @@ plm = "plm_choice.cli:app"
 dev = [
     "jupyter>=1.1.1",
     "jupytext>=1.17.1",
+    "pre-commit>=4.6.1",
     "py-spy>=0.4.0",
     "pytest>=8.0.0",
     "python-docx>=1.1.2",
+    "ruff>=0.16.0",
 ]
 
 [tool.pytest.ini_options]
@@ -94,3 +96,20 @@ markers = [
     "slow: long-running statistical coverage simulations (deselect with -m 'not slow')",
     "integration: needs GPU, network, or bulk data that is not in the repo (skipped by default)",
 ]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["tests/_*_head.py"]  # frozen oracle snapshots — do not reformat
+
+[tool.ruff.lint]
+# Deliberately narrow. F401 (unused import) and F841 (unused variable) are the
+# cheap mechanical defence against the orphaned-dead-code pattern that produced
+# 824 LOC of unreferenced legacy modules and a forgotten [:500] debug cap.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+ignore = [
+    "E501",   # line length is handled by the formatter, not the linter
+    "B008",   # typer.Option()/Argument() in a default is the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

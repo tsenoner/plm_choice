@@ -17,9 +17,7 @@ from plm_choice.bridge import (
     PASSTHROUGH_CONTEXT,
     run_argv_main,
     run_module_main,
-    run_path_main,
     run_repo_script,
-    repo_root,
 )
 
 app = typer.Typer(help=__doc__, no_args_is_help=True)
@@ -30,7 +28,6 @@ _NOVEL = "2024-novel cohort"
 _DIST = "Pairwise distances"
 _LABELS = "Functional & structural labels"
 
-_NOVEL_DIR = "src/data_preparation/2024_new_proteins"
 
 
 def _cmd(name: str, *, panel: str, help_: str):
@@ -138,18 +135,16 @@ def all_vs_all(ctx: typer.Context) -> None:
 
 
 # ── 2024-novel cohort ─────────────────────────────────────────────────────────
-# These live in a directory whose name starts with a digit and has no
-# __init__.py, so they are reachable only as file paths, never as modules.
 
 
 @_cmd(
     "uniref-index",
     panel=_NOVEL,
-    help_="Index a UniRef50 XML dump into SQLite (source-checkout only).",
+    help_="Index a UniRef50 XML dump into SQLite.",
 )
 def uniref_index(ctx: typer.Context) -> None:
-    run_path_main(
-        repo_root() / _NOVEL_DIR / "extract_uniref_to_sqlite.py",
+    run_module_main(
+        "data_preparation.novel_2024.extract_uniref_to_sqlite",
         ctx.args,
         prog="plm data uniref-index",
     )
@@ -161,8 +156,8 @@ def uniref_index(ctx: typer.Context) -> None:
     help_="Identify proteins new in 2024 and dissimilar to the earlier release.",
 )
 def novel_2024(ctx: typer.Context) -> None:
-    run_path_main(
-        repo_root() / _NOVEL_DIR / "identify_novel_dissimilar_proteins.py",
+    run_module_main(
+        "data_preparation.novel_2024.identify_novel_dissimilar_proteins",
         ctx.args,
         prog="plm data novel-2024",
     )
@@ -256,4 +251,15 @@ def organisms(ctx: typer.Context) -> None:
 def merge_columns(ctx: typer.Context) -> None:
     run_module_main(
         "data_preparation.merge_parquet_columns", ctx.args, prog="plm data merge-columns"
+    )
+
+
+@_cmd(
+    "distance-histogram",
+    panel=_DIST,
+    help_="Streaming 1-D distance histogram for ONE embedding set (scales to full Swiss-Prot).",
+)
+def distance_histogram(ctx: typer.Context) -> None:
+    run_repo_script(
+        "scripts/all_vs_all.py", ctx.args, prog="plm data distance-histogram"
     )

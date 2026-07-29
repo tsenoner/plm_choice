@@ -55,6 +55,10 @@ SIFTS_URL = "https://ftp.ebi.ac.uk/pub/databases/msd/sifts/flatfiles/tsv/uniprot
 RCSB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.cif.gz"
 
 # Experimental methods we accept
+# NOTE: defined but never applied — no structure-quality filtering happens
+# anywhere in this module (see also the inert --resolution_cutoff). Kept as the
+# intended allowlist for whoever implements the filter; do not describe this
+# pipeline as method- or resolution-filtered until it is wired up.
 EXPERIMENTAL_METHODS = {"X-RAY DIFFRACTION", "NEUTRON DIFFRACTION",
                         "ELECTRON MICROSCOPY", "SOLUTION NMR", "SOLID-STATE NMR"}
 
@@ -245,14 +249,31 @@ def run_tmalign(
         if result.returncode != 0:
             return None
 
-        # Parse TM-score from output
-        # TMalign outputs: "TM-score= 0.xxxxx (if normalized by length of Chain_1)"
-        # We want the score normalized by shorter chain (usually the second line)
-        for line in result.stdout.split("\n"):
-            if "TM-score=" in line and "normalized by length" in line:
-                match = re.search(r"TM-score=\s*([\d.]+)", line)
-                if match:
-                    return float(match.group(1))
+        # Parse TM-score from output.
+        #
+        # TMalign prints one line per normalization:
+        #   TM-score= 0.xxxxx (if normalized by length of Chain_1, ...)
+        #   TM-score= 0.yyyyy (if normalized by length of Chain_2, ...)
+        # Returning on the FIRST match always took the Chain_1 normalization, so
+        # the score depended on which protein happened to be the "query" — the
+        # same pair scored differently when the columns were swapped, and the
+        # docstring's claim of "normalized by shorter chain" was never true.
+        #
+        # Take the minimum, i.e. normalization by the LONGER chain. That is
+        # symmetric under query/target swap and matches the convention used on
+        # the Foldseek side, where the pipeline takes min(qtmscore, ttmscore)
+        # because alntmscore alone is asymmetric. It is the conservative choice:
+        # a partial match of a short domain against a long protein cannot inflate
+        # the score.
+        scores = [
+            float(match.group(1))
+            for line in result.stdout.split("\n")
+            if "TM-score=" in line and "normalized by length" in line
+            for match in [re.search(r"TM-score=\s*([\d.]+)", line)]
+            if match
+        ]
+        if scores:
+            return min(scores)
 
         return None
 

@@ -132,3 +132,16 @@ def retrieval(ctx: typer.Context) -> None:
     run_module_main(
         "visualization.create_retrieval_plots", ctx.args, prog="plm figures retrieval"
     )
+
+
+@_cmd(
+    "distance-distribution",
+    panel=_PAIRWISE,
+    help_="Histogram / density plots from a `plm data distance-histogram` .npz or .json.",
+)
+def distance_distribution(ctx: typer.Context) -> None:
+    run_repo_script(
+        "scripts/plot_distance_distribution.py",
+        ctx.args,
+        prog="plm figures distance-distribution",
+    )

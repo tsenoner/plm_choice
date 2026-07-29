@@ -11,7 +11,7 @@ src/
 │   │   ├── embedding_generation.py    # PLM embedding generation
 │   │   ├── batch_embedding_generation.sh # Batch processing of embeddings
 │   │   └── random_embeddings.py       # Random baseline generation
-│   ├── 2024_new_proteins/        # Novel protein discovery data pipeline
+│   ├── novel_2024/              # Novel protein discovery data pipeline
 │   │   ├── extract_uniref_to_sqlite.py # UniRef database extraction
 │   │   ├── get_uniref50.sh            # Download UniRef50 data
 │   │   └── identify_novel_dissimilar_proteins.py # Novel protein identification

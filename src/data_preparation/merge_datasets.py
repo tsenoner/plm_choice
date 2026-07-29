@@ -92,6 +92,7 @@ class ProteinAnalysisPipeline:
                 self.interm_dir / "foldcomp" / "ids_below_70.txt"
             )
 
+        self._test_mode = False
         self.foldseek_tsv = self.interm_dir / "foldseek" / foldseek_filename
 
         # Output directories - dataset-specific
@@ -123,6 +124,7 @@ class ProteinAnalysisPipeline:
         }
 
     def run(self, test_mode: bool = False, test_size: int = 100_000) -> pl.DataFrame:
+        self._test_mode = test_mode
         """Run the complete analysis pipeline."""
         print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
         print("=" * 70)
@@ -384,23 +386,38 @@ class ProteinAnalysisPipeline:
                 .drop_nulls()
             )
 
-        # Save to file
-        self.foldcomp_low_plddt_ids.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.foldcomp_low_plddt_ids, "w") as f:
+        # Save to file.
+        #
+        # get_file_paths() gives every other artifact a "_test" suffix, but this
+        # path did not have one, so `--test` overwrote the PRODUCTION low-pLDDT
+        # exclusion list with one derived from a 100k random sample. A later run
+        # entering at the foldseek stage would then apply a ~99%-incomplete
+        # exclusion list and silently keep low-confidence structures.
+        target = self.foldcomp_low_plddt_ids
+        if self._test_mode:
+            target = target.with_name(f"{target.stem}_test{target.suffix}")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w") as f:
             for id_val in low_confidence_ids.get_column("parsed_id"):
                 f.write(f"{id_val}\n")
 
-        print(f"💾 Saved {low_confidence_ids.height:,} low confidence IDs")
+        print(f"💾 Saved {low_confidence_ids.height:,} low confidence IDs -> {target}")
 
     def _filter_low_confidence_structures(self, df: pl.DataFrame) -> pl.DataFrame:
         """Remove proteins with low structural confidence."""
-        if not self.foldcomp_low_plddt_ids.exists():
+        source = self.foldcomp_low_plddt_ids
+        if self._test_mode:
+            candidate = source.with_name(f"{source.stem}_test{source.suffix}")
+            if candidate.exists():
+                source = candidate
+        if not source.exists():
             print("⚠️  Low confidence ID file not found, skipping filter")
             return df
 
         # Read low confidence IDs
         low_confidence_ids = set(
-            self.foldcomp_low_plddt_ids.read_text().strip().split("\n")
+            source.read_text().strip().split("\n")
         )
 
         before = df.height
