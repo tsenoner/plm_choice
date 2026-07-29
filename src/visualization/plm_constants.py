@@ -11,6 +11,8 @@ Keys are the lowercase HDF5 file stem of each embedding set.
 
 from __future__ import annotations
 
+from shared.embedding_names import RANDOM_INIT_PREFIX
+
 #: Parameter count per pLM. ``random_1024`` is the untrained floor, hence 0.
 PLM_SIZES: dict[str, int] = {
     "prott5": 1_500_000_000,
@@ -92,8 +94,8 @@ EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
 #: are derived from the twin below rather than restated, so a size fix lands in one place.
 #: Adding a new untrained arm means adding one line here.
 RANDOM_INIT_TWINS: dict[str, str] = {
-    "random_init_esm2_650m": "esm2_650m",
-    "random_init_prot_t5": "prott5",
+    f"{RANDOM_INIT_PREFIX}_esm2_650m": "esm2_650m",
+    f"{RANDOM_INIT_PREFIX}_prot_t5": "prott5",
 }
 
 for _key, _twin in RANDOM_INIT_TWINS.items():

@@ -48,6 +48,7 @@ CACHE_SCHEMA_VERSION = 2
 
 # --- Project Constants & Configuration ---
 # Shared with create_performance_summary_plots.py — see visualization/plm_constants.py.
+from shared.embedding_names import is_iid_random_baseline
 from visualization.plm_constants import (
     EMBEDDING_COLOR_MAP,
     EMBEDDING_DISPLAY_NAMES,
@@ -139,14 +140,12 @@ class EmbeddingComparisonVisualizer:
         # plm_constants.py gives them their own "Untrained" family and colour.
         # A bare `startswith("random")` swallowed them, so the arm this branch
         # exists to add would have been absent from every pairwise figure while
-        # the log claimed it was "excluded by design".
-        def _is_iid_random_baseline(name: str) -> bool:
-            return name.startswith("random") and not name.startswith("random_init")
-
+        # the log claimed it was "excluded by design". The predicate is shared with
+        # the all-vs-all cache builder, which had the identical trap.
         dist_cols = [
             col
             for col in all_dist_cols
-            if not _is_iid_random_baseline(col.replace("dist_", "").lower())
+            if not is_iid_random_baseline(col.replace("dist_", ""))
             and not col.replace("dist_", "").lower()
             == "prostt5"  # TEMPORARY: Remove this line to re-include prostt5
         ]
