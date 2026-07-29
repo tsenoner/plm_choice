@@ -297,7 +297,15 @@ def _add_trendlines(
         # Exclude esm2_3b from FNN trendline
         if model_type == "fnn":
             valid_group = valid_group[valid_group["Embedding Key"] != "esm2_3b"]
-            log.debug(f"Excluding esm2_3b from {model_type} trendline")
+            # Loud on purpose: the ESM2-3B embeddings were ~80% complete, so it
+            # is dropped from the trendline. This must be either removed once
+            # they finish or disclosed in the manuscript (plan item E3) — a
+            # debug-level message let it go unnoticed for months.
+            log.warning(
+                "EXCLUDED esm2_3b from the %s trendline (incomplete embeddings) "
+                "— disclose this or finish the embeddings before publishing",
+                model_type,
+            )
 
         if len(valid_group) < 2:
             log.debug(f"Skipping trendline for {model_type}: insufficient data points")

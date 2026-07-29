@@ -136,6 +136,16 @@ class EmbeddingComparisonVisualizer:
             == "prostt5"  # TEMPORARY: Remove this line to re-include prostt5
         ]
 
+        dropped = sorted(set(all_dist_cols) - set(dist_cols))
+        if dropped:
+            logger.warning(
+                "EXCLUDED %d embedding column(s) from every pairwise figure: %s "
+                "(random baselines are excluded by design; prostt5 is a TEMPORARY "
+                "exclusion — see the Data availability note in the README)",
+                len(dropped),
+                ", ".join(c.replace("dist_", "") for c in dropped),
+            )
+
         # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
         def get_sort_key(col: str) -> tuple:
             embedding_name = col.replace("dist_", "").lower()
@@ -1576,10 +1586,30 @@ class EmbeddingComparisonVisualizer:
     def create_violin_plot_comparison(
         self, sample_size: int = 10_000, save_path: Optional[Path] = None
     ) -> Tuple[plt.Figure, np.ndarray]:
-        """Create violin plots comparing PLM distance differences."""
+        """Create violin plots comparing PLM distance differences.
+
+        ``sample_size`` subsamples the pair table because the violins are drawn
+        from every row. Pass ``None`` to use all pairs.
+
+        Two things used to be wrong here and are worth keeping fixed: the
+        subsample was taken with ``.head()``, which returns the FIRST n rows of
+        a table that is not in random order (so the violins described whichever
+        proteins sorted first, not the cohort), and nothing was logged, so a
+        plot built from 10,000 of 113,186,256 pairs was indistinguishable from
+        one built from all of them.
+        """
         logger.info("Creating violin plot comparison...")
 
-        df_sample = self.df.head(sample_size) if len(self.df) > sample_size else self.df
+        if sample_size is not None and len(self.df) > sample_size:
+            logger.warning(
+                "violin plots use a random subsample of %s of %s pairs "
+                "(seed=0). Pass sample_size=None to use every pair.",
+                f"{sample_size:,}",
+                f"{len(self.df):,}",
+            )
+            df_sample = self.df.sample(n=sample_size, seed=0)
+        else:
+            df_sample = self.df
 
         # Normalize data
         # Build normalized data using with_columns
