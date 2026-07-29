@@ -18,7 +18,8 @@ Two issues being fixed here:
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import pearsonr
+import pytest
+from scipy.stats import pearsonr, spearmanr
 
 from evaluation.metrics import _bootstrap_stat, calculate_regression_metrics
 
@@ -82,3 +83,55 @@ def test_r2_ci_near_zero_lower_bound_is_zero():
     assert m["Pearson_r2"] < 0.05
     assert m["Pearson_r2_95_CI_lower"] == 0.0
     assert 0.0 < m["Pearson_r2_95_CI_upper"] <= 1.0
+
+
+# ── Parallel/sequential fallback (from feat/ivan-infrastructure) ──────────────
+# main fixed the reproducibility of the two paths but never tested that the
+# fallback itself engages. If Pool raises — no fork on a locked-down runner, a
+# pickling failure — the except branch must still produce a valid CI rather than
+# leaving the sentinel at None and silently emitting NaNs.
+
+
+def test_parallel_failure_falls_back_to_sequential():
+    from unittest.mock import patch
+
+    rng = np.random.default_rng(42)
+    targets = rng.normal(0, 1, 200)
+    predictions = targets + rng.normal(0, 0.3, 200)
+
+    with patch("evaluation.metrics.Pool", side_effect=OSError("no fork")):
+        result = _bootstrap_stat(
+            targets=targets,
+            predictions=predictions,
+            n_bootstrap=120,
+            confidence_level=0.95,
+            stat_func=spearmanr,
+            stat_name="Spearman",
+            use_parallel=True,
+            seed=42,
+        )
+
+    assert not np.isnan(result["Spearman_SE"])
+    assert result["Spearman_95_CI_lower"] < result["Spearman_95_CI_upper"]
+
+
+def test_fallback_result_matches_the_sequential_path_exactly():
+    """The fallback must not change the numbers, only the execution path."""
+    from unittest.mock import patch
+
+    rng = np.random.default_rng(7)
+    targets = rng.normal(0, 1, 150)
+    predictions = targets + rng.normal(0, 0.4, 150)
+    common = dict(
+        n_bootstrap=120,
+        confidence_level=0.95,
+        stat_func=spearmanr,
+        stat_name="Spearman",
+        seed=11,
+    )
+
+    with patch("evaluation.metrics.Pool", side_effect=OSError("no fork")):
+        fell_back = _bootstrap_stat(targets, predictions, use_parallel=True, **common)
+    sequential = _bootstrap_stat(targets, predictions, use_parallel=False, **common)
+
+    assert fell_back == pytest.approx(sequential, nan_ok=True)
