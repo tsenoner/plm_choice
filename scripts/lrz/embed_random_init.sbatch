@@ -103,6 +103,14 @@ echo "host=$(hostname) task=$TASK model=$MODEL seed=$SEED"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 cd "$HOME/plm_choice"
+
+# uv lives in ~/.local/bin, which is added by the login-shell profile. A batch
+# job is NOT a login shell, so `uv` resolves only if the submitting environment
+# happened to export it (Slurm's default --export=ALL). Relying on that means
+# the job dies with "uv: command not found" when submitted from anywhere else.
+export PATH="$HOME/.local/bin:$PATH"
+command -v uv >/dev/null || { echo "ERROR: uv not found on PATH ($PATH)" >&2; exit 3; }
+
 uv sync --locked
 
 # Explicit per-seed output path. The default would also carry the seed now, but
