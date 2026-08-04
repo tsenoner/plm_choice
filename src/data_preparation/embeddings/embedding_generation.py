@@ -298,9 +298,16 @@ def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
                 with torch.no_grad():
                     submodule.weight[submodule.padding_idx].fill_(0.0)
         elif isinstance(submodule, torch.nn.LayerNorm):
-            torch.nn.init.ones_(submodule.weight)
-            torch.nn.init.zeros_(submodule.bias)
-            handled.update((id(submodule.weight), id(submodule.bias)))
+            # Neither tensor is guaranteed to exist: ESM-3 and ESM-C build their
+            # LayerNorms with bias=False, and elementwise_affine=False drops the
+            # weight as well. Unguarded, zeros_(None) raises and takes out three
+            # of the top four arms on fident and hfsp.
+            if submodule.weight is not None:
+                torch.nn.init.ones_(submodule.weight)
+                handled.add(id(submodule.weight))
+            if submodule.bias is not None:
+                torch.nn.init.zeros_(submodule.bias)
+                handled.add(id(submodule.bias))
 
     untouched = [name for name, p in module.named_parameters() if id(p) not in handled]
     if untouched:
@@ -313,6 +320,71 @@ def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
             f"   This baseline is only an untrained architecture if that list is empty. "
             f"Extend _reinit_weights before reporting numbers from this model."
         )
+
+
+def default_output_path(
+    fasta_file: Path,
+    model_key: str,
+    random_init: bool,
+    random_seed: int,
+) -> Path:
+    """Where embeddings go when ``--output_hdf5_file`` is not given.
+
+    The seed is part of the random-init filename because D-6 reports the
+    untrained arm as mean±sd over seeds 0/1/2. Without it all three seeds resolve
+    to one path, the append-mode writer skips every already-present protein, and
+    the run exits 0 having produced a single seed's vectors — published as
+    ``sd = 0.000``.
+    """
+    sanitized = model_key.replace("/", "_")
+    if random_init:
+        return fasta_file.with_name(f"random_init_{sanitized}_seed{random_seed}.h5")
+    return fasta_file.with_name(f"{fasta_file.stem}_{sanitized}.h5")
+
+
+def masked_mean_pool(
+    hidden_states: "torch.Tensor", attention_mask: "torch.Tensor"
+) -> "torch.Tensor":
+    """Mean-pool ``(B, L, D)`` hidden states over real tokens only.
+
+    Batching is the 25-75x lever on this workload, but a plain ``.mean(dim=1)``
+    over a padded batch averages the padding in too, and the error grows the
+    shorter a protein is relative to the longest member of its batch. That is a
+    silent corruption: the vectors still look plausible.
+    """
+    if attention_mask.shape != hidden_states.shape[:2]:
+        raise ValueError(
+            f"attention_mask {tuple(attention_mask.shape)} does not match "
+            f"hidden_states {tuple(hidden_states.shape[:2])}"
+        )
+    mask = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
+    token_counts = mask.sum(dim=1)
+    if bool((token_counts == 0).any()):
+        raise ValueError(
+            "at least one sequence has no unmasked tokens; pooling it would "
+            "divide by zero and write NaNs into the HDF5"
+        )
+    return (hidden_states * mask).sum(dim=1) / token_counts
+
+
+def should_apply_post_load_hook(
+    post_load_hook: Optional[Callable[[Any], None]], random_init: bool
+) -> bool:
+    """Whether to run a model's post-load hook (for ProtT5/ProstT5, ``.half()``).
+
+    This deliberately reverses an earlier choice to skip the hook under
+    ``--random_init`` "to avoid masking initialization effects with quantization
+    noise". That reasoning is defensible in isolation, but the baseline's whole
+    claim is ``pretrained - random_init``, and that subtraction is only a
+    statement about *weights* if every other axis is pinned. Leaving the hook off
+    makes the untrained ProtT5/ProstT5 compute in fp32 while their pretrained
+    twins computed in fp16, and that gap lands in the headline number looking
+    exactly like a pretraining effect.
+
+    If the precision question is worth asking, it deserves its own arm rather
+    than a confound inside this one.
+    """
+    return post_load_hook is not None
 
 
 def load_model_and_tokenizer(
@@ -429,9 +501,9 @@ def load_model_and_tokenizer(
         if model is None:
             raise RuntimeError(f"Failed to load model for {model_key}")
 
-        # Skip post_load_hook (e.g. .half()) for random init — keep full precision
-        # to avoid masking initialization effects with quantization noise
-        if post_load_hook and not random_init:
+        # Applied for random init too, so the untrained arm computes at the same
+        # precision as its pretrained twin — see should_apply_post_load_hook.
+        if should_apply_post_load_hook(post_load_hook, random_init):
             post_load_hook(model)
 
         model.to(device).eval()
@@ -587,14 +659,23 @@ def process_sequences_and_save(
     h5_output_path: Path,
     max_seq_len: Optional[int],
     model_key_for_filename: str,  # Used for logging and progress bar description
+    random_init: bool = False,
 ):
     """
     Processes sequences, generates embeddings, and saves them to an HDF5 file.
     Embeddings are saved as top-level datasets in the HDF5 file.
+
+    Append mode lets a long pretrained run resume, which is worth keeping. But
+    the "already exists" branch below counts a skip as a success, so under
+    ``--random_init`` appending is how a second seed silently produces a file
+    holding only the first seed's vectors and still exits 0. Random-init runs
+    therefore open exclusively and fail loudly on collision.
     """
     num_successfully_embedded = 0
 
-    with h5py.File(h5_output_path, "a") as h5_file:  # Open in append mode
+    # "w-" raises FileExistsError rather than resuming into another seed's file.
+    open_mode = "w-" if random_init else "a"
+    with h5py.File(h5_output_path, open_mode) as h5_file:
         progress_bar = tqdm(
             sequences_to_process,
             unit="seq",
@@ -721,7 +802,10 @@ def main():
         action="store_true",
         help="Use randomly initialized (non-pretrained) model weights. "
         "Produces contextual embeddings shaped by architecture alone, "
-        "without any learned biology. Output files are named random_init_<model>.h5. "
+        "without any learned biology. Output files are named "
+        "random_init_<model>_seed<N>.h5 — the seed is part of the name because D-6 "
+        "reports this arm as mean±sd over seeds 0/1/2, and a shared filename would "
+        "make runs 2 and 3 skip every protein and exit 0. "
         "See also random_embeddings.py for simpler i.i.d. random vectors.",
     )
     parser.add_argument(
@@ -745,21 +829,17 @@ def main():
         )
         sys.exit(1)
 
-    sanitized_model_key = args.model_key.replace("/", "_")
-
     # --- Ivan infrastructure (2026-03-19): random init output naming ---
-    # random_init embeddings go to random_init_<model>.h5 to clearly
-    # distinguish from pretrained <model>.h5 and i.i.d. random_<dim>.h5
-    output_h5_path: Path
+    # random_init embeddings go to random_init_<model>_seed<N>.h5 to distinguish
+    # them from pretrained <model>.h5, from i.i.d. random_<dim>.h5, and — the
+    # part that matters for D-6's mean±sd — from each other.
     if args.output_hdf5_file is None:
-        if args.random_init:
-            output_h5_path = args.fasta_file.with_name(
-                f"random_init_{sanitized_model_key}.h5"
-            )
-        else:
-            output_h5_path = args.fasta_file.with_name(
-                f"{args.fasta_file.stem}_{sanitized_model_key}.h5"
-            )
+        output_h5_path = default_output_path(
+            args.fasta_file,
+            args.model_key,
+            random_init=args.random_init,
+            random_seed=args.random_seed,
+        )
     else:
         output_h5_path = args.output_hdf5_file
 
@@ -816,6 +896,7 @@ def main():
         h5_output_path=output_h5_path,
         max_seq_len=max_len_to_use,
         model_key_for_filename=args.model_key,
+        random_init=args.random_init,
     )
 
     print("\n--- Embedding Generation Complete ---")
