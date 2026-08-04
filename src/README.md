@@ -15,41 +15,79 @@ src/
 │   │   ├── extract_uniref_to_sqlite.py # UniRef database extraction
 │   │   ├── get_uniref50.sh            # Download UniRef50 data
 │   │   └── identify_novel_dissimilar_proteins.py # Novel protein identification
-│   ├── preprocessing.py           # Data cleaning and filtering
 │   ├── distance_computation.py   # Compute embedding distances
+│   ├── all_vs_all_distance_computation.py # All-vs-all distances + viz caches
+│   ├── merge_datasets.py         # Combine MMseqs/Foldseek similarity data
+│   ├── merge_parquet_columns.py  # Merge new target columns into the splits
+│   ├── go_semantic_similarity.py # GO Wang similarity (C1)
+│   ├── brenda_hfsp_validation.py # HFSP vs curated enzyme classes (C1)
+│   ├── pdb_tmscore.py            # SIFTS → RCSB → TMalign experimental TM-scores
+│   ├── ecod_homology_pairs.py    # Per-ECOD-group distance densities (C2)
+│   ├── organism_landscape.py     # Distance distributions by organism group
 │   ├── run_mmseqs_all_vs_all.sh  # Sequence similarity search
-│   ├── run_foldseek_all_vs_all.sh # Structure similarity search
-│   ├── merge_mmseqs_foldseek_datasets.py # Combine similarity data
-│   ├── get_best_pdbs.py          # Extract best ColabFold predictions
-│   └── README.md                 # Data pipeline documentation
+│   └── run_foldseek_all_vs_all.sh # Structure similarity search
 │
 ├── training/                      # Model training and experiments
 │   ├── run_experiments.py        # 🎯 MAIN ORCHESTRATOR SCRIPT
 │   ├── train.py                  # Individual model training
-│   ├── models.py                 # Predictor model definitions
-│   └── predict.py                # Inference module (future)
+│   └── models.py                 # Predictor model definitions
 │
 ├── evaluation/                    # Model evaluation and metrics
 │   ├── evaluate.py               # Single model evaluation
 │   ├── evaluate_multiple.py     # Batch evaluation of multiple runs
-│   └── metrics.py               # Regression metrics calculation
+│   ├── metrics.py               # Regression metrics calculation
+│   ├── stats.py                 # Shared statistics (effect sizes, CIs, tests)
+│   ├── recall_fp.py             # ⭐ CANONICAL recall-at-first-FP (+ barrier spec)
+│   ├── retrieval_metrics.py     # Flat-vector retrieval metrics — NOT canonical
+│   ├── classification_eval.py   # AUROC + recall@1FP per hierarchy level
+│   └── overtraining_analysis.py # Probe-capacity diagnostics
 │
 ├── visualization/                 # All plotting and analysis
+│   ├── plm_constants.py         # ⭐ Shared pLM sizes, families, colours, labels
 │   ├── create_performance_summary_plots.py # Performance summary plots
 │   ├── create_evaluation_grid_plots.py # Evaluation grid layouts
 │   ├── create_embedding_comparison_plots.py # Embedding comparison wrapper
+│   ├── create_retrieval_plots.py # Retrieval/classification panels
 │   ├── pairwise_embedding_comparison.py # Core embedding analysis
+│   ├── plot_ecdf.py             # ECDF panels
 │   ├── plot_utils.py            # Core plotting utilities
-│   ├── legacy_*.py              # Deprecated visualization scripts
 │   └── README_pairwise_comparison.md # Pairwise analysis documentation
 │
-└── shared/                       # Shared utilities and components
+└── shared/                       # Shared utilities — the layer both
+    │                             # data_preparation and visualization may import
     ├── datasets.py              # Data loading utilities
     ├── helpers.py               # Common helper functions
-    └── configs/                 # Configuration management
+    ├── experiment_manager.py    # Run directory / experiment bookkeeping
+    ├── atomic_io.py             # Atomic writes + completeness-guarded skip
+    ├── hierarchies.py           # ECOD/SCOP level names shared by producer + figures
+    └── embedding_names.py       # i.i.d. random floor vs untrained architecture
 ```
 
+> **Layering note.** `shared/` exists so that a constant needed by both a producer and a
+> figure has one home: `visualization/` is *not* importable from `data_preparation/`.
+> When the same table or predicate is needed on both sides, it belongs in `shared/`.
+
 ## Quick Start
+
+### 0. The `plm` CLI — the preferred entry point
+
+`pyproject.toml` registers a console script, so every module below is reachable by name
+rather than by file path. Path-addressed invocations rot when a module moves; the CLI is
+covered by `tests/test_cli.py`, so a rename that breaks it fails the suite.
+
+```bash
+uv run plm --help                 # all command groups
+uv run plm data --help            # data_preparation entry points
+uv run plm evaluate --help        # evaluation entry points
+uv run plm figures --help         # visualization entry points
+
+uv run plm data go-similarity --help
+uv run plm evaluate classification --help
+uv run plm figures retrieval --help
+```
+
+The `uv run python src/...` forms below still work and are what
+`scripts/run_ivan_pipeline.sh` currently uses.
 
 ### 1. Main Experimental Workflow
 
@@ -174,7 +212,10 @@ The repository uses proper Python packaging configuration in `pyproject.toml`:
 
 - Build system: `hatchling`
 - Package source: `src/` directory
-- All imports use the `src.*` namespace
+- Modules are imported by their **top-level package name** — `evaluation.*`, `training.*`,
+  `shared.*`, `visualization.*`, `data_preparation.*`. There is **no `src.*` namespace**:
+  `pyproject.toml` maps each `src/<pkg>` into the wheel at top level, and `pythonpath`
+  gives pytest the same view. `from src.evaluation...` will fail outside pytest.
 - No manual path manipulation required
 
 For more details on specific components, see the README files in each subdirectory.

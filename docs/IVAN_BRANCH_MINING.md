@@ -94,11 +94,58 @@ Not interchangeable without rewriting one of them, which is a statistics decisio
 **Reconcile before any number from `retrieval_metrics` is reported** — most likely by
 adding a flat-vector entry point to `recall_fp` and deleting this module.
 
+## After the mining — three follow-up commits
+
+The mined code was reviewed twice more before the PR merged. Both passes are on the
+branch as separate commits, deliberately: the first is behaviour-preserving, the second
+is not.
+
+| Commit | Pass | Effect |
+| --- | --- | --- |
+| `d3900d4` | `/simplify` (quality only) | −150 LOC net. `create_retrieval_plots.py` carried 52 lines byte-identical to `plm_constants.py`; two Python row-loops over 10⁸-row tables became polars hash joins (differential-tested mask-for-mask against the loops they replace); Cohen's d was hand-rolled twice under different conventions and is now `evaluation.stats.cohens_d`. New `shared/hierarchies.py` holds the ECOD level vocabulary the producer and the figures had been spelling differently (`t_group` vs `T_group`). |
+| `6eeaa63` | `/code-review` (correctness) | **15 defects, all pre-existing in the mined code.** |
+| `1d5ab6a` | follow-up | The duplicate `startswith("random")` filter in the all-vs-all cache builder, which silently dropped the R1.9 untrained arm. Predicate now shared via `shared/embedding_names.py`. |
+
+### The three that matter most
+
+- **`parse_obo` returned 1 term, not ~47,000.** It started a new `GOTerm` on every
+  `[Term]` line without storing the previous one, so only the last block before a
+  `[Typedef]` or EOF survived. Every annotation then failed the membership check and
+  **every pair scored NaN** — the C1 GO arm would have produced an all-null
+  `go_wang_*` column while logging a cheerful "Parsed 1 GO terms". Any
+  `test_with_go.parquet` produced before `6eeaa63` is worthless; discard and recompute.
+- **`np.RankWarning` was removed in NumPy 2** (this project pins 2.2.1), so every
+  `_linear_slope` call raised `AttributeError` and `overtraining_analysis` could not run
+  at all.
+- **`_reinit_weights` only reset Linear/Embedding/LayerNorm**, so ESM3/ESMC custom
+  blocks kept their pretrained weights — an "untrained architecture" baseline that is
+  silently partly trained. It now reports any parameter left at a pretrained value.
+
+Also fixed: `classification_eval` used a relative import despite being driven as a
+script; pipeline step 3 aborted the run on a module that does not exist;
+`download_reference_data.sh` died on *successful* completion (`grep` for the final Link
+header exits 1 under `pipefail`); delta mode overwrote the canonical metrics CSV it
+consumes and plotted `|Δρ|` on a signed axis; `merge_columns` wrote non-atomically over
+the canonical splits.
+
+### Still open after these passes
+
+- **The retrieval-metrics reconciliation below is unchanged.** It is now *guarded*, not
+  resolved: `classification_eval` stamps a `recall_metric_source` column into every
+  output row, pinned by `tests/test_classification_eval_provenance.py`, so a
+  non-canonical recall@1FP cannot reach a figure without its provenance attached.
+- **GO / EC / TM-score columns are all-null in `train.parquet` and `val.parquet`** —
+  the producers only ever ran on `test.parquet`. `merge_columns` now warns by name
+  instead of failing silently. Tracked as **E8** in the resubmission plan, sequenced
+  *after* E1 (which regenerates the splits). `ec_dist_*` has no producer at all.
+
 ## Caveats
 
 - ~5,400 LOC of **previously unreviewed** code. It imports, the suite is green
-  (1,141 passed), and everything is reachable from the CLI — but only `retrieval_metrics`
-  and the random-init scheme have tests, and none of it has been run against real data.
+  (1,157 passed after the follow-up commits, up from 1,141), and everything is reachable
+  from the CLI — but coverage is still thin and **none of it has been run against real
+  data**. The GO parser bug above is exactly the class of defect that survives an import
+  check and a green suite.
 - Several modules need reference data not in the repo (CAFA annotations, ECOD, SIFTS, a
   TMalign binary). `scripts/download_reference_data.sh` is the intended fetcher — read it
   before running it.

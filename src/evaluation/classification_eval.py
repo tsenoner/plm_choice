@@ -28,8 +28,9 @@ Created: 2026-03-19 (Ivan infrastructure for pLM Choice revision)
 #
 # Changes (2026-03-20):
 # - Removed local copies of recall_at_first_fp() and auroc_at_level().
-#   These were duplicated from retrieval_metrics.py; now imported from
-#   the single canonical source to prevent implementation drift.
+#   These were duplicated from retrieval_metrics.py; now imported from one
+#   source to prevent implementation drift *within this module*. See the
+#   provenance warning below on which implementation is canonical overall.
 # - Vectorized build_same_level_labels() using polars joins instead of
 #   a Python for-loop. Identical results, but O(n) hash join instead of
 #   O(n) dict lookups with Python overhead per row.
@@ -43,8 +44,28 @@ from typing import Dict, List
 import numpy as np
 import polars as pl
 
-# Reuse the canonical implementations from retrieval_metrics.py to avoid
-# duplicated code that could silently diverge during maintenance.
+# ⚠ PROVENANCE — retrieval_metrics is NOT the canonical recall@1FP.
+#
+# Two implementations of recall-at-first-FP live in this package and they do NOT
+# share tie-handling semantics:
+#
+#   evaluation/recall_fp.py       — canonical for anything reaching the manuscript.
+#                                   Per-query ranking over an embedding matrix, the
+#                                   adversarial strict tie-walk of Lin et al. 2023,
+#                                   locked edge cases, a test suite and a barrier spec.
+#   evaluation/retrieval_metrics  — takes an already-ranked flat (distances, labels)
+#                                   vector, which is the shape this module needs and
+#                                   which recall_fp does not expose. Ties resolve by
+#                                   array position.
+#
+# This module therefore emits the NON-canonical variant, and there is a live path
+# from here to a figure (results parquet -> visualization/create_retrieval_plots.py).
+# Every row written by evaluate_at_hierarchy_levels() carries a
+# ``recall_metric_source`` column naming the implementation, so a number can never
+# reach a figure without its provenance attached. Reconcile the two — most likely by
+# adding a flat-vector entry point to recall_fp and deleting retrieval_metrics —
+# BEFORE quoting recall@1FP from this path in the paper.
+# See docs/IVAN_BRANCH_MINING.md, "Reconciliation note — retrieval metrics".
 #
 # Absolute, not relative: this module is documented — and driven by
 # scripts/run_ivan_pipeline.sh — as ``python src/evaluation/classification_eval.py``.
@@ -52,6 +73,10 @@ import polars as pl
 # "attempted relative import with no known parent package" before argparse was
 # ever reached. Every sibling module in src/ imports this way.
 from evaluation.retrieval_metrics import auroc_at_level, recall_at_first_fp
+
+#: Stamped into every output row so the tie-handling variant behind
+#: ``recall_at_first_fp`` is recoverable from the artifact alone.
+RECALL_METRIC_SOURCE = "evaluation.retrieval_metrics (flat-vector; NOT recall_fp)"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -170,6 +195,9 @@ def evaluate_at_hierarchy_levels(
                 "n_positive_pairs": int(valid_labels.sum()),
                 "n_negative_pairs": int((~valid_labels).sum()),
                 "n_valid_pairs": int(valid_mask.sum()),
+                # Travels with the artifact: which recall@1FP variant produced this
+                # row. See the provenance warning at the top of this module.
+                "recall_metric_source": RECALL_METRIC_SOURCE,
             })
 
     if not results:
