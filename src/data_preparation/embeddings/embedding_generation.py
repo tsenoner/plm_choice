@@ -367,6 +367,96 @@ def masked_mean_pool(
     return (hidden_states * mask).sum(dim=1) / token_counts
 
 
+def content_mask(
+    attention_mask: "torch.Tensor", n_lead: int, n_trail: int
+) -> "torch.Tensor":
+    """Mask selecting real residues only: no padding, no special tokens.
+
+    The unbatched path strips special tokens by slicing ``[1:-1]`` or ``[:-1]``,
+    which is correct only because the batch holds one sequence. Under
+    right-padding a short sequence's trailing ``</s>`` sits in the middle of its
+    row, so ``[:-1]`` would strip a pad token and keep the special token —
+    quietly averaging a learned end-of-sequence vector into the protein.
+
+    Both counts are per-family: ESM and ProstT5 drop one leading and one
+    trailing token, ProtT5 and Ankh drop only the trailing one.
+    """
+    if n_lead < 0 or n_trail < 0:
+        raise ValueError(f"n_lead/n_trail must be >= 0, got {n_lead}/{n_trail}")
+
+    lengths = attention_mask.sum(dim=1)
+    if bool((lengths <= n_lead + n_trail).any()):
+        raise ValueError(
+            f"at least one sequence has {int(lengths.min())} token(s), which is not "
+            f"more than the {n_lead + n_trail} special token(s) being stripped; "
+            "pooling it would average nothing"
+        )
+
+    positions = torch.arange(attention_mask.shape[1], device=attention_mask.device)
+    positions = positions.unsqueeze(0)  # (1, L)
+    keep = (positions >= n_lead) & (positions < (lengths.unsqueeze(1) - n_trail))
+    return (keep & attention_mask.bool()).to(attention_mask.dtype)
+
+
+def length_buckets(
+    sequences: List[str],
+    token_budget: int,
+    min_efficiency: float = 0.6,
+    slack: int = 16,
+) -> List[List[int]]:
+    """Group sequence indices into batches of similar length.
+
+    Two separate constraints, because the token budget alone does not express
+    what we actually want:
+
+    * ``token_budget`` bounds ``len(batch) * longest_in_batch`` so a batch fits
+      in GPU memory;
+    * ``min_efficiency`` bounds the share of that rectangle which is real
+      residues. A generous budget will otherwise happily put a 10-residue
+      protein in the same batch as a 500-residue one — legal, and 73% of the
+      compute spent on padding.
+
+    ``slack`` exempts batches whose length spread is only a few tokens, so short
+    proteins do not fragment into batches of one over a couple of residues.
+
+    Returns indices into ``sequences``, every index exactly once, so the caller
+    can restore the original order.
+    """
+    if token_budget < 1:
+        raise ValueError(f"token_budget must be >= 1, got {token_budget}")
+    if not 0.0 < min_efficiency <= 1.0:
+        raise ValueError(f"min_efficiency must be in (0, 1], got {min_efficiency}")
+
+    order = sorted(range(len(sequences)), key=lambda i: len(sequences[i]))
+    batches: List[List[int]] = []
+    current: List[int] = []
+    current_real = 0
+
+    for idx in order:
+        n = len(sequences[idx])
+        if not current:
+            current, current_real = [idx], n
+            continue
+
+        longest = max(len(sequences[i]) for i in current + [idx])
+        slots = (len(current) + 1) * longest
+        efficiency = (current_real + n) / slots
+        spread = longest - min(len(sequences[i]) for i in current + [idx])
+
+        over_budget = slots > token_budget
+        too_ragged = efficiency < min_efficiency and spread > slack
+        if over_budget or too_ragged:
+            batches.append(current)
+            current, current_real = [idx], n
+        else:
+            current.append(idx)
+            current_real += n
+
+    if current:
+        batches.append(current)
+    return batches
+
+
 def should_apply_post_load_hook(
     post_load_hook: Optional[Callable[[Any], None]], random_init: bool
 ) -> bool:
