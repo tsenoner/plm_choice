@@ -54,6 +54,23 @@ from esm.sdk.api import ESMProtein, SamplingConfig, LogitsConfig
 ModelConfig = Dict[str, Any]
 
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
+    # --- ESM-1b via HuggingFace Transformers ---
+    # Added so the random-init baseline has an untrained twin for the esm1b arm
+    # (Track B4). Without it the baseline covered 12 of the paper's 16 arms.
+    #
+    # ESM-1b is NOT an ESM-2 with different weights. It uses *absolute* learned
+    # position embeddings capped at max_position_embeddings=1026 (1024 residues
+    # plus <cls>/<eos>), where every ESM-2 here uses rotary and has no such
+    # ceiling. Sequences past that limit produce an index error rather than a
+    # degraded embedding, so runs covering this model need --max_seq_len 1024.
+    "esm1b": {
+        "hf_id": "facebook/esm1b_t33_650M_UR50S",
+        "loader": "transformers",
+        "model_class": EsmModel,
+        "tokenizer_class": AutoTokenizer,
+        "family_key": "esm_transformer",
+        "max_positions": 1024,
+    },
     # --- ESM models via HuggingFace Transformers ---
     "esm2_8m": {
         "hf_id": "facebook/esm2_t6_8M_UR50D",
@@ -365,6 +382,27 @@ def masked_mean_pool(
             "divide by zero and write NaNs into the HDF5"
         )
     return (hidden_states * mask).sum(dim=1) / token_counts
+
+
+def effective_max_seq_len(
+    config: ModelConfig, requested: Optional[int]
+) -> Optional[int]:
+    """Reconcile ``--max_seq_len`` with the architecture's own ceiling.
+
+    ESM-1b uses absolute learned position embeddings capped at 1026 tokens; the
+    ESM-2 models here are rotary and have no equivalent limit. Exceeding the cap
+    raises an index error inside the forward pass, so a run that forgot the flag
+    would die partway through a 480k-protein cohort rather than at the start.
+
+    The caller may ask for less than the architecture allows; asking for more is
+    clamped rather than honoured.
+    """
+    ceiling = config.get("max_positions")
+    if ceiling is None:
+        return requested
+    if requested is None:
+        return int(ceiling)
+    return min(int(requested), int(ceiling))
 
 
 def content_mask(
@@ -1143,7 +1181,15 @@ def main():
 
     # Removed NATIVE_ESM_AVAILABLE check for model config here
 
-    max_len_to_use = args.max_seq_len
+    # Clamp to the architecture's own ceiling (ESM-1b: absolute positions, 1026)
+    # so a forgotten --max_seq_len fails at the flag rather than mid-cohort.
+    max_len_to_use = effective_max_seq_len(model_config, args.max_seq_len)
+    if max_len_to_use != args.max_seq_len:
+        print(
+            f"ℹ️ max sequence length set to {max_len_to_use} by "
+            f"'{args.model_key}' architecture limit "
+            f"(requested: {args.max_seq_len})"
+        )
     if max_len_to_use is not None:
         print(f"ℹ️ Using max sequence length: {max_len_to_use}")
     else:

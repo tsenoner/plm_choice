@@ -61,6 +61,58 @@ def test_no_hook_means_nothing_to_apply():
 
 
 # --------------------------------------------------------------------------- #
+#                  esm1b needs an untrained twin like the rest
+# --------------------------------------------------------------------------- #
+
+
+def test_esm1b_is_configured():
+    """Without this entry the random-init baseline covers 12 of 16 paper arms."""
+    from data_preparation.embeddings.embedding_generation import MODEL_CONFIGS
+
+    assert "esm1b" in MODEL_CONFIGS
+    cfg = MODEL_CONFIGS["esm1b"]
+    assert cfg["hf_id"] == "facebook/esm1b_t33_650M_UR50S"
+    assert cfg["family_key"] == "esm_transformer"
+    assert cfg["loader"] == "transformers"
+
+
+def test_esm1b_declares_its_position_limit():
+    """ESM-1b uses absolute position embeddings capped at 1026 (1024 + cls/eos).
+
+    Every ESM-2 in this file is rotary and has no such ceiling, so the limit is
+    easy to forget — and exceeding it raises an index error deep in the forward
+    pass rather than degrading gracefully.
+    """
+    from data_preparation.embeddings.embedding_generation import MODEL_CONFIGS
+
+    assert MODEL_CONFIGS["esm1b"]["max_positions"] == 1024
+    # The rotary ESM-2 models must NOT claim a limit they do not have.
+    assert "max_positions" not in MODEL_CONFIGS["esm2_650m"]
+
+
+def test_position_limit_is_applied_when_the_caller_gives_no_max_seq_len():
+    """A run that forgets --max_seq_len must not crash 400k proteins in."""
+    from data_preparation.embeddings.embedding_generation import (
+        MODEL_CONFIGS,
+        effective_max_seq_len,
+    )
+
+    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], None) == 1024
+    assert effective_max_seq_len(MODEL_CONFIGS["esm2_650m"], None) is None
+
+
+def test_caller_may_tighten_but_not_exceed_the_position_limit():
+    from data_preparation.embeddings.embedding_generation import (
+        MODEL_CONFIGS,
+        effective_max_seq_len,
+    )
+
+    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], 500) == 500
+    # Asking for more than the architecture supports is clamped, not honoured.
+    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], 4000) == 1024
+
+
+# --------------------------------------------------------------------------- #
 #                     seeds must not collide on one filename
 # --------------------------------------------------------------------------- #
 
@@ -129,19 +181,17 @@ def test_random_init_refuses_to_append_into_an_existing_file(tmp_path):
         )
 
 
-def test_pretrained_run_may_still_resume(tmp_path):
+def test_pretrained_run_may_still_resume(tmp_path, read_h5):
     """Resuming a long pretrained run is a feature and must keep working.
 
-    Deliberately no read-back here. h5py/HDF5 1.12 on macOS will not reopen a
-    file read-only in the *same* process that just held it open for write, even
-    after a clean close (a fresh process reads it fine, so the file itself is
-    sound). Asserting on the return value instead proves what we actually care
-    about: append mode saw the stored id and skipped it, rather than truncating.
+    Uses the ``read_h5`` fixture rather than ``h5py.File(..., "r")`` directly —
+    see its docstring for why a same-process read-back needs a collection first.
     """
     h5py = pytest.importorskip("h5py")
     existing = tmp_path / "sprot_esm2_650m.h5"
+    stored = np.arange(4, dtype=np.float32)
     with h5py.File(existing, "w") as fh:
-        fh.create_dataset("P12345", data=np.zeros(4, dtype=np.float32))
+        fh.create_dataset("P12345", data=stored)
 
     # Feeding back an id the file already holds exercises the resume path: with
     # "w-" this would raise, and with "w" the dataset would be gone.
@@ -159,6 +209,12 @@ def test_pretrained_run_may_still_resume(tmp_path):
     )
 
     assert n_done == 1, "resume must find the stored embedding, not recompute it"
+
+    fh = read_h5(existing)
+    assert "P12345" in fh, "resume must not truncate the file"
+    assert np.array_equal(fh["P12345"][:], stored), (
+        "resume must leave the existing embedding byte-for-byte intact"
+    )
 
 
 # --------------------------------------------------------------------------- #

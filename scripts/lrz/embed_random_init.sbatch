@@ -1,17 +1,17 @@
 #!/bin/bash
 # Random-init frozen baseline embeddings (Track B4) on LRZ AI Systems.
 #
-# Submit as an array over the 12 model x 3 seed grid = 36 tasks (0-35):
+# Submit as an array over the 13 model x 3 seed grid = 39 tasks (0-38):
 #
 #     cd ~/plm_choice
-#     sbatch --array=0-35 scripts/lrz/embed_random_init.sbatch
+#     sbatch --array=0-38 scripts/lrz/embed_random_init.sbatch
 #
 # Validate without queueing anything first:
 #
-#     sbatch --test-only --array=0-35 scripts/lrz/embed_random_init.sbatch
+#     sbatch --test-only --array=0-38 scripts/lrz/embed_random_init.sbatch
 #
-# Adding a 13th model (esm1b) makes the grid 0-38. The script derives its own
-# bounds and refuses an out-of-range index rather than silently mis-pairing.
+# The script derives its own bounds and refuses an out-of-range index rather
+# than silently mis-pairing a model with the wrong seed.
 #
 # ---------------------------------------------------------------------------
 # PARTITION / QOS — do not "restore" mcml here.
@@ -58,11 +58,16 @@ OUT_DIR="${OUT_DIR:-$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings
 # Keep the HuggingFace cache off the 100 GB backed-up HOME.
 export HF_HOME="${HF_HOME:-$DSS/cache/huggingface}"
 
-# The 12 MODEL_CONFIGS keys. esm1b needs a MODEL_CONFIGS entry before it can be
-# added here — until then the baseline covers 12 of the paper's 16 arms
-# (esm1b, clean, prottucker, random_1024 have no untrained twin) and that gap
-# belongs in the manuscript rather than in a footnote nobody writes.
+# The 13 MODEL_CONFIGS keys. Per src/visualization/plm_constants.py:39-41 the
+# paper's remaining arms are derivatives of these: clean -> ESM-1 (covered by the
+# new esm1b entry) and prottucker -> ProtT5 (covered by prot_t5). random_1024 is
+# an i.i.d. noise floor, not a pLM, so it needs no untrained twin. Every arm in
+# the comparison therefore now has an architectural twin.
+#
+# esm1b caps at 1024 residues (absolute position embeddings, unlike the rotary
+# ESM-2s); the script clamps --max_seq_len to that automatically.
 MODELS=(
+    esm1b
     esm2_8m esm2_35m esm2_150m esm2_650m esm2_3b
     esm3_open esmc_300m esmc_600m
     ankh_base ankh_large
