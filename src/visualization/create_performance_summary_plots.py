@@ -39,6 +39,7 @@ from visualization.plm_constants import (
     EMBEDDING_FAMILY_COLOR_MAP,
     EMBEDDING_FAMILY_MAP,
     PLM_SIZES,
+    human_readable_number,
 )
 
 # Marker map for model types
@@ -296,8 +297,22 @@ def _add_trendlines(
 
         # Exclude esm2_3b from FNN trendline
         if model_type == "fnn":
+            n_excluded = int((valid_group["Embedding Key"] == "esm2_3b").sum())
             valid_group = valid_group[valid_group["Embedding Key"] != "esm2_3b"]
-            log.debug(f"Excluding esm2_3b from {model_type} trendline")
+            # Loud on purpose: the ESM2-3B embeddings were ~80% complete, so it
+            # is dropped from the trendline. This must be either removed once
+            # they finish or disclosed in the manuscript (plan item E3) — a
+            # debug-level message let it go unnoticed for months.
+            #
+            # Only warn when something was actually dropped: an unconditional
+            # warning fires on runs that never contained esm2_3b, which teaches
+            # the reader to scroll past exactly the line they must not miss.
+            if n_excluded:
+                log.warning(
+                    "EXCLUDED esm2_3b from the %s trendline (incomplete embeddings) "
+                    "— disclose this or finish the embeddings before publishing",
+                    model_type,
+                )
 
         if len(valid_group) < 2:
             log.debug(f"Skipping trendline for {model_type}: insufficient data points")
@@ -465,33 +480,13 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
     )
 
 
-def _human_readable_formatter(x, pos=None):
-    """Formatter for large numbers with SI suffixes (K, M, B, T, etc).
-
-    Args:
-        x: Number to format
-        pos: Position (unused, for matplotlib compatibility)
-
-    Returns:
-        Formatted string with appropriate SI suffix
-    """
-    abs_x = abs(x)
-    units = ["", "K", "M", "B", "T", "P", "E", "Z", "Y"]
-    magnitude = 0
-    while abs_x >= 1000 and magnitude < len(units) - 1:
-        abs_x /= 1000.0
-        magnitude += 1
-    if magnitude == 0:
-        return str(int(x))
-    # Show up to 3 significant digits
-    value_str = f"{abs_x:.3g}"
-    sign = "-" if x < 0 else ""
-    return f"{sign}{value_str}{units[magnitude]}"
-
-
 # --- Main Plotting Function ---
 def generate_metric_plot(
-    df: pd.DataFrame, y_metric: str, se_metric: Optional[str], output_file: Path
+    df: pd.DataFrame,
+    y_metric: str,
+    se_metric: Optional[str],
+    output_file: Path,
+    delta_mode: bool = False,
 ):
     """Generates a summary faceted scatter plot for a specific metric.
 
@@ -558,8 +553,16 @@ def generate_metric_plot(
         ax.tick_params(axis="x", rotation=45, labelsize=PLOT_CONFIG["tick_fontsize"])
         ax.tick_params(axis="y", labelsize=PLOT_CONFIG["tick_fontsize"])
 
-        # Set y-axis to start from 0
-        ax.set_ylim(0, 1)
+        # Metrics are in [0, 1], but a baseline-subtracted metric is a signed
+        # difference, so centre the axis on 0 and draw the zero line.
+        if delta_mode:
+            y_abs_max = max(
+                abs(df_sorted[y_metric].min()), abs(df_sorted[y_metric].max()), 0.1
+            )
+            ax.set_ylim(-y_abs_max * 1.1, y_abs_max * 1.1)
+            ax.axhline(y=0, color="black", linewidth=0.8, linestyle="-", alpha=0.4)
+        else:
+            ax.set_ylim(0, 1)
 
         # Add panel labels (A, B, C)
         if i == 0:  # Panel A (leftmost) - position further left
@@ -579,7 +582,7 @@ def generate_metric_plot(
 
         # Set custom x-axis labels
         size_labels = [
-            _human_readable_formatter(PLM_SIZES.get(emb.lower()))
+            human_readable_number(PLM_SIZES.get(emb.lower()))
             if emb.lower() in PLM_SIZES
             else emb
             for emb in category_order
@@ -651,6 +654,17 @@ def main():
         help="Space-separated list of pLM names (embedding names) to exclude from the plots.",
     )
     parser.add_argument(
+        "--delta_baseline",
+        type=Path,
+        default=None,
+        help=(
+            "Baseline metrics CSV (same format as parsed_metrics_all.csv). When given, "
+            "every metric is plotted as (current - baseline) on a zero-centred axis. "
+            "This is how Sup. Fig. 4 is drawn as a difference to Fig. 1 rather than a "
+            "near-duplicate of it."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose debug output.",
@@ -677,9 +691,97 @@ def main():
         log.error("No data loaded, exiting.")
         return
 
+    # --- Delta mode: plot the difference against a reference run ---------------
+    # Sup. Fig. 4 is meant to show how a second dataset DIFFERS from Fig. 1, not
+    # to restate it. Subtracting a baseline here is what makes it a difference
+    # plot rather than a near-duplicate.
+    if args.delta_baseline:
+        if not args.delta_baseline.exists():
+            log.error(f"Delta baseline file not found: {args.delta_baseline}")
+            return
+
+        baseline_df = pd.read_csv(args.delta_baseline)
+        log.info(
+            f"Delta baseline: {len(baseline_df)} rows from {args.delta_baseline}"
+        )
+
+        # (Embedding, Parameter, Model Type) is the natural key for one run.
+        join_cols = ["Embedding", "Parameter", "Model Type"]
+        missing = [c for c in join_cols if c not in baseline_df.columns]
+        if missing:
+            log.error(f"Baseline CSV is missing join column(s): {missing}")
+            return
+
+        # Only metrics present on BOTH sides can be differenced. A metric that
+        # exists in results but not in the baseline would otherwise be left at
+        # its absolute value and then drawn on the zero-centred delta axis as if
+        # it were a difference.
+        metric_cols = [
+            c
+            for c in ["Pearson R2", "Spearman", "MAE", "R2"]
+            if c in baseline_df.columns and c in results_df.columns
+        ]
+        if not metric_cols:
+            log.error(
+                "Delta mode: the baseline CSV and the current run share no metric "
+                "column out of Pearson R2 / Spearman / MAE / R2. Nothing to subtract."
+            )
+            return
+        un_differenced = [
+            c
+            for c in ["Pearson R2", "Spearman", "MAE", "R2"]
+            if c in results_df.columns and c not in metric_cols
+        ]
+        if un_differenced:
+            log.warning(
+                f"Delta mode: {un_differenced} are absent from the baseline and will "
+                f"NOT be plotted, because an absolute value on a zero-centred delta "
+                f"axis would read as a difference."
+            )
+            results_df = results_df.drop(columns=un_differenced)
+
+        renamed = {c: f"_baseline_{c}" for c in metric_cols}
+        baseline_subset = baseline_df[join_cols + metric_cols].rename(columns=renamed)
+
+        before_len = len(results_df)
+        results_df = results_df.merge(baseline_subset, on=join_cols, how="left")
+
+        # 'Absolute Spearman' is derived further down as ``Spearman.abs()``. Once
+        # Spearman holds a *difference* that would be |Δρ| — a non-negative number
+        # plotted on a signed axis, which is not the "difference in |ρ|" the panel
+        # claims to show. Derive it here, from the two absolute values, before the
+        # baseline columns are dropped.
+        if "Spearman" in metric_cols:
+            results_df["Absolute Spearman"] = (
+                results_df["Spearman"].abs() - results_df["_baseline_Spearman"].abs()
+            )
+
+        for col in metric_cols:
+            bl_col = f"_baseline_{col}"
+            if bl_col in results_df.columns and col in results_df.columns:
+                results_df[col] = results_df[col] - results_df[bl_col]
+                results_df.drop(columns=[bl_col], inplace=True)
+
+        matched = int(results_df[metric_cols[0]].notna().sum())
+        if matched < before_len:
+            # Unmatched rows become NaN and vanish from the plot — say so loudly
+            # rather than letting the figure quietly lose models.
+            log.warning(
+                f"Delta mode matched only {matched}/{before_len} rows against the "
+                f"baseline; unmatched rows will be absent from the plots."
+            )
+        else:
+            log.info(f"Delta mode: subtracted baseline from all {matched} rows.")
+
     # --- Save Full Dataframe ---
+    # In delta mode the metric columns hold (current - baseline), so the file must
+    # NOT be called parsed_metrics_all.csv: that is the canonical absolute-metrics
+    # table other tools read (and --delta_baseline itself takes one as input), so
+    # writing differences under that name silently poisons every consumer.
     output_dir = args.output
-    csv_filename = "parsed_metrics_all.csv"
+    csv_filename = (
+        "parsed_metrics_delta.csv" if args.delta_baseline else "parsed_metrics_all.csv"
+    )
     csv_output_path = output_dir / csv_filename
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -730,7 +832,9 @@ def main():
             return
 
     # --- Add absolute Spearman correlation ---
-    if "Spearman" in results_df.columns:
+    # In delta mode this was already computed as the difference of absolutes,
+    # before the baseline column was consumed — do not overwrite it with |Δρ|.
+    if "Spearman" in results_df.columns and "Absolute Spearman" not in results_df.columns:
         results_df["Absolute Spearman"] = results_df["Spearman"].abs()
         log.info("Added 'Absolute Spearman' column to the dataset")
 
@@ -770,7 +874,10 @@ def main():
         output_path = output_dir / output_filename
         log.info(f"--- Generating plot for {y_metric} -> {output_path} ---")
 
-        trend_stats = generate_metric_plot(results_df, y_metric, se_metric, output_path)
+        trend_stats = generate_metric_plot(
+            results_df, y_metric, se_metric, output_path,
+            delta_mode=bool(args.delta_baseline),
+        )
 
         # Add metric name to each stat and collect
         for stat in trend_stats:

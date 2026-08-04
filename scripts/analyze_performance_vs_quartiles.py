@@ -14,6 +14,20 @@ import seaborn as sns
 from pathlib import Path
 from scipy import stats
 import argparse
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from visualization.plm_constants import EMBEDDING_DISPLAY_NAMES  # noqa: E402
+
+
+def _display_name(embedding_key: str) -> str:
+    """Single-line label for an embedding, from the shared figure table.
+
+    The table stores two-line labels sized for tick text; annotations in this script
+    want them on one line. Deriving both from one table is what keeps a model from
+    being spelled three different ways across the figures in this file.
+    """
+    return EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key).replace("\n", " ")
 
 
 def analyze_performance_quartile_correlation(
@@ -34,34 +48,50 @@ def analyze_performance_quartile_correlation(
     print(f"Loading quartile data from: {quartile_csv}")
     quartile_df = pd.read_csv(quartile_csv)
 
-    # Create mapping from display names to embedding names
-    display_to_embedding = {
-        "Ankh Base": "ankh_base",
-        "Ankh Large": "ankh_large",
-        "CLEAN": "clean",
-        "ESM1b": "esm1b",
-        "ESM2-8M": "esm2_8m",
-        "ESM2-35M": "esm2_35m",
-        "ESM2-150M": "esm2_150m",
-        "ESM2-650M": "esm2_650m",
-        "ESM2-3B": "esm2_3b",
-        "ESM3": "esm3_open",
-        "ESM C-300M": "esmc_300m",
-        "ESM C-600M": "esmc_600m",
-        "ProstT5": "prostt5",
-        "ProtT5": "prott5",
-        "ProtTucker": "prottucker",
-        "Random": "random_1024",
-    }
+    # `plm_name` is the embedding key — pairwise_embedding_comparison.py writes the
+    # key and the label as separate columns, so no de-labelling is needed.
+    #
+    # Older CSVs (written before that split) put the *display label* in plm_name, in
+    # whichever spelling the axis used, so fall back to inverting the label table for
+    # those. Regenerating the statistics CSV retires this branch.
+    known_keys = set(EMBEDDING_DISPLAY_NAMES)
+    if quartile_df["plm_name"].isin(known_keys).all():
+        quartile_df["embedding_name"] = quartile_df["plm_name"]
+    else:
+        display_to_embedding = {
+            display: key for key, display in EMBEDDING_DISPLAY_NAMES.items()
+        }
+        for key, display in EMBEDDING_DISPLAY_NAMES.items():
+            for flattened in (" ", "-", ""):
+                display_to_embedding.setdefault(display.replace("\n", flattened), key)
+        quartile_df["embedding_name"] = quartile_df["plm_name"].map(
+            lambda name: display_to_embedding.get(name, name if name in known_keys else None)
+        )
 
-    # Convert display names to embedding names in quartile_df
-    quartile_df["embedding_name"] = quartile_df["plm_name"].map(display_to_embedding)
+    unmapped = sorted(
+        quartile_df.loc[quartile_df["embedding_name"].isna(), "plm_name"].unique()
+    )
+    if unmapped:
+        raise SystemExit(
+            "Could not map these plm_name labels to embedding keys: "
+            + ", ".join(repr(u) for u in unmapped)
+            + "\nAdd them to EMBEDDING_DISPLAY_NAMES in src/visualization/plm_constants.py. "
+            "Refusing to continue, because an inner join would silently drop them and "
+            "the correlation would be computed on a subset without saying so."
+        )
 
     # Merge on PLM name
     merged_df = ranking_df.merge(
         quartile_df, left_on="Embedding", right_on="embedding_name", how="inner"
     )
 
+    dropped = len(quartile_df) - len(merged_df)
+    if dropped:
+        missing = sorted(set(quartile_df["embedding_name"]) - set(merged_df["Embedding"]))
+        print(
+            f"WARNING: {dropped} pLM(s) present in the quartile CSV have no ranking row "
+            f"and were dropped: {', '.join(missing)}"
+        )
     print(f"\nMerged {len(merged_df)} PLMs with both performance and quartile data")
 
     # Calculate IQR (Interquartile Range) and distribution width
@@ -192,26 +222,6 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
     # Set style
     sns.set_theme(style="whitegrid")
 
-    # Display name mapping
-    display_name_map = {
-        "ankh_base": "Ankh Base",
-        "ankh_large": "Ankh Large",
-        "clean": "CLEAN",
-        "esm1b": "ESM1b",
-        "esm2_150m": "ESM2-150M",
-        "esm2_3b": "ESM2-3B",
-        "esm2_650m": "ESM2-650M",
-        "esm2_35m": "ESM2-35M",
-        "esm2_8m": "ESM2-8M",
-        "esm3_open": "ESM3",
-        "esmc_300m": "ESMC-300M",
-        "esmc_600m": "ESMC-600M",
-        "prostt5": "ProstT5",
-        "prott5": "ProtT5",
-        "prottucker": "ProtTucker",
-        "random_1024": "Random",
-    }
-
     # --- GRID PLOT FOR AVERAGE RANK ---
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
     axes = axes.flatten()
@@ -234,7 +244,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
 
         # Add model labels
         for _, row in df.iterrows():
-            display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+            display_name = _display_name(row["Embedding"])
             ax.annotate(
                 display_name,
                 (row[col], row["Average_Rank"]),
@@ -306,7 +316,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
 
         # Add model labels
         for _, row in df.iterrows():
-            display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+            display_name = _display_name(row["Embedding"])
             ax.annotate(
                 display_name,
                 (row[col], row["Avg_Spearman"]),
@@ -472,27 +482,7 @@ def create_iqr_performance_plot(df, output_dir):
 
     # Add model names next to each point
     for _, row in df.iterrows():
-        # Convert embedding names to display names
-        display_name_map = {
-            "esmc_600m": "ESM C-600M",
-            "esmc_300m": "ESM C-300M",
-            "prott5": "ProtT5",
-            "esm3_open": "ESM3",
-            "ankh_large": "Ankh Large",
-            "esm1b": "ESM1b",
-            "prostt5": "ProstT5",
-            "esm2_650m": "ESM2-650M",
-            "esm2_150m": "ESM2-150M",
-            "esm2_3b": "ESM2-3B",
-            "prottucker": "ProtTucker",
-            "ankh_base": "Ankh Base",
-            "clean": "CLEAN",
-            "esm2_35m": "ESM2-35M",
-            "esm2_8m": "ESM2-8M",
-            "random_1024": "Random",
-        }
-
-        display_name = display_name_map.get(row["Embedding"], row["Embedding"])
+        display_name = _display_name(row["Embedding"])
 
         ax.annotate(
             display_name,

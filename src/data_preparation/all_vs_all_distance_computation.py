@@ -59,6 +59,8 @@ from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
+from shared.embedding_names import is_iid_random_baseline
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -454,16 +456,27 @@ class AllVsAllEmbeddingAnalyzer:
         """
         logger.info("Generating visualization cache files...")
 
-        # Identify distance columns (exclude random embeddings)
+        # Identify distance columns, excluding the i.i.d. random noise floor.
+        # Untrained-architecture baselines (random_init_*) are NOT excluded — they
+        # are the R1.9 control and must reach the figures; see shared.embedding_names.
+        all_dist_cols = [col for col in df.columns if col.startswith("dist_")]
         dist_cols = [
             col
-            for col in df.columns
-            if col.startswith("dist_")
-            and not col.replace("dist_", "").lower().startswith("random")
+            for col in all_dist_cols
+            if not is_iid_random_baseline(col.replace("dist_", ""))
         ]
 
         if not dist_cols:
             raise ValueError("No valid distance columns found in DataFrame")
+
+        dropped = sorted(set(all_dist_cols) - set(dist_cols))
+        if dropped:
+            logger.warning(
+                "EXCLUDED %d i.i.d. random baseline column(s) from the visualization "
+                "cache: %s. random_init_* untrained architectures are NOT excluded.",
+                len(dropped),
+                ", ".join(c.replace("dist_", "") for c in dropped),
+            )
 
         logger.info(f"Found {len(dist_cols)} distance columns: {dist_cols}")
 

@@ -413,12 +413,13 @@ if __name__ == "__main__":
         required=True,
         help="Absolute path to the directory containing train/val/test files (CSV or parquet format).",
     )
+    # Whitelist removed (Ivan, 2026-03-19) — see run_experiments.py. Without this
+    # none of the GO / experimental-TM target columns can be trained against.
     parser.add_argument(
         "--param_name",
         type=str,
         required=True,
-        choices=["fident", "alntmscore", "hfsp"],
-        help="Target parameter name to train the model for.",
+        help="Target parameter to train against (must be a column in the parquet).",
     )
 
     # --- Output Location ---
@@ -450,7 +451,7 @@ if __name__ == "__main__":
         "--early_stopping_patience",
         type=int,
         default=3,
-        help="Patience for early stopping (default: 5)",
+        help="Patience for early stopping (default: 3)",
     )
     parser.add_argument(
         "--val_check_interval",

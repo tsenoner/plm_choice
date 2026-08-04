@@ -179,14 +179,22 @@ def compute_histogram_batched(embeddings, n_bins, min_val, max_val, batch_size=1
             # Compute actual distances
             distances = np.sqrt(distances_sq)
 
-            # Create mask to exclude self-comparisons (diagonal elements)
-            # For batch row j (local index), the diagonal is at column j (target index i+j)
-            diagonal_mask = np.zeros_like(distances, dtype=bool)
-            for j in range(batch_size_actual):
-                diagonal_mask[j, j] = True  # Mark diagonal elements
+            # Keep each unordered pair EXACTLY once.
+            #
+            # Batch row j is global index i+j; target column k is global index
+            # i+k. Masking only the diagonal (k == j) left every intra-batch pair
+            # counted twice — once as (i+j, i+k) and once as (i+k, i+j) — while
+            # cross-batch pairs were counted once. The `histogram * 2` below then
+            # assumed a clean upper triangle, so the totals came out
+            # batch-size-dependent: on a 40-protein set the histogram summed to
+            # 1720 / 1920 / 3120 for batch sizes 5 / 10 / 40 against a true 1560.
+            # Requiring k > j restores the strict upper triangle and makes the
+            # result independent of --batch-size.
+            cols = np.arange(distances.shape[1])
+            upper_mask = cols[np.newaxis, :] > np.arange(batch_size_actual)[:, np.newaxis]
 
-            # Filter out invalid values (NaN, Inf) AND diagonal elements
-            valid_mask = np.isfinite(distances) & ~diagonal_mask
+            finite_mask = np.isfinite(distances)
+            valid_mask = finite_mask & upper_mask
             distances_valid = distances[valid_mask]
 
             # Manual binning (faster than np.digitize for large data)
@@ -198,8 +206,13 @@ def compute_histogram_batched(embeddings, n_bins, min_val, max_val, batch_size=1
                 counts = np.bincount(bin_indices.ravel(), minlength=n_bins)
                 histogram += counts[:n_bins].astype(np.int64)
 
-            # Warn if we found invalid values
-            n_invalid = (~valid_mask).sum()
+            # Warn if we found invalid values.
+            #
+            # Count only NON-FINITE distances among the pairs we actually keep.
+            # `(~valid_mask).sum()` also counts every entry the upper-triangle
+            # mask removes, so it reported a five-figure "invalid" count on every
+            # single batch of a perfectly healthy run and buried the real signal.
+            n_invalid = int((~finite_mask & upper_mask).sum())
             if n_invalid > 0:
                 tqdm.write(
                     f"Warning: Found {n_invalid} invalid distance values in batch {i}-{end_i}"

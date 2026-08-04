@@ -37,6 +37,17 @@ jobs:
       - name: Check the lockfile is current
         run: uv lock --check
 
+      - name: Lint (new code — gating)
+        # The legacy tree carries ~683 pre-existing ruff findings; fixing them is
+        # a large mechanical diff that does not belong on the resubmission's
+        # critical path. Gate the CLI package and the tests written against it so
+        # new code cannot add to the pile, and clear the backlog after the paper.
+        run: uv run ruff check src/plm_choice
+
+      - name: Lint (whole repo — informational)
+        continue-on-error: true
+        run: uv run ruff check src scripts tests --statistics
+
       - name: Install the locked environment
         run: uv sync --locked
         env:

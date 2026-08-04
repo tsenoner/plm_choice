@@ -260,3 +260,32 @@ def infer_batch(ctx: typer.Context) -> None:
     from plm_choice.bridge import run_module_main
 
     run_module_main("evaluation.batch_inferer", ctx.args, prog="plm evaluate infer-batch")
+
+
+# ── Mined from feat/ivan-infrastructure ───────────────────────────────────────
+
+
+@_passthrough(
+    "classification",
+    panel=_REPORTS,
+    help_="AUROC + recall@1FP per CATH level from a precomputed pair table.",
+)
+def classification(ctx: typer.Context) -> None:
+    from plm_choice.bridge import run_module_main
+
+    run_module_main(
+        "evaluation.classification_eval", ctx.args, prog="plm evaluate classification"
+    )
+
+
+@_passthrough(
+    "overtraining",
+    panel=_REPORTS,
+    help_="Probe-capacity / overtraining diagnostics across the training grid.",
+)
+def overtraining(ctx: typer.Context) -> None:
+    from plm_choice.bridge import run_module_main
+
+    run_module_main(
+        "evaluation.overtraining_analysis", ctx.args, prog="plm evaluate overtraining"
+    )

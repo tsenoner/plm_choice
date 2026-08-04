@@ -1,3 +1,26 @@
+"""
+Random i.i.d. Embedding Baseline Generator
+
+Generates random embedding vectors (standard normal, i.i.d.) for each protein
+in a template H5 file. Useful as a simple "noise floor" baseline.
+
+--- Ivan infrastructure (2026-03-19): relationship to --random_init ---
+This script generates i.i.d. random vectors — each dimension is independently
+sampled from N(0,1). There is NO architectural structure in these embeddings.
+
+For a more principled baseline, use embedding_generation.py --random_init,
+which loads the actual pLM architecture with random weights and runs inference.
+Those embeddings contain contextual structure from the model's attention
+patterns and layer norms, just without any learned biology. This is the
+correct null hypothesis for "does pretraining help?"
+
+Summary of baselines:
+  random_<dim>.h5         — i.i.d. noise (this script). Tests: "is the model
+                            doing better than random chance?"
+  random_init_<model>.h5  — untrained model (--random_init). Tests: "does
+                            pretraining help, or is architecture enough?"
+"""
+
 import argparse
 import h5py
 import numpy as np

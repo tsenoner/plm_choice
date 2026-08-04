@@ -329,7 +329,7 @@ class EmbeddingDistanceComputer:
 
             # Check if this embedding is already computed
             if dist_col in result_df.columns:
-                existing_valid = result_df[dist_col].drop_nulls().len()
+                existing_valid = len(result_df) - result_df[dist_col].null_count()
                 logger.info(
                     f"  {embedding_name}: Already computed ({existing_valid} valid distances), skipping..."
                 )
@@ -523,7 +523,7 @@ def main():
 
         # Coverage statistics
         for col in distance_cols:
-            valid_count = result_df[col].drop_nulls().len()
+            valid_count = len(result_df) - result_df[col].null_count()
             coverage = valid_count / len(result_df) * 100
             if valid_count > 0:
                 mean_dist = result_df[col].mean()

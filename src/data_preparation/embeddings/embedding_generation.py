@@ -3,6 +3,18 @@
 Unified script for generating protein embeddings using various PLMs.
 Combines functionalities for model loading/downloading, FASTA processing,
 embedding generation, and HDF5 saving.
+
+--- Ivan infrastructure (2026-03-19) ---
+Added --random_init flag to generate embeddings from randomly initialized
+(non-pretrained) models. This captures the architectural prior (attention
+patterns, layer norms, positional encoding) WITHOUT learned biology.
+Conceptually different from random_embeddings.py which generates i.i.d.
+noise vectors — a randomly initialized model produces *contextual*
+embeddings where nearby residues still influence each other through the
+architecture, just without any training signal.
+
+Use case: null hypothesis baseline for "does pretraining help?" in the
+pLM Choice paper revision.
 """
 
 import argparse
@@ -19,6 +31,7 @@ from pyfaidx import Fasta
 
 # --- Hugging Face Transformers Imports ---
 from transformers import (
+    AutoConfig,
     AutoTokenizer,
     EsmModel,
     T5EncoderModel,
@@ -238,15 +251,88 @@ def preprocess_sequence(sequence: str, model_family_key: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
+    """Re-initialise a model in place, per module type.
+
+    Only needed for the native-ESM loader, which has no ``from_config`` path —
+    for HuggingFace models, constructing from an ``AutoConfig`` already performs
+    the architecture's own initialisation and this must NOT be applied on top.
+
+    Crucially this is type-aware. Overwriting *every* parameter with
+    ``N(0, 0.02)`` — which is what a naive loop does — sets LayerNorm gains to
+    ~0 and biases to ~0.02 instead of 1.0 and 0. Measured on a 4-layer ESM
+    config that collapses the hidden-state magnitude 34x and pushes the mean
+    residue-residue correlation from +0.686 to +0.960, i.e. every residue ends
+    up with nearly the same vector and the mean-pooled embedding degenerates to
+    a constant. The point of this baseline is an untrained *architecture*, not a
+    broken one, so the scheme below mirrors ``EsmPreTrainedModel._init_weights``:
+
+        Linear / Embedding weight ~ N(0, 0.02);  bias = 0
+        LayerNorm weight = 1.0;                  bias = 0
+        padding_idx embedding row = 0
+
+    Being type-aware means being *incomplete*: any parameter owned by a module
+    that is none of those three keeps the value it was loaded with. This path
+    starts from ``from_pretrained``, so an unhandled module leaves PRETRAINED
+    weights inside a baseline whose entire premise is that nothing was learned —
+    and ESM3/ESMC are exactly the custom-block architectures where that is
+    plausible. Any such parameter is therefore reported loudly rather than left
+    to pass for an untrained model.
+    """
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    handled: set[int] = set()
+
+    for submodule in module.modules():
+        if isinstance(submodule, torch.nn.Linear):
+            torch.nn.init.normal_(submodule.weight, mean=0.0, std=0.02, generator=generator)
+            handled.add(id(submodule.weight))
+            if submodule.bias is not None:
+                torch.nn.init.zeros_(submodule.bias)
+                handled.add(id(submodule.bias))
+        elif isinstance(submodule, torch.nn.Embedding):
+            torch.nn.init.normal_(submodule.weight, mean=0.0, std=0.02, generator=generator)
+            handled.add(id(submodule.weight))
+            if submodule.padding_idx is not None:
+                with torch.no_grad():
+                    submodule.weight[submodule.padding_idx].fill_(0.0)
+        elif isinstance(submodule, torch.nn.LayerNorm):
+            torch.nn.init.ones_(submodule.weight)
+            torch.nn.init.zeros_(submodule.bias)
+            handled.update((id(submodule.weight), id(submodule.bias)))
+
+    untouched = [name for name, p in module.named_parameters() if id(p) not in handled]
+    if untouched:
+        preview = ", ".join(untouched[:10])
+        suffix = f", ... (+{len(untouched) - 10} more)" if len(untouched) > 10 else ""
+        print(
+            f"⚠️ --random_init: {len(untouched)} parameter tensor(s) are not covered by "
+            f"the Linear/Embedding/LayerNorm re-init and therefore KEEP THEIR "
+            f"PRETRAINED VALUES: {preview}{suffix}\n"
+            f"   This baseline is only an untrained architecture if that list is empty. "
+            f"Extend _reinit_weights before reporting numbers from this model."
+        )
+
+
 def load_model_and_tokenizer(
     model_key: str,
     config: ModelConfig,
     weights_dir: Optional[Path],
     device: torch.device,
+    random_init: bool = False,
+    random_seed: int = 42,
 ) -> Tuple[
     Any, Optional[PreTrainedTokenizer | Any], str
 ]:  # Model, Tokenizer (or None), FamilyKey
-    """Loads the specified model and tokenizer."""
+    """
+    Loads the specified model and tokenizer.
+
+    If random_init=True, the model architecture is loaded but all weights
+    are reset to random values (sigma=0.02). The tokenizer is always loaded
+    pretrained — tokenization must be identical to produce comparable
+    sequence representations.
+    """
 
     hf_id = config["hf_id"]
     loader = config["loader"]
@@ -269,15 +355,50 @@ def load_model_and_tokenizer(
         os.environ["HF_HUB_CACHE"] = str(actual_cache_dir)
         print(f"ℹ️ Using Hugging Face cache directory: {actual_cache_dir}")
 
-    print(f"→ Loading model '{model_key}' ({hf_id}) using {loader} loader...")
+    mode_str = "RANDOM INIT" if random_init else "pretrained"
+    print(f"→ Loading model '{model_key}' ({hf_id}) [{mode_str}] using {loader} loader...")
     model = None
     tokenizer = None
 
     try:
         if loader == "transformers":
-            model = model_class.from_pretrained(
-                hf_id, cache_dir=actual_cache_dir, **load_kwargs
-            )
+            if random_init:
+                # --- Ivan infrastructure (2026-03-19): random init baseline ---
+                # Load architecture config from HuggingFace, then instantiate
+                # with random weights. This preserves the model's structure
+                # (attention heads, layer norms, positional encoding) but
+                # removes all learned representations.
+                model_config = AutoConfig.from_pretrained(
+                    hf_id, cache_dir=actual_cache_dir
+                )
+                # Constructing the model from a config already performs the
+                # architecture's OWN random initialisation — HuggingFace's
+                # PreTrainedModel.post_init() runs _init_weights per module, so
+                # Linear/Embedding weights get N(0, initializer_range), biases
+                # get 0 and LayerNorm gains get 1.0. Seeding immediately before
+                # construction is all that is needed to make it reproducible.
+                #
+                # Do NOT blanket-overwrite every parameter with N(0, 0.02)
+                # afterwards. Measured on a 4-layer ESM config, doing so drives
+                # LayerNorm gains from 1.0 to ~0.0004 and biases from 0 to
+                # ~0.016, collapsing the hidden-state magnitude 34x (8.0e-01 ->
+                # 2.4e-02) and raising the mean residue-residue correlation from
+                # +0.686 to +0.960. At that point every residue vector is nearly
+                # identical, so the mean-pooled protein embedding is a constant
+                # plus noise — the opposite of the contextual
+                # architecture-only prior this baseline is meant to provide.
+                torch.manual_seed(random_seed)
+                model = model_class(model_config)
+                print(
+                    f"  Initialized {model_key} with random weights "
+                    f"(architecture default init, seed={random_seed})"
+                )
+            else:
+                model = model_class.from_pretrained(
+                    hf_id, cache_dir=actual_cache_dir, **load_kwargs
+                )
+
+            # Tokenizer is ALWAYS loaded pretrained — tokenization must match
             if tokenizer_class:
                 tokenizer = tokenizer_class.from_pretrained(
                     hf_id, cache_dir=actual_cache_dir, **tokenizer_load_kwargs
@@ -296,17 +417,25 @@ def load_model_and_tokenizer(
             )  # Native ESM handles its own caching via HF_HUB_CACHE
             # Native ESM models typically have built-in .encode() methods, so tokenizer_class is None.
 
+            if random_init:
+                # Native ESM has no from_config(), so load pretrained and then
+                # re-initialise per module type (see _reinit_weights).
+                _reinit_weights(model, seed=random_seed)
+                print(f"  Re-initialized {model_key} with random weights (seed={random_seed})")
+
         else:
             raise ValueError(f"Unknown loader type: {loader}")
 
         if model is None:
             raise RuntimeError(f"Failed to load model for {model_key}")
 
-        if post_load_hook:
+        # Skip post_load_hook (e.g. .half()) for random init — keep full precision
+        # to avoid masking initialization effects with quantization noise
+        if post_load_hook and not random_init:
             post_load_hook(model)
 
         model.to(device).eval()
-        print(f"✓ Model '{model_key}' ready on {device.type.upper()}.")
+        print(f"✓ Model '{model_key}' ready on {device.type.upper()} [{mode_str}].")
         return model, tokenizer, family_key
 
     except Exception as e:
@@ -586,6 +715,21 @@ def main():
         default=None,
         help="Optional path to Hugging Face token file for login (primarily for models like native ESM).",
     )
+    # --- Ivan infrastructure (2026-03-19): random init baseline ---
+    parser.add_argument(
+        "--random_init",
+        action="store_true",
+        help="Use randomly initialized (non-pretrained) model weights. "
+        "Produces contextual embeddings shaped by architecture alone, "
+        "without any learned biology. Output files are named random_init_<model>.h5. "
+        "See also random_embeddings.py for simpler i.i.d. random vectors.",
+    )
+    parser.add_argument(
+        "--random_seed",
+        type=int,
+        default=42,
+        help="Random seed for weight initialization when --random_init is used.",
+    )
 
     args = parser.parse_args()
 
@@ -603,11 +747,19 @@ def main():
 
     sanitized_model_key = args.model_key.replace("/", "_")
 
+    # --- Ivan infrastructure (2026-03-19): random init output naming ---
+    # random_init embeddings go to random_init_<model>.h5 to clearly
+    # distinguish from pretrained <model>.h5 and i.i.d. random_<dim>.h5
     output_h5_path: Path
     if args.output_hdf5_file is None:
-        output_h5_path = args.fasta_file.with_name(
-            f"{args.fasta_file.stem}_{sanitized_model_key}.h5"
-        )
+        if args.random_init:
+            output_h5_path = args.fasta_file.with_name(
+                f"random_init_{sanitized_model_key}.h5"
+            )
+        else:
+            output_h5_path = args.fasta_file.with_name(
+                f"{args.fasta_file.stem}_{sanitized_model_key}.h5"
+            )
     else:
         output_h5_path = args.output_hdf5_file
 
@@ -638,7 +790,12 @@ def main():
     print(f"ℹ️ Selected device: {device.type}")
 
     model, tokenizer, family_key = load_model_and_tokenizer(
-        args.model_key, model_config, args.weights_dir, device
+        args.model_key,
+        model_config,
+        args.weights_dir,
+        device,
+        random_init=args.random_init,
+        random_seed=args.random_seed,
     )
 
     print(f"Reading sequences from: {args.fasta_file}")

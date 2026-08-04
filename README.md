@@ -31,8 +31,8 @@ uv run plm doctor
 
 ## The `plm` command
 
-Everything is reachable through one CLI. `plm stages` prints the pipeline in
-dependency order:
+Nearly every analysis step is reachable through one CLI — 56 commands over 54 of
+the 58 Python entry points. `plm stages` prints the pipeline in dependency order:
 
 ```
 1. Cohort   plm data novel-2024      derive the novel-2024 protein cohort
@@ -62,6 +62,12 @@ Command groups:
 | `plm figures`  | Redraw the manuscript panels from computed metrics                     |
 
 `-h` works at every level (`plm -h`, `plm evaluate -h`, `plm evaluate ec -h`).
+
+Nine commands wrap helpers under `scripts/`, which is deliberately not packaged
+into the wheel; those work from a git clone and say so clearly if run from an
+installed copy. Two entry points remain outside the CLI on purpose: a
+fully-seeded one-shot simulation with no options, and the shell scripts that
+drive MMseqs2/Foldseek.
 
 The CLI is a thin front-end: each command forwards its arguments to the underlying
 module unchanged, so `plm evaluate ec --help` shows that module's own options and its
@@ -98,7 +104,7 @@ uv run pytest -q -m slow         # statistical coverage simulations (minutes)
 
 Two test directories are integration-only and skip by default: `tests/create_embeddings`
 needs a GPU plus gated HuggingFace checkpoints (opt in with `PLM_RUN_INTEGRATION=1`),
-and `tests/2024_new_proteins` needs the bulk UniRef50 dump.
+and `tests/novel_2024` needs the bulk UniRef50 dump.
 
 ## Reproduce
 
@@ -120,7 +126,8 @@ src/
 ├── visualization/      figure code + shared pLM constants
 ├── shared/             datasets, experiment paths, atomic IO
 └── plm_choice/         the `plm` CLI (wraps the above; contains no analysis logic)
-scripts/                one-off analysis helpers, exposed through the CLI
+scripts/                analysis helpers; wrapped by the CLI, but only when
+                        running from a clone (they are not shipped in the wheel)
 tests/                  ~1100 tests
 freeze/                 frozen canonical-set manifests (small, version-controlled)
 docs/                   specification and analysis notes

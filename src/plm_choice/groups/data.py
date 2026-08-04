@@ -17,9 +17,7 @@ from plm_choice.bridge import (
     PASSTHROUGH_CONTEXT,
     run_argv_main,
     run_module_main,
-    run_path_main,
     run_repo_script,
-    repo_root,
 )
 
 app = typer.Typer(help=__doc__, no_args_is_help=True)
@@ -28,8 +26,8 @@ _COHORT = "Cohort assembly"
 _FREEZE = "Frozen manifests"
 _NOVEL = "2024-novel cohort"
 _DIST = "Pairwise distances"
+_LABELS = "Functional & structural labels"
 
-_NOVEL_DIR = "src/data_preparation/2024_new_proteins"
 
 
 def _cmd(name: str, *, panel: str, help_: str):
@@ -137,18 +135,16 @@ def all_vs_all(ctx: typer.Context) -> None:
 
 
 # ── 2024-novel cohort ─────────────────────────────────────────────────────────
-# These live in a directory whose name starts with a digit and has no
-# __init__.py, so they are reachable only as file paths, never as modules.
 
 
 @_cmd(
     "uniref-index",
     panel=_NOVEL,
-    help_="Index a UniRef50 XML dump into SQLite (source-checkout only).",
+    help_="Index a UniRef50 XML dump into SQLite.",
 )
 def uniref_index(ctx: typer.Context) -> None:
-    run_path_main(
-        repo_root() / _NOVEL_DIR / "extract_uniref_to_sqlite.py",
+    run_module_main(
+        "data_preparation.novel_2024.extract_uniref_to_sqlite",
         ctx.args,
         prog="plm data uniref-index",
     )
@@ -160,8 +156,8 @@ def uniref_index(ctx: typer.Context) -> None:
     help_="Identify proteins new in 2024 and dissimilar to the earlier release.",
 )
 def novel_2024(ctx: typer.Context) -> None:
-    run_path_main(
-        repo_root() / _NOVEL_DIR / "identify_novel_dissimilar_proteins.py",
+    run_module_main(
+        "data_preparation.novel_2024.identify_novel_dissimilar_proteins",
         ctx.args,
         prog="plm data novel-2024",
     )
@@ -186,4 +182,84 @@ def plddt(ctx: typer.Context) -> None:
 def best_pdbs(ctx: typer.Context) -> None:
     run_repo_script(
         "scripts/get_best_colabfold_pdbs.py", ctx.args, prog="plm data best-pdbs"
+    )
+
+
+# ── Functional & structural labels (mined from feat/ivan-infrastructure) ──────
+# These build the experimental-evidence target columns that replace HFSP as the
+# functional axis; merge-columns is the plumbing that gets them into the splits.
+
+
+@_cmd(
+    "go-similarity",
+    panel=_LABELS,
+    help_="GO semantic similarity (Wang 2007, best-match-average) as a target column.",
+)
+def go_similarity(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.go_semantic_similarity", ctx.args, prog="plm data go-similarity"
+    )
+
+
+@_cmd(
+    "ec-distance",
+    panel=_LABELS,
+    help_="Validate HFSP against curated enzyme classes (e.g. beta-lactamase Ambler classes).",
+)
+def ec_distance(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.brenda_hfsp_validation", ctx.args, prog="plm data ec-distance"
+    )
+
+
+@_cmd(
+    "pdb-tmscore",
+    panel=_LABELS,
+    help_="Experimental-PDB TM-scores via SIFTS + RCSB + TMalign (bounds predicted-structure bias).",
+)
+def pdb_tmscore(ctx: typer.Context) -> None:
+    run_module_main("data_preparation.pdb_tmscore", ctx.args, prog="plm data pdb-tmscore")
+
+
+@_cmd(
+    "ecod-pairs",
+    panel=_LABELS,
+    help_="Filter pairs to ECOD structural groups and plot per-group distance densities.",
+)
+def ecod_pairs(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.ecod_homology_pairs", ctx.args, prog="plm data ecod-pairs"
+    )
+
+
+@_cmd(
+    "organisms",
+    panel=_LABELS,
+    help_="Compare distance distributions across organism groups (organism-bias probe).",
+)
+def organisms(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.organism_landscape", ctx.args, prog="plm data organisms"
+    )
+
+
+@_cmd(
+    "merge-columns",
+    panel=_LABELS,
+    help_="Merge new target columns (GO, TM-score, ...) into the train/val/test splits.",
+)
+def merge_columns(ctx: typer.Context) -> None:
+    run_module_main(
+        "data_preparation.merge_parquet_columns", ctx.args, prog="plm data merge-columns"
+    )
+
+
+@_cmd(
+    "distance-histogram",
+    panel=_DIST,
+    help_="Streaming 1-D distance histogram for ONE embedding set (scales to full Swiss-Prot).",
+)
+def distance_histogram(ctx: typer.Context) -> None:
+    run_repo_script(
+        "scripts/all_vs_all.py", ctx.args, prog="plm data distance-histogram"
     )

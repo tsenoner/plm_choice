@@ -85,23 +85,6 @@ def run_module_main(dotted: str, argv: Sequence[str], *, prog: str) -> None:
     raise typer.Exit(code=0)
 
 
-def run_path_main(path: Path, argv: Sequence[str], *, prog: str) -> None:
-    """Like :func:`run_module_main` but for a file that is not importable.
-
-    ``src/data_preparation/2024_new_proteins/`` has no ``__init__.py`` and its
-    name starts with a digit, so it can never be addressed as a dotted module
-    path — only as a file.
-    """
-    if not path.is_file():
-        raise typer.BadParameter(f"script not found: {path}")
-    with _patched_argv(prog, argv):
-        try:
-            runpy.run_path(str(path), run_name="__main__")
-        except SystemExit as exc:
-            raise typer.Exit(code=_exit_code(exc.code)) from None
-    raise typer.Exit(code=0)
-
-
 def _exit_code(code: object) -> int:
     """Normalise ``SystemExit.code`` (which may be ``None``, an int, or a message)."""
     if code is None:
@@ -139,4 +122,9 @@ def run_repo_script(relative: str, argv: Sequence[str], *, prog: str) -> None:
             f"{relative} is only available in a source checkout (looked in "
             f"{repo_root()}). Clone the repository to use this command."
         )
-    run_path_main(script, argv, prog=prog)
+    with _patched_argv(prog, argv):
+        try:
+            runpy.run_path(str(script), run_name="__main__")
+        except SystemExit as exc:
+            raise typer.Exit(code=_exit_code(exc.code)) from None
+    raise typer.Exit(code=0)

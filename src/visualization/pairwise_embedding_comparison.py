@@ -42,8 +42,13 @@ logger = logging.getLogger(__name__)
 # Suppress matplotlib DEBUG messages
 logging.getLogger("matplotlib").setLevel(logging.INFO)
 
+# Bump when the shape or semantics of a cached JSON changes (e.g. the density
+# grid size), so old caches are recomputed instead of silently reused.
+CACHE_SCHEMA_VERSION = 2
+
 # --- Project Constants & Configuration ---
 # Shared with create_performance_summary_plots.py — see visualization/plm_constants.py.
+from shared.embedding_names import is_iid_random_baseline
 from visualization.plm_constants import (
     EMBEDDING_COLOR_MAP,
     EMBEDDING_DISPLAY_NAMES,
@@ -127,14 +132,34 @@ class EmbeddingComparisonVisualizer:
             if col.startswith("dist_") and not col.startswith("pca_")
         ]
 
-        # Filter out random embeddings and temporarily exclude prostt5
+        # Filter out the i.i.d. random baselines and temporarily exclude prostt5.
+        #
+        # `random_init_*` must survive this filter. Those are the untrained
+        # *architectures* of reviewer R1.9 — a different control from the
+        # i.i.d. `random_1024` noise floor, which is exactly why
+        # plm_constants.py gives them their own "Untrained" family and colour.
+        # A bare `startswith("random")` swallowed them, so the arm this branch
+        # exists to add would have been absent from every pairwise figure while
+        # the log claimed it was "excluded by design". The predicate is shared with
+        # the all-vs-all cache builder, which had the identical trap.
         dist_cols = [
             col
             for col in all_dist_cols
-            if not col.replace("dist_", "").lower().startswith("random")
+            if not is_iid_random_baseline(col.replace("dist_", ""))
             and not col.replace("dist_", "").lower()
             == "prostt5"  # TEMPORARY: Remove this line to re-include prostt5
         ]
+
+        dropped = sorted(set(all_dist_cols) - set(dist_cols))
+        if dropped:
+            logger.warning(
+                "EXCLUDED %d embedding column(s) from every pairwise figure: %s "
+                "(i.i.d. random baselines are excluded by design; prostt5 is a "
+                "TEMPORARY exclusion — see the Data availability note in the "
+                "README). random_init_* untrained architectures are NOT excluded.",
+                len(dropped),
+                ", ".join(c.replace("dist_", "") for c in dropped),
+            )
 
         # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
         def get_sort_key(col: str) -> tuple:
@@ -200,9 +225,29 @@ class EmbeddingComparisonVisualizer:
         boundaries.append(len(dist_cols))
         return boundaries
 
+    def _cache_fingerprint(self) -> Dict:
+        """Identify the inputs a cache entry was computed from.
+
+        A cache keyed on filename alone cannot tell a full run from a
+        ``--sample_size 5000`` debug run, or a cache written by an older version
+        of this code from a current one. That is not hypothetical: the caches
+        that produced the published ridge figure carry a 200-point density grid
+        that no current code path emits, and nothing detected it.
+        """
+        return {
+            "n_rows": int(len(self.df)),
+            "dist_cols": list(self.dist_cols),
+            "sample_size": self.sample_size,
+            "schema_version": CACHE_SCHEMA_VERSION,
+        }
+
     def _save_json_data(self, data: Dict, save_path: Path, description: str):
         """Helper method to save JSON data with consistent logging."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
+        data = dict(data)
+        meta = dict(data.get("metadata") or {})
+        meta["_fingerprint"] = self._cache_fingerprint()
+        data["metadata"] = meta
         with open(save_path, "w") as f:
             json.dump(data, f)
         logger.info(f"{description} saved to {save_path}")
@@ -210,11 +255,43 @@ class EmbeddingComparisonVisualizer:
     def _load_cached_data(
         self, cache_path: Path, force_recompute: bool
     ) -> Optional[Dict]:
-        """Helper method to load cached data if available."""
-        if not force_recompute and cache_path.exists():
-            with open(cache_path, "r") as f:
-                return json.load(f)
-        return None
+        """Load a cache entry only if it was computed from the same inputs.
+
+        Returns None (i.e. recompute) when the cache is stale or unfingerprinted,
+        rather than silently reusing it.
+        """
+        if force_recompute or not cache_path.exists():
+            return None
+
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+
+        stored = (data.get("metadata") or {}).get("_fingerprint")
+        if stored is None:
+            logger.warning(
+                "IGNORING un-fingerprinted cache %s — it predates cache validation "
+                "and there is no way to tell what data or code version wrote it. "
+                "Recomputing.",
+                cache_path.name,
+            )
+            return None
+
+        current = self._cache_fingerprint()
+        if stored != current:
+            differing = [
+                k for k in current if stored.get(k) != current.get(k)
+            ]
+            logger.warning(
+                "IGNORING stale cache %s — %s differ(s) (cached=%s, current=%s). "
+                "Recomputing.",
+                cache_path.name,
+                ", ".join(differing),
+                {k: stored.get(k) for k in differing},
+                {k: current.get(k) for k in differing},
+            )
+            return None
+
+        return data
 
     # --- Hexagonal Distance Comparison ---
 
@@ -1012,12 +1089,18 @@ class EmbeddingComparisonVisualizer:
                 stats_path = save_path.parent / f"{save_path.stem}_statistics.csv"
 
                 # Convert nested dict to flat structure for CSV
+                # Emit the machine key AND the label, the same convention the dip-test
+                # output below uses. Writing only the label loses the join key, which
+                # forced consumers to guess which spelling of the label a given CSV
+                # carried.
                 rows = []
                 for plm_name, percentiles in percentile_data.items():
-                    plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name)
                     rows.append(
                         {
-                            "plm_name": plm_display_name,
+                            "plm_name": plm_name,
+                            "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                                plm_name, plm_name
+                            ).replace("\n", " "),
                             "q25": percentiles["q25"],
                             "median": percentiles["median"],
                             "q75": percentiles["q75"],
@@ -1576,10 +1659,30 @@ class EmbeddingComparisonVisualizer:
     def create_violin_plot_comparison(
         self, sample_size: int = 10_000, save_path: Optional[Path] = None
     ) -> Tuple[plt.Figure, np.ndarray]:
-        """Create violin plots comparing PLM distance differences."""
+        """Create violin plots comparing PLM distance differences.
+
+        ``sample_size`` subsamples the pair table because the violins are drawn
+        from every row. Pass ``None`` to use all pairs.
+
+        Two things used to be wrong here and are worth keeping fixed: the
+        subsample was taken with ``.head()``, which returns the FIRST n rows of
+        a table that is not in random order (so the violins described whichever
+        proteins sorted first, not the cohort), and nothing was logged, so a
+        plot built from 10,000 of 113,186,256 pairs was indistinguishable from
+        one built from all of them.
+        """
         logger.info("Creating violin plot comparison...")
 
-        df_sample = self.df.head(sample_size) if len(self.df) > sample_size else self.df
+        if sample_size is not None and len(self.df) > sample_size:
+            logger.warning(
+                "violin plots use a random subsample of %s of %s pairs "
+                "(seed=0). Pass sample_size=None to use every pair.",
+                f"{sample_size:,}",
+                f"{len(self.df):,}",
+            )
+            df_sample = self.df.sample(n=sample_size, seed=0)
+        else:
+            df_sample = self.df
 
         # Normalize data
         # Build normalized data using with_columns

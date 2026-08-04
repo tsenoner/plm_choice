@@ -196,8 +196,12 @@ class DistributionConvergenceAnalyzer:
                 rep_progress.set_description(f"Rep {rep + 1}/{n_repetitions}")
 
                 # Sample distances
+                # Offset from the reference seed (42). With `42 + rep`, rep 0
+                # drew the SAME sample as the reference whenever
+                # sample_size == reference_size, so that repetition showed zero
+                # deviation and pulled the variance estimate down.
                 distances = self.sample_pairwise_distances(
-                    sample_size, random_state=42 + rep
+                    sample_size, random_state=1000 + rep
                 )
 
                 # Compute metrics
@@ -836,8 +840,15 @@ def create_cumulative_plots(output_dir, results):
     for i in range(len(available_files), 16):
         axes[i].set_visible(False)
 
+    # These curves are NOT measured distributions: each is a gamma PDF whose two
+    # parameters are derived from the stored mean and std alone. Say so in the
+    # title, because the panel is otherwise indistinguishable from a density plot
+    # of real data.
     plt.suptitle(
-        "Reference Distance Distributions Across pLMs", fontsize=16, fontweight="bold"
+        "Gamma approximation of reference distance distributions\n"
+        "(fitted from mean and std only — not measured densities)",
+        fontsize=15,
+        fontweight="bold",
     )
     plt.tight_layout()
     plt.savefig(
