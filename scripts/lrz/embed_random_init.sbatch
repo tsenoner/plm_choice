@@ -108,11 +108,22 @@ if [ -f "$OUT" ]; then
     exit 0
 fi
 
+# --token_budget turns ~481k single-sequence forward passes into length-bucketed
+# batches. It is numerically exact: verified end-to-end, batched and unbatched
+# HDF5 agree to 4.8e-07 (float32 rounding). 16384 suits an 80GB A100; lower it
+# for esm2_3b if a task OOMs.
+#
+# --bf16 is deliberately NOT set. It would speed this up further, but it changes
+# the vectors, and the pretrained twins these are subtracted from were produced
+# in fp32/fp16. Turning it on for the untrained arm alone would reintroduce
+# exactly the precision confound this branch just removed. If bf16 is wanted,
+# regenerate BOTH arms with it.
 uv run python -m data_preparation.embeddings.embedding_generation \
     "$FASTA" "$MODEL" \
     --random_init \
     --random_seed "$SEED" \
     --output_hdf5_file "$OUT" \
-    --embedding_type per_protein
+    --embedding_type per_protein \
+    --token_budget "${TOKEN_BUDGET:-16384}"
 
 echo "wrote $OUT"
