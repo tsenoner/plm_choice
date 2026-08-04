@@ -35,7 +35,6 @@ from data_preparation.embeddings.embedding_generation import (  # noqa: E402
     should_apply_post_load_hook,
 )
 
-
 # --------------------------------------------------------------------------- #
 #            the random arm must run at its twin's compute precision
 # --------------------------------------------------------------------------- #

@@ -18,7 +18,6 @@ unbatched path it replaces, which is the only check that would actually catch it
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -27,7 +26,6 @@ from data_preparation.embeddings.embedding_generation import (  # noqa: E402
     content_mask,
     masked_mean_pool,
 )
-
 
 # --------------------------------------------------------------------------- #
 #                  special-token stripping under right-padding
