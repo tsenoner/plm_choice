@@ -1297,6 +1297,17 @@ def main():
         default=42,
         help="Random seed for weight initialization when --random_init is used.",
     )
+    parser.add_argument(
+        "--expect_sequences",
+        type=int,
+        default=None,
+        help="Exact number of records the FASTA must yield. Exits 8 on mismatch, "
+        "before any model is loaded. Set this whenever several jobs read one "
+        "shared FASTA: pyfaidx rewrites the .fai non-atomically, and a reader "
+        "that lands mid-rewrite silently gets a subset — or, worse, real "
+        "accessions carrying the wrong residues. Neither outcome raises on its "
+        "own. sprot.fasta is 542238.",
+    )
 
     args = parser.parse_args()
 
@@ -1356,6 +1367,50 @@ def main():
             f"ℹ️ Model '{args.model_key}' does not require explicit script-driven login. Relying on transformers library or cached credentials if needed."
         )
 
+    # The cohort is read and validated BEFORE the model is loaded. A 3B checkpoint
+    # takes minutes to fetch and materialise; a mismatched cohort is knowable in
+    # seconds, and on a scheduler that means failing before the GPU is warm rather
+    # than after.
+    print(f"Reading sequences from: {args.fasta_file}")
+    fai_existed_before = args.fasta_file.with_suffix(
+        args.fasta_file.suffix + ".fai"
+    ).is_file()
+    all_sequences = read_fasta_sequences(args.fasta_file)
+    if not all_sequences:
+        # Exiting 0 here would let a torn .fai (which yields zero records) pass for
+        # "nothing to do": no HDF5 is written, the wrapper still echoes success and
+        # Slurm mails END. An empty cohort is never a legitimate outcome.
+        print(
+            f"ERROR: no sequences read from {args.fasta_file}. The FASTA is empty or "
+            f"its .fai index is unreadable.",
+            file=sys.stderr,
+        )
+        sys.exit(7)
+
+    print(f"Found {len(all_sequences)} sequences in FASTA file.")
+
+    # A concurrent array shares one FASTA, and pyfaidx rewrites the .fai
+    # non-atomically (plain open('w') + copyfileobj, guarded only by a *threading*
+    # lock). A reader that lands mid-rewrite gets a silent SUBSET — and, when the
+    # cut falls inside the trailing lenc/lenb field, five still-parseable columns
+    # with the wrong stride, i.e. real accessions carrying the WRONG RESIDUES.
+    # Neither raises, both write a plausible HDF5, and the num_failed contract
+    # below cannot see them because the missing proteins were never enumerated.
+    # So the cohort size is checked against a caller-supplied expectation.
+    if args.expect_sequences is not None and len(all_sequences) != args.expect_sequences:
+        print(
+            f"ERROR: cohort size mismatch — read {len(all_sequences)} sequences but "
+            f"--expect_sequences is {args.expect_sequences}.\n"
+            f"       Nothing was embedded. This usually means the shared "
+            f"'{args.fasta_file.name}.fai' index was being rewritten by another task "
+            f"while this one read it.\n"
+            f"       Rebuild it once, alone, then resubmit:\n"
+            f"         rm -f {args.fasta_file}.fai && "
+            f"python -c \"from pyfaidx import Fasta; Fasta('{args.fasta_file}')\"",
+            file=sys.stderr,
+        )
+        sys.exit(8)
+
     device = get_device()
     print(f"ℹ️ Selected device: {device.type}")
 
@@ -1388,14 +1443,6 @@ def main():
                 file=sys.stderr,
             )
 
-    print(f"Reading sequences from: {args.fasta_file}")
-    all_sequences = read_fasta_sequences(args.fasta_file)
-    if not all_sequences:
-        print("No sequences to process. Exiting.", file=sys.stderr)
-        sys.exit(0)
-
-    print(f"Found {len(all_sequences)} sequences in FASTA file.")
-
     num_embedded, num_failed = process_sequences_and_save(
         sequences_to_process=all_sequences,
         model=model,
@@ -1421,9 +1468,17 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # Clean up .fai file
+    # Clean up the .fai index — but ONLY if this process created it.
+    #
+    # Deleting it unconditionally is what turns the cold-start race into a
+    # permanent one: with 12+ array tasks against one FASTA, every task that
+    # finishes forces every later task to rebuild the index, and pyfaidx's rebuild
+    # is not atomic. Leaving a pre-existing index alone means the shared cohort is
+    # indexed once, before submission, and never rewritten underneath a reader.
     fai_file_path = args.fasta_file.with_suffix(args.fasta_file.suffix + ".fai")
-    if fai_file_path.is_file():
+    if fai_existed_before:
+        print(f"ℹ️ Leaving pre-existing index in place (shared cohort): {fai_file_path}")
+    elif fai_file_path.is_file():
         try:
             fai_file_path.unlink()
             print(f"✓ Cleaned up index file: {fai_file_path}")

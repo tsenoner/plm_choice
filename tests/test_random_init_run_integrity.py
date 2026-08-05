@@ -416,3 +416,91 @@ def test_batched_and_unbatched_agree_on_a_resumed_cohort(tmp_path):
         )
 
     assert counts[0] == counts[1] == (2, 0)
+
+
+# --------------------------------------------------------------------------- #
+#  The shared-cohort guard
+#
+#  A 12-task array reads ONE sprot.fasta. pyfaidx rewrites the ``.fai`` index
+#  non-atomically (plain ``open('w')`` + ``copyfileobj``, guarded only by a
+#  *threading* lock, which is nothing across processes), and the run used to
+#  delete that shared index on its way out — so every task that finished forced
+#  every later task to rebuild it.
+#
+#  A reader landing mid-rewrite does not raise. It gets a silent SUBSET, or —
+#  when the cut falls inside the trailing lenc/lenb field, leaving five still
+#  parseable columns — real accessions carrying the WRONG RESIDUES. Both write a
+#  plausible HDF5 and exit 0, and the num_failed contract cannot see either,
+#  because the missing proteins were never enumerated in the first place.
+# --------------------------------------------------------------------------- #
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+_MODULE = "data_preparation.embeddings.embedding_generation"
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess:
+    """Invoke the module the sbatch invokes, so exit codes are the real ones."""
+    return subprocess.run(
+        [sys.executable, "-m", _MODULE, *args],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin", "HOME": str(Path.home())},
+    )
+
+
+def _write_fasta(path: Path, n: int) -> None:
+    path.write_text("".join(f">P{i:05d}\nMKV{'A' * (10 + i)}\n" for i in range(n)))
+
+
+def test_cohort_guard_accepts_the_expected_count(tmp_path):
+    fasta = tmp_path / "c.fasta"
+    _write_fasta(fasta, 5)
+    r = _run_cli(str(fasta), "esm2_8m", "--random_init", "--expect_sequences", "5",
+                 "--output_hdf5_file", str(tmp_path / "o.h5"))
+    assert "cohort size mismatch" not in r.stderr
+    assert r.returncode != 8
+
+
+def test_cohort_guard_rejects_a_truncated_index(tmp_path):
+    """A .fai cut at a record boundary yields a subset with no exception."""
+    fasta = tmp_path / "c.fasta"
+    _write_fasta(fasta, 5)
+    pyfaidx = pytest.importorskip("pyfaidx")
+    pyfaidx.Fasta(str(fasta))
+    fai = Path(str(fasta) + ".fai")
+    fai.write_text("\n".join(fai.read_text().splitlines()[:2]) + "\n")
+
+    r = _run_cli(str(fasta), "esm2_8m", "--random_init", "--expect_sequences", "5",
+                 "--output_hdf5_file", str(tmp_path / "o.h5"))
+    assert r.returncode == 8, r.stderr
+    assert "cohort size mismatch" in r.stderr
+    assert not (tmp_path / "o.h5").exists(), "a short cohort must not leave an artifact"
+
+
+def test_empty_cohort_is_not_a_success(tmp_path):
+    """A zero-length .fai yields zero records; that used to exit 0."""
+    fasta = tmp_path / "c.fasta"
+    _write_fasta(fasta, 5)
+    pytest.importorskip("pyfaidx").Fasta(str(fasta))
+    Path(str(fasta) + ".fai").write_text("")
+
+    r = _run_cli(str(fasta), "esm2_8m", "--random_init", "--expect_sequences", "5",
+                 "--output_hdf5_file", str(tmp_path / "o.h5"))
+    assert r.returncode != 0, "an empty cohort must never report success"
+    assert not (tmp_path / "o.h5").exists()
+
+
+def test_a_preexisting_index_is_left_for_the_other_tasks(tmp_path):
+    """Deleting a shared index is what makes the race recur for a whole array."""
+    fasta = tmp_path / "c.fasta"
+    _write_fasta(fasta, 5)
+    pytest.importorskip("pyfaidx").Fasta(str(fasta))
+    fai = Path(str(fasta) + ".fai")
+    assert fai.is_file()
+
+    _run_cli(str(fasta), "esm2_8m", "--random_init", "--expect_sequences", "5",
+             "--output_hdf5_file", str(tmp_path / "o.h5"))
+    assert fai.is_file(), "a pre-existing shared index must survive the run"

@@ -110,7 +110,33 @@ MODELS=(
     ankh_base ankh_large
     prot_t5 prost_t5
 )
-SEEDS=(0 1 2)   # D-6: report mean±sd over exactly these
+SEEDS=(0 1 2)   # D-6 originally; see COHORT MATCHING note about running seed 0 only.
+
+# --- COHORT MATCHING (measured 2026-08-05, do not "simplify" to one value) ----
+# Each untrained arm must cover the SAME proteins as its own pretrained twin,
+# and the twins are deliberately heterogeneous. Measured key counts:
+#
+#   esm2_*, ankh_*, prost_t5   542,238  = every record; no length cap
+#   prot_t5                    542,237  = full minus one
+#   esm3_open, esmc_300m/600m  540,881  = EXACTLY the --max_seq_len 2000 cohort
+#   esm1b (and clean)          526,871  = EXACTLY the 1022-residue cohort
+#
+# So the default 2000 is already correct for the native-ESM arms, and esm1b is
+# already correct via effective_max_seq_len's architectural clamp. Raising the
+# cap globally would have BROKEN four arms that currently match. Longest protein
+# in sprot.fasta is 13,477 residues, hence 14000 for the uncapped group.
+#
+# (Over-length sequences are SKIPPED, not truncated — so a wrong cap silently
+# changes which proteins an arm covers rather than changing their vectors.)
+# The case statement itself lives below, after $MODEL is assigned.
+
+# Every task reads ONE shared sprot.fasta. pyfaidx rewrites the .fai index
+# non-atomically, so a task landing mid-rewrite silently gets a subset — or real
+# accessions carrying the wrong residues. Neither raises. Asserting the record
+# count turns that into exit 8 in seconds, before the model is even loaded.
+# Build the index ONCE, alone, before submitting the array:
+#     uv run python -c "from pyfaidx import Fasta; Fasta('$FASTA')"
+EXPECT_SEQUENCES=542238
 
 N_MODELS=${#MODELS[@]}
 N_SEEDS=${#SEEDS[@]}
@@ -127,6 +153,13 @@ fi
 
 MODEL="${MODELS[$((TASK % N_MODELS))]}"
 SEED="${SEEDS[$((TASK / N_MODELS))]}"
+
+# Per-arm cohort cap — see the COHORT MATCHING note above for the measured
+# counts this reproduces. Override for one task with MAX_SEQ_LEN=... sbatch ...
+case "$MODEL" in
+    esmc_300m|esmc_600m|esm3_open) MAX_SEQ_LEN="${MAX_SEQ_LEN:-2000}" ;;
+    *)                             MAX_SEQ_LEN="${MAX_SEQ_LEN:-14000}" ;;
+esac
 
 # A superset of the ~481k proteins the subset splits reference. Embedding extra
 # proteins is scientifically harmless (~4% more work, and the probe only reads the
@@ -216,6 +249,8 @@ uv run python -m data_preparation.embeddings.embedding_generation \
     --random_seed "$SEED" \
     --output_hdf5_file "$OUT" \
     --embedding_type per_protein \
+    --max_seq_len "$MAX_SEQ_LEN" \
+    --expect_sequences "$EXPECT_SEQUENCES" \
     --token_budget "${TOKEN_BUDGET:-16384}"
 
 echo "wrote $OUT"
