@@ -21,8 +21,8 @@ This project aims to train and evaluate machine learning models to predict speci
   # Generate random embeddings (if not already present)
   uv run python src/data_preparation/embeddings/random_embeddings.py
 
-  # Create a subset of the main dataset
-  uv run python scripts/create_subset_datasets.py --input_dir data/processed/sprot_pre2024 --output_dir data/processed/sprot_pre2024_subset --n_samples 1000
+  # Create a subset of the main dataset (uniform 10% row sample per split, seed 42)
+  uv run python scripts/create_subset_datasets.py --input_dir data/processed/sprot_pre2024 --output_dir data/processed/sprot_pre2024_subset --sample_fraction 0.1
 
   # Reduce dimensionality of embeddings using PCA
   uv run python scripts/reduce_embeddings_pca.py --input_dir data/processed/sprot_embs --output_dir data/processed/sprot_embs_pca --n_components 128
@@ -89,6 +89,33 @@ This project aims to train and evaluate machine learning models to predict speci
 - **Processed Data:** Preprocessing scripts save results to `data/processed/<subdir_name>/` (e.g., `data/processed/sprot_train/`). `run_experiments.py` uses the directory specified by `--csv_dir`. This can include subsets or other variations, e.g., `data/processed/sprot_pre2024_subset`.
 - **Embeddings:** Stored as HDF5 files (`.h5`) in directories like `data/processed/sprot_embs/`. This directory contains both PLM embeddings (e.g., `prott5.h5`) and generated random embeddings (e.g., `random_512.h5`). `run_experiments.py` automatically discovers and uses all `.h5` files found here. Reduced-dimensionality embeddings may be stored in separate directories (e.g., `data/processed/sprot_embs_pca`).
 - **CSV Files:** The directory specified via `--csv_dir` must contain `train.csv`, `val.csv`, and `test.csv`.
+
+### Cohorts
+
+Two cohorts of the same data exist, and **they are not interchangeable**.
+`sprot_pre2024_subset` is a uniform 10% row sample of `sprot_pre2024`, taken per split at
+seed 42 (`scripts/create_subset_datasets.py`).
+
+| cohort | train | val | test |
+|---|---|---|---|
+| `sprot_pre2024` (full) | 113,186,256 | 16,105,295 | 15,719,249 |
+| `sprot_pre2024_subset` | 11,318,625 | 1,610,529 | 1,571,924 |
+
+**The probe trains on the SUBSET. Every published cell used it** — all 96 rows of
+`out/sprot_pre2024_subset/parsed_metrics_all.csv`. `run_experiments.py --data_dir` is
+therefore **required and has no default**: it *is* the probe budget (46,656 vs 4,668
+optimizer steps per epoch), and it also selects the test split the bootstrap SEs are
+computed over, so full- and subset-cohort numbers have CIs differing by ~3.2x and **must
+not be placed in the same table**. This bites even the training-free `euclidean` arm, which
+no "training budget" argument would reach.
+
+Results are written to `models/<basename of --data_dir>/`, so a mismatched cohort collides
+with nothing — it silently produces an orphan cell that looks comparable and is not.
+
+**Annotation producers should read the FULL cohort's `test.parquet`.** Its pairs are a strict
+superset of the subset's, so one computation covers both cohorts at 100%; computing on the
+subset covers 10% of the full cohort and cannot be back-filled. See
+`scripts/run_ivan_pipeline.sh` (`ANNOT_SOURCE_DIR` vs `PROBE_COHORT_DIR`).
 
 ## 5. Output Structure
 
