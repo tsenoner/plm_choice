@@ -287,6 +287,11 @@ step_6_random_init() {
     if [[ -f "${RANDOM_INIT_ESM2}" && "$FORCE" == false ]]; then
         echo "  SKIP: $(basename "${RANDOM_INIT_ESM2}") already exists"
     else
+        # Random-init runs open HDF5 with "w-" so a second seed cannot quietly
+        # resume into the first seed's file. That makes --force a delete, not an
+        # overwrite: without the rm it loads the model, reads the FASTA, and only
+        # then dies with FileExistsError.
+        rm -f "${RANDOM_INIT_ESM2}"
         echo "  [6a] Generating random-init ESM2-650M embeddings..."
         uv run python src/data_preparation/embeddings/embedding_generation.py \
             "${FASTA_FILE}" esm2_650m \
@@ -300,6 +305,7 @@ step_6_random_init() {
     if [[ -f "${RANDOM_INIT_PROTT5}" && "$FORCE" == false ]]; then
         echo "  SKIP: $(basename "${RANDOM_INIT_PROTT5}") already exists"
     else
+        rm -f "${RANDOM_INIT_PROTT5}"   # "w-" writer: --force means delete first (see 6a)
         echo "  [6b] Generating random-init ProtT5 embeddings..."
         uv run python src/data_preparation/embeddings/embedding_generation.py \
             "${FASTA_FILE}" prot_t5 \

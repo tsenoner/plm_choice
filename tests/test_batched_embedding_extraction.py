@@ -80,8 +80,10 @@ def test_content_mask_rejects_a_sequence_with_nothing_left():
 
 @pytest.mark.parametrize(
     "n_lead,n_trail",
-    [(1, 1), (0, 1)],  # esm/prost_t5 style, and prot_t5/ankh style
-    ids=["cls_and_eos", "eos_only"],
+    # Every value SPECIAL_TOKEN_TRIM actually uses, plus the no-special-token case
+    # so plain padded pooling is covered by the same equivalence.
+    [(1, 1), (0, 1), (0, 0)],
+    ids=["cls_and_eos", "eos_only", "no_special_tokens"],
 )
 def test_batched_pooling_matches_unbatched_slicing(n_lead, n_trail):
     """The exact equivalence the batched path has to preserve."""
@@ -127,6 +129,17 @@ def test_batching_does_not_depend_on_who_shares_the_batch():
     with_padding = masked_mean_pool(padded, content_mask(att, 1, 1))
 
     assert torch.allclose(alone[0], with_padding[0], atol=1e-6)
+
+
+def test_masked_mean_pool_rejects_an_all_padding_row():
+    """Silently returning 0/0 = nan would poison the HDF5 rather than fail."""
+    with pytest.raises(ValueError):
+        masked_mean_pool(torch.zeros(1, 3, 2), torch.zeros(1, 3, dtype=torch.long))
+
+
+def test_masked_mean_pool_rejects_a_mask_of_the_wrong_shape():
+    with pytest.raises(ValueError):
+        masked_mean_pool(torch.zeros(2, 3, 2), torch.ones(2, 4, dtype=torch.long))
 
 
 def test_pooling_is_stable_in_bfloat16_within_tolerance():

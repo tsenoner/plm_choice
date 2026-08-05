@@ -28,36 +28,126 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from data_preparation.embeddings.embedding_generation import (  # noqa: E402
+    MODEL_CONFIGS,
     _reinit_weights,
     default_output_path,
-    masked_mean_pool,
+    effective_max_seq_len,
+    load_model_and_tokenizer,
     process_sequences_and_save,
-    should_apply_post_load_hook,
 )
+from tests.conftest import tiny_esm_config  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #            the random arm must run at its twin's compute precision
 # --------------------------------------------------------------------------- #
 
 
-def test_post_load_hook_applies_to_random_init_too():
+def _stub_config(monkeypatch, **extra):
+    """A MODEL_CONFIGS entry whose model loads from a local tiny config."""
+    pytest.importorskip("transformers")
+    from transformers import EsmModel
+
+    import data_preparation.embeddings.embedding_generation as eg
+
+    monkeypatch.setattr(
+        eg.AutoConfig,
+        "from_pretrained",
+        classmethod(lambda cls, *a, **k: tiny_esm_config()),
+    )
+    cfg = {
+        "hf_id": "stub/esm",
+        "loader": "transformers",
+        "model_class": EsmModel,
+        "tokenizer_class": None,
+        "family_key": "esm_transformer",
+    }
+    cfg.update(extra)
+    return cfg
+
+
+def test_post_load_hook_runs_on_the_random_arm(monkeypatch):
     """`pretrained - random_init` is only a statement about weights.
 
     ProtT5/ProstT5 carry a `.half()` post-load hook, so skipping it for the
     random arm means the untrained model computes in fp32 while its pretrained
     twin computed in fp16. That difference lands directly in the headline
     difference and is indistinguishable from a pretraining effect.
+
+    Drives the real loader: asserting that a predicate returns True proves
+    nothing about whether ``load_model_and_tokenizer`` ever calls the hook.
     """
-    assert should_apply_post_load_hook(post_load_hook=lambda m: None, random_init=True)
+    fired = []
+    cfg = _stub_config(monkeypatch, post_load_hook=lambda m: fired.append(m) or m)
+
+    load_model_and_tokenizer(
+        "stub", cfg, None, torch.device("cpu"), random_init=True, random_seed=0
+    )
+
+    assert fired, "the random arm skipped the post-load hook"
 
 
-def test_post_load_hook_still_applies_to_pretrained():
-    assert should_apply_post_load_hook(post_load_hook=lambda m: None, random_init=False)
+def test_post_load_hook_runs_on_the_pretrained_arm_too(monkeypatch):
+    fired = []
+    cfg = _stub_config(monkeypatch, post_load_hook=lambda m: fired.append(m) or m)
+    from transformers import EsmModel
+
+    monkeypatch.setattr(
+        EsmModel,
+        "from_pretrained",
+        classmethod(lambda cls, *a, **k: EsmModel(tiny_esm_config())),
+    )
+
+    load_model_and_tokenizer(
+        "stub", cfg, None, torch.device("cpu"), random_init=False, random_seed=0
+    )
+
+    assert fired, "the pretrained arm skipped the post-load hook"
 
 
-def test_no_hook_means_nothing_to_apply():
-    assert not should_apply_post_load_hook(post_load_hook=None, random_init=True)
-    assert not should_apply_post_load_hook(post_load_hook=None, random_init=False)
+def test_random_init_honours_a_dtype_declared_only_in_load_kwargs(monkeypatch):
+    """from_pretrained applies torch_dtype; constructing from a config does not.
+
+    A model that expresses fp16 through ``load_kwargs`` alone would otherwise give
+    its untrained twin fp32 — the precision confound, reintroduced silently.
+    """
+    cfg = _stub_config(monkeypatch, load_kwargs={"torch_dtype": torch.float16})
+
+    model, _, _ = load_model_and_tokenizer(
+        "stub", cfg, None, torch.device("cpu"), random_init=True, random_seed=0
+    )
+
+    assert all(p.dtype == torch.float16 for p in model.parameters())
+
+
+# --------------------------------------------------------------------------- #
+#                 different seeds must mean different weights
+# --------------------------------------------------------------------------- #
+
+
+def test_transformers_random_init_is_seeded_and_reproducible(monkeypatch):
+    """The defect this whole branch exists to prevent, at its root.
+
+    ``sd = 0.000`` does not need a filename collision to happen: if the seed
+    stopped reaching the weights — say ``torch.manual_seed`` drifted below the
+    constructor — all three seeds would produce identical models and every
+    filename test here would still pass. 10 of the 13 grid arms take this
+    ``transformers`` path, so it is the one that matters most.
+    """
+    cfg = _stub_config(monkeypatch)
+
+    def weights(seed):
+        model, _, _ = load_model_and_tokenizer(
+            "stub", cfg, None, torch.device("cpu"), random_init=True, random_seed=seed
+        )
+        return torch.cat([p.detach().flatten() for p in model.parameters()])
+
+    a0, a0_again, a1 = weights(0), weights(0), weights(1)
+
+    assert torch.equal(a0, a0_again), "same seed must reproduce the same weights"
+    assert not torch.equal(a0, a1), (
+        "seeds 0 and 1 produced identical weights — the untrained arm's error bar "
+        "would be exactly 0.000 regardless of how many seeds were run"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -67,8 +157,6 @@ def test_no_hook_means_nothing_to_apply():
 
 def test_esm1b_is_configured():
     """Without this entry the random-init baseline covers 12 of 16 paper arms."""
-    from data_preparation.embeddings.embedding_generation import MODEL_CONFIGS
-
     assert "esm1b" in MODEL_CONFIGS
     cfg = MODEL_CONFIGS["esm1b"]
     assert cfg["hf_id"] == "facebook/esm1b_t33_650M_UR50S"
@@ -76,40 +164,44 @@ def test_esm1b_is_configured():
     assert cfg["loader"] == "transformers"
 
 
-def test_esm1b_declares_its_position_limit():
-    """ESM-1b uses absolute position embeddings capped at 1026 (1024 + cls/eos).
+def test_esm1b_position_limit_leaves_room_for_the_position_id_offset():
+    """The cap is 1022 residues, and the two missing slots are easy to lose.
 
-    Every ESM-2 in this file is rotary and has no such ceiling, so the limit is
-    easy to forget — and exceeding it raises an index error deep in the forward
-    pass rather than degrading gracefully.
+    ``max_position_embeddings`` is 1026, but HuggingFace derives position ids as
+    ``cumsum(mask) + padding_idx`` with ``padding_idx = 1``, so T tokens reach id
+    T+1 and the table admits at most T = 1024 tokens — <cls> + 1022 residues +
+    <eos>. Verified against the real checkpoint: 1022 passes, 1023 and 1024 both
+    raise IndexError.
+
+    Pinning 1024 here would not have been a harmless off-by-two: on CUDA the
+    out-of-range embedding lookup is a device-side assert that kills every
+    subsequent batch in the task, and bucketing runs shortest-first, so the run
+    loses its whole long tail and still exits 0.
     """
-    from data_preparation.embeddings.embedding_generation import MODEL_CONFIGS
-
-    assert MODEL_CONFIGS["esm1b"]["max_positions"] == 1024
-    # The rotary ESM-2 models must NOT claim a limit they do not have.
-    assert "max_positions" not in MODEL_CONFIGS["esm2_650m"]
-
-
-def test_position_limit_is_applied_when_the_caller_gives_no_max_seq_len():
-    """A run that forgets --max_seq_len must not crash 400k proteins in."""
-    from data_preparation.embeddings.embedding_generation import (
-        MODEL_CONFIGS,
-        effective_max_seq_len,
-    )
-
-    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], None) == 1024
-    assert effective_max_seq_len(MODEL_CONFIGS["esm2_650m"], None) is None
+    cfg = MODEL_CONFIGS["esm1b"]
+    max_position_embeddings, padding_idx, n_special = 1026, 1, 2
+    assert cfg["max_positions"] == (
+        max_position_embeddings - padding_idx - 1 - n_special
+    ) == 1022
 
 
-def test_caller_may_tighten_but_not_exceed_the_position_limit():
-    from data_preparation.embeddings.embedding_generation import (
-        MODEL_CONFIGS,
-        effective_max_seq_len,
-    )
+@pytest.mark.parametrize("model_key", sorted(MODEL_CONFIGS))
+def test_position_limit_is_declared_only_where_the_architecture_has_one(model_key):
+    """State the contract, rather than pinning one other model's absence of a key.
 
-    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], 500) == 500
-    # Asking for more than the architecture supports is clamped, not honoured.
-    assert effective_max_seq_len(MODEL_CONFIGS["esm1b"], 4000) == 1024
+    Rotary and native-ESM models have no absolute-position ceiling; a model that
+    declares one must have it honoured when the caller passes no --max_seq_len.
+    """
+    cfg = MODEL_CONFIGS[model_key]
+    ceiling = cfg.get("max_positions")
+    if ceiling is None:
+        assert effective_max_seq_len(cfg, None) is None
+    else:
+        assert effective_max_seq_len(cfg, None) == ceiling
+        # Asking for more than the architecture supports is clamped, not honoured.
+        assert effective_max_seq_len(cfg, ceiling + 1000) == ceiling
+        # The caller may always ask for less.
+        assert effective_max_seq_len(cfg, ceiling - 1) == ceiling - 1
 
 
 # --------------------------------------------------------------------------- #
@@ -195,7 +287,7 @@ def test_pretrained_run_may_still_resume(tmp_path, read_h5):
 
     # Feeding back an id the file already holds exercises the resume path: with
     # "w-" this would raise, and with "w" the dataset would be gone.
-    n_done = process_sequences_and_save(
+    n_done, n_failed = process_sequences_and_save(
         sequences_to_process=[("P12345", "MKT")],
         model=None,
         tokenizer=None,
@@ -209,6 +301,7 @@ def test_pretrained_run_may_still_resume(tmp_path, read_h5):
     )
 
     assert n_done == 1, "resume must find the stored embedding, not recompute it"
+    assert n_failed == 0, "an already-present protein is not a failure"
 
     fh = read_h5(existing)
     assert "P12345" in fh, "resume must not truncate the file"
@@ -250,51 +343,76 @@ def test_reinit_still_zeroes_layernorm_bias_when_present():
 
 
 # --------------------------------------------------------------------------- #
-#                    batched pooling must ignore padding
+#            an incomplete run must not look like a finished one
 # --------------------------------------------------------------------------- #
+#
+# (Pooling itself is covered in test_batched_embedding_extraction.py, which owns
+# that contract. What belongs here is what the RUN reports back.)
 
 
-def test_masked_mean_pool_ignores_padding():
-    """A plain .mean() over a padded batch is wrong, and worse for short proteins."""
-    # Two sequences of real length 2 and 4, padded to 4.
-    hidden = torch.tensor(
-        [
-            [[1.0, 1.0], [3.0, 3.0], [99.0, 99.0], [99.0, 99.0]],
-            [[1.0, 1.0], [2.0, 2.0], [3.0, 3.0], [4.0, 4.0]],
-        ]
+def _failing_model(*_args, **_kwargs):
+    raise RuntimeError("simulated device-side assert")
+
+
+@pytest.mark.parametrize("token_budget", [0, 64], ids=["unbatched", "batched"])
+def test_a_run_that_drops_proteins_reports_them_as_failures(tmp_path, token_budget):
+    """Both paths must agree on what "processed" means.
+
+    Every failure inside the writer is caught and logged so one bad protein does
+    not lose the run, which makes the returned counts the only signal that the
+    file is incomplete. They previously disagreed: the batched path counted only
+    new writes and the unbatched path also counted skips, so the same cohort
+    reported two different totals depending on --token_budget.
+    """
+    pytest.importorskip("h5py")
+    pytest.importorskip("transformers")
+    from tests.test_batched_driver_equivalence import StubTokenizer
+
+    n_ok, n_failed = process_sequences_and_save(
+        sequences_to_process=[("P1", "MKTA"), ("P2", "MKVAA")],
+        model=_failing_model,
+        tokenizer=StubTokenizer(),
+        family_key="esm_transformer",
+        embedding_type="per_protein",
+        device=torch.device("cpu"),
+        h5_output_path=tmp_path / "out.h5",
+        max_seq_len=None,
+        model_key_for_filename="stub",
+        token_budget=token_budget,
     )
-    mask = torch.tensor([[1, 1, 0, 0], [1, 1, 1, 1]])
 
-    pooled = masked_mean_pool(hidden, mask)
-
-    assert pooled.shape == (2, 2)
-    assert torch.allclose(pooled[0], torch.tensor([2.0, 2.0]))
-    assert torch.allclose(pooled[1], torch.tensor([2.5, 2.5]))
-
-
-def test_masked_mean_pool_matches_unbatched_mean():
-    """The batched path must reproduce the batch-size-1 result it replaces."""
-    torch.manual_seed(0)
-    lengths = [3, 7, 5]
-    dim = 6
-    padded = torch.zeros(len(lengths), max(lengths), dim)
-    mask = torch.zeros(len(lengths), max(lengths), dtype=torch.long)
-    singles = []
-    for i, n in enumerate(lengths):
-        seq = torch.randn(n, dim)
-        padded[i, :n] = seq
-        mask[i, :n] = 1
-        singles.append(seq.mean(dim=0))
-
-    pooled = masked_mean_pool(padded, mask)
-
-    for i, expected in enumerate(singles):
-        assert torch.allclose(pooled[i], expected, atol=1e-6), f"row {i} differs"
+    assert n_ok == 0
+    assert n_failed == 2, (
+        "a run that embedded nothing must not be indistinguishable from a "
+        "complete one — main() turns this into a non-zero exit"
+    )
 
 
-def test_masked_mean_pool_rejects_an_all_padding_row():
-    """Silently returning 0/0 = nan would poison the HDF5 rather than fail."""
-    hidden = torch.zeros(1, 3, 2)
-    mask = torch.zeros(1, 3, dtype=torch.long)
-    with pytest.raises(ValueError):
-        masked_mean_pool(hidden, mask)
+def test_batched_and_unbatched_agree_on_a_resumed_cohort(tmp_path):
+    """The already-present count must not depend on --token_budget."""
+    h5py = pytest.importorskip("h5py")
+    pytest.importorskip("transformers")
+    from tests.test_batched_driver_equivalence import StubTokenizer, tiny_esm
+
+    model = tiny_esm()
+    counts = []
+    for i, token_budget in enumerate([0, 64]):
+        path = tmp_path / f"resume_{i}.h5"
+        with h5py.File(path, "w") as fh:
+            fh.create_dataset("P1", data=np.zeros(32, dtype=np.float32))
+        counts.append(
+            process_sequences_and_save(
+                sequences_to_process=[("P1", "MKTA"), ("P2", "MKVAA")],
+                model=model,
+                tokenizer=StubTokenizer(),
+                family_key="esm_transformer",
+                embedding_type="per_protein",
+                device=torch.device("cpu"),
+                h5_output_path=path,
+                max_seq_len=None,
+                model_key_for_filename="stub",
+                token_budget=token_budget,
+            )
+        )
+
+    assert counts[0] == counts[1] == (2, 0)

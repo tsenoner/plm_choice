@@ -4,11 +4,19 @@
 # Submit as an array over the 13 model x 3 seed grid = 39 tasks (0-38):
 #
 #     cd ~/plm_choice
+#     mkdir -p logs            # REQUIRED: see the -o/-e note below
+#     uv sync --locked         # once, not from 39 concurrent tasks
 #     sbatch --array=0-38 scripts/lrz/embed_random_init.sbatch
 #
 # Validate without queueing anything first:
 #
 #     sbatch --test-only --array=0-38 scripts/lrz/embed_random_init.sbatch
+#
+# `--test-only` does NOT check the -o/-e paths. logs/ is gitignored, so a fresh
+# clone does not have it, and Slurm will not create it: every task would be
+# allocated after the multi-day queue wait and then die at step launch with
+# "Unable to open file logs/..." — written nowhere readable, because both stdout
+# and stderr point into the missing directory. Hence the mkdir above.
 #
 # The script derives its own bounds and refuses an out-of-range index rather
 # than silently mis-pairing a model with the wrong seed.
@@ -53,7 +61,17 @@ set -euo pipefail
 # what data/ and models/ are.
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
 export DATA_DIR="${DATA_DIR:-$DSS/plm_choice_data/data}"
-OUT_DIR="${OUT_DIR:-$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings_random_init}"
+
+# Under sprot_pre2024_SUBSET, because that is the cohort the probe trains on —
+# every published cell used it (11.3M pairs); the full splits are 10x larger, and
+# giving the untrained arm 10x the probe budget biases the comparison toward it,
+# understating the very quantity being claimed.
+#
+# NOTE these land in embeddings_random_init/, not embeddings/. run_experiments.py
+# globs "<data_dir>/embeddings/*.h5" and needs a sibling sets/, so the files must
+# be moved or symlinked into embeddings/ before the probe grid runs. Kept separate
+# here so a half-finished array cannot be picked up by an unrelated probe run.
+OUT_DIR="${OUT_DIR:-$DATA_DIR/processed/sprot_pre2024_subset/embeddings_random_init}"
 
 # Keep the HuggingFace cache off the 100 GB backed-up HOME.
 export HF_HOME="${HF_HOME:-$DSS/cache/huggingface}"
@@ -64,8 +82,24 @@ export HF_HOME="${HF_HOME:-$DSS/cache/huggingface}"
 # an i.i.d. noise floor, not a pLM, so it needs no untrained twin. Every arm in
 # the comparison therefore now has an architectural twin.
 #
-# esm1b caps at 1024 residues (absolute position embeddings, unlike the rotary
-# ESM-2s); the script clamps --max_seq_len to that automatically.
+# esm1b caps at 1022 residues (absolute position embeddings, unlike the rotary
+# ESM-2s); the script clamps --max_seq_len to that automatically. That arm
+# therefore covers strictly fewer proteins than the other twelve — join on the
+# intersection when building any cross-arm table.
+#
+# esm3_open / esmc_300m / esmc_600m expose their own encode()/logits() API rather
+# than a tokenizer + forward pass, so --token_budget does NOT apply to them; they
+# run one sequence per pass (the run now warns when this happens). That is 9 of
+# the 39 tasks, and 8h is not enough for them — submit those separately with a
+# longer --time, e.g.:
+#
+#     sbatch --time=24:00:00 --array=6,7,8,19,20,21,32,33,34 scripts/lrz/embed_random_init.sbatch
+#     sbatch --array=0-5,9-18,22-31,35-38 scripts/lrz/embed_random_init.sbatch
+# Hand-typed for readability, then CHECKED against the registry below rather than
+# trusted. A stale hand-maintained arm list is exactly the defect the new esm1b
+# entry fixes (and src/data_preparation/embeddings/batch_embedding_generation.sh
+# still carries a list containing "prot_t5_xl", which is not a valid key at all).
+# Preserving the mechanism one level up in bash would just move the drift.
 MODELS=(
     esm1b
     esm2_8m esm2_35m esm2_150m esm2_650m esm2_3b
@@ -91,11 +125,20 @@ fi
 MODEL="${MODELS[$((TASK % N_MODELS))]}"
 SEED="${SEEDS[$((TASK / N_MODELS))]}"
 
-# The probe is trained on the SUBSET splits, so embed the proteins those splits
-# reference. Every published cell used sprot_pre2024_subset (11.3M pairs); the
-# full splits are 10x larger, and giving the untrained arm 10x the probe budget
-# biases the comparison toward it — understating the very quantity being claimed.
+# A superset of the ~481k proteins the subset splits reference. Embedding extra
+# proteins is scientifically harmless (~4% more work, and the probe only reads the
+# ids its splits name) — what matters is which SPLITS the probe trains on, which
+# is OUT_DIR's business above, not this file's.
+#
+# VERIFY THIS PATH BEFORE SUBMITTING: it appears nowhere else in the repo, and the
+# check that would catch a typo (embedding_generation.py exits 1 on a missing
+# FASTA) runs *after* the GPU allocation — so all 39 tasks would each burn an A100
+# slot to print "FASTA file not found".
 FASTA="${FASTA:-$DATA_DIR/raw/sprot_2024/sprot.fasta}"
+
+# Explicit per-seed output path. The default would also carry the seed now, but
+# being explicit here means a rename upstream cannot silently collapse the grid.
+OUT="$OUT_DIR/random_init_${MODEL}_seed${SEED}.h5"
 
 mkdir -p "$OUT_DIR" logs
 
@@ -103,6 +146,29 @@ echo "host=$(hostname) task=$TASK model=$MODEL seed=$SEED"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 cd "$HOME/plm_choice"
+
+# Everything cheap and local is checked before `uv sync` and the model load, so a
+# misconfigured array fails in seconds rather than after the environment is built.
+# (Both checks come after the cd, so a RELATIVE override is resolved against the
+# same directory the Python process will use, not the submit directory.)
+if [ ! -f "$FASTA" ]; then
+    echo "ERROR: FASTA not found: $FASTA (override with FASTA=... sbatch ...)" >&2
+    exit 6
+fi
+
+# Deliberately NOT "exists -> exit 0". -f tests existence, not completeness, and
+# the batched writer flushes as it goes — so a task killed at the wall clock leaves
+# a readable but partial file. Skipping on existence would print "already present",
+# exit 0 and mail END: the grid reports complete while one seed's probe trained on
+# a fraction of the cohort, which is the fabricated-error-bar failure this branch
+# exists to close, just non-zero this time. The writer opens "w-", so the only
+# correct recovery is to delete the file and rerun; say so.
+if [ -f "$OUT" ]; then
+    echo "ERROR: $OUT already exists. It may be a completed arm or a wall-clock" >&2
+    echo "       truncation — check its key count against the FASTA before reusing" >&2
+    echo "       it. To regenerate: rm '$OUT' && sbatch --array=$TASK ..." >&2
+    exit 4
+fi
 
 # uv lives in ~/.local/bin, which is added by the login-shell profile. A batch
 # job is NOT a login shell, so `uv` resolves only if the submitting environment
@@ -113,18 +179,28 @@ command -v uv >/dev/null || { echo "ERROR: uv not found on PATH ($PATH)" >&2; ex
 
 uv sync --locked
 
-# Explicit per-seed output path. The default would also carry the seed now, but
-# being explicit here means a rename upstream cannot silently collapse the grid.
-OUT="$OUT_DIR/random_init_${MODEL}_seed${SEED}.h5"
-if [ -f "$OUT" ]; then
-    echo "already present, nothing to do: $OUT"
-    exit 0
+# Fail here, on one task, rather than discovering after the whole array drains
+# that the grid silently missed an arm (or queued one that argparse will reject).
+REGISTRY="$(uv run python -c 'from data_preparation.embeddings.embedding_generation import MODEL_CONFIGS; print("\n".join(sorted(MODEL_CONFIGS)))')"
+EXPECTED="$(printf '%s\n' "${MODELS[@]}" | sort)"
+if [ "$REGISTRY" != "$EXPECTED" ]; then
+    echo "ERROR: this script's MODELS list has drifted from MODEL_CONFIGS." >&2
+    diff <(echo "$EXPECTED") <(echo "$REGISTRY") >&2 || true
+    echo "       Update MODELS (and --array bounds: $N_MODELS models x $N_SEEDS seeds)." >&2
+    exit 5
 fi
 
 # --token_budget turns ~481k single-sequence forward passes into length-bucketed
-# batches. It is numerically exact: verified end-to-end, batched and unbatched
-# HDF5 agree to 4.8e-07 (float32 rounding). 16384 suits an 80GB A100; lower it
-# for esm2_3b if a task OOMs.
+# batches. 16384 suits an 80GB A100; lower it for esm2_3b if a task OOMs (an OOM
+# now halves the batch and retries rather than dropping the whole tail to one
+# sequence per pass).
+#
+# Numerics: for the fp32 arms this is exact — batched and unbatched HDF5 agree to
+# 4.8e-07. For prot_t5 and prost_t5 it is NOT: those load in fp16, and the
+# unbatched path takes its mean in numpy at fp16 while the batched path pools in
+# fp32, so the two differ by ~3.7e-04 relative. The batched value is the more
+# accurate one, but it means an fp16 arm regenerated here is not bit-comparable
+# with a pretrained twin produced by the old path.
 #
 # --bf16 is deliberately NOT set. It would speed this up further, but it changes
 # the vectors, and the pretrained twins these are subtracted from were produced
