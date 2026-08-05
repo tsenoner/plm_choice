@@ -267,8 +267,13 @@ step_5_brenda_validation() {
 #                    STEP 6: Random-Init Baselines
 # --------------------------------------------------------------------------- #
 
-RANDOM_INIT_ESM2="${EMBEDDINGS_DIR}/random_init_esm2_650m.h5"
-RANDOM_INIT_PROTT5="${EMBEDDINGS_DIR}/random_init_prot_t5.h5"
+# The seed belongs in the filename: D-6 reports this arm as mean±sd over seeds
+# 0/1/2, and a shared path makes the writer skip every already-present protein
+# and exit 0, publishing sd = 0.000. This step demonstrates ONE seed; the full
+# 13-model x 3-seed grid is scripts/lrz/embed_random_init.sbatch.
+RANDOM_SEED="${RANDOM_SEED:-0}"
+RANDOM_INIT_ESM2="${EMBEDDINGS_DIR}/random_init_esm2_650m_seed${RANDOM_SEED}.h5"
+RANDOM_INIT_PROTT5="${EMBEDDINGS_DIR}/random_init_prot_t5_seed${RANDOM_SEED}.h5"
 
 step_6_random_init() {
     # Check that FASTA file exists
@@ -280,24 +285,32 @@ step_6_random_init() {
 
     # 6a: Random-init ESM2-650M
     if [[ -f "${RANDOM_INIT_ESM2}" && "$FORCE" == false ]]; then
-        echo "  SKIP: random_init_esm2_650m.h5 already exists"
+        echo "  SKIP: $(basename "${RANDOM_INIT_ESM2}") already exists"
     else
+        # Random-init runs open HDF5 with "w-" so a second seed cannot quietly
+        # resume into the first seed's file. That makes --force a delete, not an
+        # overwrite: without the rm it loads the model, reads the FASTA, and only
+        # then dies with FileExistsError.
+        rm -f "${RANDOM_INIT_ESM2}"
         echo "  [6a] Generating random-init ESM2-650M embeddings..."
         uv run python src/data_preparation/embeddings/embedding_generation.py \
             "${FASTA_FILE}" esm2_650m \
             --random_init \
+            --random_seed "${RANDOM_SEED}" \
             --output_hdf5_file "${RANDOM_INIT_ESM2}" \
             --embedding_type per_protein
     fi
 
     # 6b: Random-init ProtT5
     if [[ -f "${RANDOM_INIT_PROTT5}" && "$FORCE" == false ]]; then
-        echo "  SKIP: random_init_prot_t5.h5 already exists"
+        echo "  SKIP: $(basename "${RANDOM_INIT_PROTT5}") already exists"
     else
+        rm -f "${RANDOM_INIT_PROTT5}"   # "w-" writer: --force means delete first (see 6a)
         echo "  [6b] Generating random-init ProtT5 embeddings..."
         uv run python src/data_preparation/embeddings/embedding_generation.py \
             "${FASTA_FILE}" prot_t5 \
             --random_init \
+            --random_seed "${RANDOM_SEED}" \
             --output_hdf5_file "${RANDOM_INIT_PROTT5}" \
             --embedding_type per_protein
     fi

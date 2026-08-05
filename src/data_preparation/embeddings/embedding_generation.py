@@ -46,6 +46,8 @@ from esm.models.esm3 import ESM3
 from esm.models.esmc import ESMC
 from esm.sdk.api import ESMProtein, SamplingConfig, LogitsConfig
 
+from shared.embedding_names import random_init_stem
+
 
 # --------------------------------------------------------------------------- #
 #                            MODEL CONFIGURATION
@@ -54,6 +56,37 @@ from esm.sdk.api import ESMProtein, SamplingConfig, LogitsConfig
 ModelConfig = Dict[str, Any]
 
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
+    # --- ESM-1b via HuggingFace Transformers ---
+    # Added so the random-init baseline has an untrained twin for the esm1b arm
+    # (Track B4). Without it the baseline covered 12 of the paper's 16 arms.
+    #
+    # ESM-1b is NOT an ESM-2 with different weights. It uses *absolute* learned
+    # position embeddings, where every ESM-2 here uses rotary and has no such
+    # ceiling. Sequences past the limit raise an index error inside the forward
+    # pass rather than degrading gracefully.
+    #
+    # The residue cap is 1022, not 1024, and the two lost slots are easy to miss:
+    # `max_position_embeddings` is 1026, but HuggingFace's
+    # `create_position_ids_from_input_ids` returns `cumsum(mask) * mask +
+    # padding_idx` with `padding_idx = 1`, so the first token sits at position id
+    # 2 and T tokens reach id T+1. An embedding table of 1026 rows accepts at most
+    # id 1025, hence T <= 1024 tokens = <cls> + 1022 residues + <eos>.
+    #
+    # Verified against the real checkpoint: 1022 residues succeed; 1023 and 1024
+    # both raise `IndexError: index out of range in self`. Getting this wrong is
+    # expensive on CUDA, where an out-of-range nn.Embedding index is a device-side
+    # assert that poisons the context — every later batch in the task fails too,
+    # and because length bucketing runs shortest-first the losses are the tail of
+    # the cohort. `truncation=True` does not save it: the tokenizer reports
+    # model_max_length ~1e30, so it never fires.
+    "esm1b": {
+        "hf_id": "facebook/esm1b_t33_650M_UR50S",
+        "loader": "transformers",
+        "model_class": EsmModel,
+        "tokenizer_class": AutoTokenizer,
+        "family_key": "esm_transformer",
+        "max_positions": 1022,
+    },
     # --- ESM models via HuggingFace Transformers ---
     "esm2_8m": {
         "hf_id": "facebook/esm2_t6_8M_UR50D",
@@ -176,8 +209,15 @@ def login_to_huggingface(token_path_str: Optional[str] = None):
     if token_path_str:
         token_file = Path(token_path_str)
     else:
-        # Default token locations
-        potential_paths = [
+        # Default token locations. HF_HOME first: cluster jobs relocate the cache
+        # off a small backed-up HOME, and `huggingface-cli login` writes the token
+        # under HF_HOME when it is set — so looking only in ~ misses it and the
+        # gated esm3-open load fails with an auth error instead.
+        potential_paths = []
+        hf_home = os.environ.get("HF_HOME")
+        if hf_home:
+            potential_paths.append(Path(hf_home) / "token")
+        potential_paths += [
             Path.home() / ".cache" / "huggingface" / "token",
             Path.home() / ".huggingface" / "token",
         ]
@@ -276,10 +316,20 @@ def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
     starts from ``from_pretrained``, so an unhandled module leaves PRETRAINED
     weights inside a baseline whose entire premise is that nothing was learned —
     and ESM3/ESMC are exactly the custom-block architectures where that is
-    plausible. Any such parameter is therefore reported loudly rather than left
-    to pass for an untrained model.
+    plausible. ESM-C is fully covered; ESM-3 is not, because
+    ``GeometricReasoningOriginalImpl`` declares ``distance_scale_per_head`` and
+    ``rotation_scale_per_head`` as bare ``nn.Parameter``. Any such parameter
+    therefore raises rather than printing a warning into a Slurm log nobody
+    diffs: "mostly untrained" is not a baseline anyone can publish.
     """
-    generator = torch.Generator()
+    # ESMC.from_pretrained / ESM3.from_pretrained default to device="cuda" when a
+    # GPU is visible, so the parameters can already be on the device by the time we
+    # get here. A CPU generator against a CUDA tensor raises out of ATen's
+    # check_generator ("Expected a 'cuda' device type for generator but found
+    # 'cpu'") on the very first Linear — which took out all three native-ESM arms
+    # on a GPU node while every CPU test passed.
+    params = list(module.parameters())
+    generator = torch.Generator(device=params[0].device if params else "cpu")
     generator.manual_seed(seed)
 
     handled: set[int] = set()
@@ -298,21 +348,331 @@ def _reinit_weights(module: torch.nn.Module, seed: int = 42) -> None:
                 with torch.no_grad():
                     submodule.weight[submodule.padding_idx].fill_(0.0)
         elif isinstance(submodule, torch.nn.LayerNorm):
-            torch.nn.init.ones_(submodule.weight)
-            torch.nn.init.zeros_(submodule.bias)
-            handled.update((id(submodule.weight), id(submodule.bias)))
+            # Neither tensor is guaranteed to exist: ESM-3 and ESM-C build their
+            # LayerNorms with bias=False, and elementwise_affine=False drops the
+            # weight as well. Unguarded, zeros_(None) raises and takes out three
+            # of the top four arms on fident and hfsp.
+            if submodule.weight is not None:
+                torch.nn.init.ones_(submodule.weight)
+                handled.add(id(submodule.weight))
+            if submodule.bias is not None:
+                torch.nn.init.zeros_(submodule.bias)
+                handled.add(id(submodule.bias))
 
     untouched = [name for name, p in module.named_parameters() if id(p) not in handled]
     if untouched:
         preview = ", ".join(untouched[:10])
         suffix = f", ... (+{len(untouched) - 10} more)" if len(untouched) > 10 else ""
-        print(
-            f"⚠️ --random_init: {len(untouched)} parameter tensor(s) are not covered by "
-            f"the Linear/Embedding/LayerNorm re-init and therefore KEEP THEIR "
+        raise RuntimeError(
+            f"--random_init: {len(untouched)} parameter tensor(s) are not covered by "
+            f"the Linear/Embedding/LayerNorm re-init and would KEEP THEIR "
             f"PRETRAINED VALUES: {preview}{suffix}\n"
-            f"   This baseline is only an untrained architecture if that list is empty. "
+            f"This baseline is only an untrained architecture if that list is empty. "
             f"Extend _reinit_weights before reporting numbers from this model."
         )
+
+
+def default_output_path(
+    fasta_file: Path,
+    model_key: str,
+    random_init: bool,
+    random_seed: int,
+) -> Path:
+    """Where embeddings go when ``--output_hdf5_file`` is not given.
+
+    The random-init name comes from ``shared.embedding_names`` so that the
+    producer and the figures that have to group seeds back together cannot drift
+    apart — see :func:`~shared.embedding_names.random_init_stem` for why the seed
+    is in there at all.
+    """
+    if random_init:
+        return fasta_file.with_name(f"{random_init_stem(model_key, random_seed)}.h5")
+    return fasta_file.with_name(f"{fasta_file.stem}_{model_key.replace('/', '_')}.h5")
+
+
+def masked_mean_pool(
+    hidden_states: "torch.Tensor", attention_mask: "torch.Tensor"
+) -> "torch.Tensor":
+    """Mean-pool ``(B, L, D)`` hidden states over real tokens only.
+
+    Batching is the 25-75x lever on this workload, but a plain ``.mean(dim=1)``
+    over a padded batch averages the padding in too, and the error grows the
+    shorter a protein is relative to the longest member of its batch. That is a
+    silent corruption: the vectors still look plausible.
+    """
+    if attention_mask.shape != hidden_states.shape[:2]:
+        raise ValueError(
+            f"attention_mask {tuple(attention_mask.shape)} does not match "
+            f"hidden_states {tuple(hidden_states.shape[:2])}"
+        )
+    mask = attention_mask.to(hidden_states.dtype)
+    token_counts = mask.sum(dim=1, keepdim=True)
+    if bool((token_counts == 0).any()):
+        raise ValueError(
+            "at least one sequence has no unmasked tokens; pooling it would "
+            "divide by zero and write NaNs into the HDF5"
+        )
+    # einsum rather than (hidden_states * mask).sum(dim=1): the elementwise form
+    # materialises a second full (B, L, D) tensor before reducing it away, which
+    # at a 16384-token budget is an extra 168 MB for esm2_3b. That temporary is
+    # comparable to the forward's own activation peak, so it directly caps the
+    # token budget the batching is trying to raise.
+    return torch.einsum("bld,bl->bd", hidden_states, mask) / token_counts
+
+
+def effective_max_seq_len(
+    config: ModelConfig, requested: Optional[int]
+) -> Optional[int]:
+    """Reconcile ``--max_seq_len`` with the architecture's own ceiling.
+
+    ESM-1b uses absolute learned position embeddings and tops out at 1022
+    residues (see MODEL_CONFIGS["esm1b"] for where the two missing slots go); the
+    ESM-2 models here are rotary and have no equivalent limit. Exceeding the cap
+    raises an index error inside the forward pass, so a run that forgot the flag
+    would die partway through a 480k-protein cohort rather than at the start.
+
+    ``requested`` and ``max_positions`` are both counted in RESIDUES, so that the
+    comparison against ``len(sequence)`` at the call sites is like-for-like.
+
+    The caller may ask for less than the architecture allows; asking for more is
+    clamped rather than honoured.
+    """
+    ceiling = config.get("max_positions")
+    if ceiling is None:
+        return requested
+    if requested is None:
+        return int(ceiling)
+    return min(int(requested), int(ceiling))
+
+
+def content_mask(
+    attention_mask: "torch.Tensor", n_lead: int, n_trail: int
+) -> "torch.Tensor":
+    """Mask selecting real residues only: no padding, no special tokens.
+
+    The unbatched path strips special tokens by slicing ``[1:-1]`` or ``[:-1]``,
+    which is correct only because the batch holds one sequence. Under
+    right-padding a short sequence's trailing ``</s>`` sits in the middle of its
+    row, so ``[:-1]`` would strip a pad token and keep the special token —
+    quietly averaging a learned end-of-sequence vector into the protein.
+
+    Both counts are per-family: ESM and ProstT5 drop one leading and one
+    trailing token, ProtT5 and Ankh drop only the trailing one.
+    """
+    if n_lead < 0 or n_trail < 0:
+        raise ValueError(f"n_lead/n_trail must be >= 0, got {n_lead}/{n_trail}")
+
+    lengths = attention_mask.sum(dim=1)
+    if bool((lengths <= n_lead + n_trail).any()):
+        raise ValueError(
+            f"at least one sequence has {int(lengths.min())} token(s), which is not "
+            f"more than the {n_lead + n_trail} special token(s) being stripped; "
+            "pooling it would average nothing"
+        )
+
+    positions = torch.arange(attention_mask.shape[1], device=attention_mask.device)
+    positions = positions.unsqueeze(0)  # (1, L)
+    keep = (positions >= n_lead) & (positions < (lengths.unsqueeze(1) - n_trail))
+    return (keep & attention_mask.bool()).to(attention_mask.dtype)
+
+
+#: Minimum share of a padded batch rectangle that must be real residues. A
+#: generous budget will otherwise happily put a 10-residue protein in the same
+#: batch as a 500-residue one — legal, and 73% of the compute spent on padding.
+MIN_BATCH_EFFICIENCY = 0.6
+
+#: Length spread (in residues) below which a ragged batch is kept anyway, so
+#: short proteins do not fragment into batches of one over a couple of residues.
+LENGTH_SPREAD_SLACK = 16
+
+
+def length_buckets(sequences: List[str], token_budget: int) -> List[List[int]]:
+    """Group sequence indices into batches of similar length.
+
+    Two separate constraints, because the token budget alone does not express
+    what we actually want: ``token_budget`` bounds ``len(batch) *
+    longest_in_batch`` so a batch fits in GPU memory, and
+    ``MIN_BATCH_EFFICIENCY`` bounds the share of that rectangle which is real
+    residues.
+
+    Note both are counted in RESIDUES, not tokens: each family adds one or two
+    special tokens per row (see ``SPECIAL_TOKEN_TRIM``), so the true padded-token
+    count of a batch is up to ``token_budget + 2 * len(batch)``. That matters only
+    for sizing the budget against GPU memory, not for correctness.
+
+    Returns indices into ``sequences``, every index exactly once, so the caller
+    can restore the original order.
+    """
+    if token_budget < 1:
+        raise ValueError(f"token_budget must be >= 1, got {token_budget}")
+
+    # Sorting ascending is what makes the loop cheap: the incoming sequence is
+    # always the longest in the batch and current[0] is always the shortest, so
+    # neither bound needs a rescan of the open batch. Rescanning made this
+    # O(n * batch_size) — 8.7x slower over a 481k-protein cohort, for the same
+    # batches.
+    lengths = [len(s) for s in sequences]
+    order = sorted(range(len(sequences)), key=lengths.__getitem__)
+    batches: List[List[int]] = []
+    current: List[int] = []
+    current_real = 0
+    shortest = 0
+
+    for idx in order:
+        n = lengths[idx]
+        if not current:
+            current, current_real, shortest = [idx], n, n
+            continue
+
+        slots = (len(current) + 1) * n
+        efficiency = (current_real + n) / slots
+
+        over_budget = slots > token_budget
+        too_ragged = (
+            efficiency < MIN_BATCH_EFFICIENCY and (n - shortest) > LENGTH_SPREAD_SLACK
+        )
+        if over_budget or too_ragged:
+            batches.append(current)
+            current, current_real, shortest = [idx], n, n
+        else:
+            current.append(idx)
+            current_real += n
+
+    if current:
+        batches.append(current)
+    return batches
+
+
+# How many special tokens each family puts before and after the residues. This is
+# the single statement of the fact: both the batched path (which needs counts, to
+# build a mask over a right-padded row) and the single-sequence path (which slices)
+# read it, so a tokenizer correction cannot land in one and not the other.
+SPECIAL_TOKEN_TRIM: Dict[str, Tuple[int, int]] = {
+    "esm_transformer": (1, 1),  # <cls> ... <eos>
+    "prost_t5": (1, 1),  # <AA2fold> ... </s>
+    "prot_t5": (0, 1),  # ... </s>
+    "ankh": (0, 1),  # ... </s>
+}
+
+
+def require_batchable_family(family_key: str) -> None:
+    """Raise unless ``family_key`` can go through the batched path."""
+    if family_key not in SPECIAL_TOKEN_TRIM:
+        raise NotImplementedError(
+            f"batched extraction is not implemented for family '{family_key}'. "
+            "ESM-3 and ESM-C expose their own per-protein encode()/logits() API "
+            "rather than a tokenizer + forward pass; use the single-sequence path."
+        )
+
+
+def _tokenize_batch(tokenizer: Any, prepared: List[str], family_key: str) -> Dict[str, Any]:
+    """Tokenize already-preprocessed sequences for one forward pass.
+
+    Shared by the batched and single-sequence paths so the Ankh quirk — it wants
+    pre-split character lists rather than a string — is stated once.
+
+    Deliberately no ``truncation=True``: every tokenizer here reports a
+    ``model_max_length`` of ~1e30, so it truncates nothing and merely logs
+    "Asking to truncate to max_length but no maximum length is provided" on every
+    call (~12k lines per cohort). Length is bounded upstream by ``--max_seq_len``
+    reconciled with the architecture's own ceiling (:func:`effective_max_seq_len`).
+    """
+    if family_key == "ankh":
+        return tokenizer(
+            [list(s) for s in prepared],
+            return_tensors="pt",
+            padding=True,
+            add_special_tokens=True,
+            is_split_into_words=True,
+        )
+    return tokenizer(
+        prepared, return_tensors="pt", padding=True, add_special_tokens=True
+    )
+
+
+def _embed_one_batch(
+    model: Any,
+    tokenizer: Any,
+    prepared: List[str],
+    family_key: str,
+    device: "torch.device",
+    autocast_dtype: Optional["torch.dtype"] = None,
+) -> np.ndarray:
+    """Mean-pooled embeddings for one ready-made batch, as a ``(B, D)`` array.
+
+    The batch is taken as given — bucketing is the caller's job, so it happens
+    exactly once and the batch that fails is the batch the caller retries.
+    """
+    n_lead, n_trail = SPECIAL_TOKEN_TRIM[family_key]
+
+    encoded = _tokenize_batch(tokenizer, prepared, family_key)
+    encoded = {k: v.to(device) for k, v in encoded.items()}
+
+    with torch.inference_mode():
+        if autocast_dtype is not None and device.type == "cuda":
+            with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+                hidden = model(**encoded).last_hidden_state
+        else:
+            hidden = model(**encoded).last_hidden_state
+
+    mask = content_mask(encoded["attention_mask"], n_lead, n_trail)
+    # .float() outside the autocast block: pooling accumulates in fp32 whatever
+    # the forward ran in.
+    return masked_mean_pool(hidden.float(), mask).cpu().numpy()
+
+
+def generate_embeddings_batched(
+    model: Any,
+    tokenizer: Any,
+    sequences: List[str],
+    family_key: str,
+    device: "torch.device",
+    token_budget: int = 16384,
+    autocast_dtype: Optional["torch.dtype"] = None,
+) -> List[np.ndarray]:
+    """Per-protein embeddings for many sequences, batched by length.
+
+    Equivalent to calling the single-sequence path once per sequence, but with
+    length-bucketed batches so the GPU is not left idle between 300-residue
+    forward passes. Results are returned in the caller's original order.
+
+    ``autocast_dtype`` (e.g. ``torch.bfloat16``) is the other half of the
+    speedup. It is off by default: switching precision changes the numbers
+    slightly, and that is the caller's decision to make, not a silent default.
+    """
+    require_batchable_family(family_key)
+    # content_mask keeps [n_lead, length - n_trail) per row, which locates the
+    # residues only under right padding. All four families right-pad today; a
+    # left-padding tokenizer would silently pool the wrong positions rather than
+    # fail, so check instead of assuming.
+    padding_side = getattr(tokenizer, "padding_side", "right")
+    if padding_side != "right":
+        raise NotImplementedError(
+            f"batched extraction assumes right padding, but this tokenizer pads "
+            f"'{padding_side}'; content_mask would select the wrong positions."
+        )
+
+    prepared = [preprocess_sequence(s, family_key) for s in sequences]
+    # Bucket on the ORIGINAL residue counts: the prepared strings carry spaces
+    # and prefixes whose lengths do not correspond to token counts.
+    results: List[Optional[np.ndarray]] = [None] * len(sequences)
+
+    for batch_idx in length_buckets(sequences, token_budget=token_budget):
+        pooled = _embed_one_batch(
+            model,
+            tokenizer,
+            [prepared[i] for i in batch_idx],
+            family_key,
+            device,
+            autocast_dtype,
+        )
+        for slot, original_index in enumerate(batch_idx):
+            results[original_index] = pooled[slot]
+
+    missing = [i for i, r in enumerate(results) if r is None]
+    if missing:
+        raise RuntimeError(f"no embedding produced for sequence index/indices {missing}")
+    return results  # type: ignore[return-value]
 
 
 def load_model_and_tokenizer(
@@ -389,6 +749,16 @@ def load_model_and_tokenizer(
                 # architecture-only prior this baseline is meant to provide.
                 torch.manual_seed(random_seed)
                 model = model_class(model_config)
+                # from_pretrained honours load_kwargs["torch_dtype"]; constructing
+                # from a config does not, so the untrained arm has to be cast
+                # explicitly or it computes at a different precision than the
+                # pretrained twin it is subtracted from. For prot_t5/prost_t5 this
+                # is a no-op today (their post_load_hook already calls .half()),
+                # but a future model that declares fp16 only through load_kwargs
+                # would otherwise silently reintroduce the confound.
+                dtype = load_kwargs.get("torch_dtype")
+                if dtype is not None:
+                    model = model.to(dtype)
                 print(
                     f"  Initialized {model_key} with random weights "
                     f"(architecture default init, seed={random_seed})"
@@ -429,9 +799,17 @@ def load_model_and_tokenizer(
         if model is None:
             raise RuntimeError(f"Failed to load model for {model_key}")
 
-        # Skip post_load_hook (e.g. .half()) for random init — keep full precision
-        # to avoid masking initialization effects with quantization noise
-        if post_load_hook and not random_init:
+        # Applied for random init too (for ProtT5/ProstT5, .half()). This
+        # deliberately reverses an earlier choice to skip the hook under
+        # --random_init "to avoid masking initialization effects with quantization
+        # noise". That is defensible in isolation, but the baseline's whole claim
+        # is `pretrained - random_init`, and that subtraction is a statement about
+        # *weights* only if every other axis is pinned. Skipping the hook made the
+        # untrained ProtT5/ProstT5 compute in fp32 while their pretrained twins
+        # computed in fp16, and that gap lands in the headline number looking
+        # exactly like a pretraining effect. If the precision question is worth
+        # asking, it deserves its own arm rather than a confound inside this one.
+        if post_load_hook is not None:
             post_load_hook(model)
 
         model.to(device).eval()
@@ -507,63 +885,37 @@ def generate_single_embedding(
         else:
             raise ValueError(f"Invalid embedding_type: {embedding_type}")
 
-    elif family_key in ["esm_transformer", "ankh", "prot_t5", "prost_t5"]:
+    elif family_key in SPECIAL_TOKEN_TRIM:
         if tokenizer is None:
             raise ValueError(
                 f"Tokenizer is required for transformer model family: {family_key}"
             )
 
         # Common Transformers-based embedding generation
-        tokenization_input = sequence
-        tokenizer_kwargs = {
-            "return_tensors": "pt",
-            "truncation": True,
-            "padding": True,
-            "add_special_tokens": True,
-        }
+        inputs = _tokenize_batch(tokenizer, [sequence], family_key)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        if family_key == "ankh":
-            tokenization_input = list(sequence)  # e.g. ['M', 'L', 'K']
-            tokenizer_kwargs["is_split_into_words"] = True
-
-        inputs = tokenizer(tokenization_input, **tokenizer_kwargs).to(device)
-
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model(**inputs)
         embeddings = outputs.last_hidden_state.squeeze(0).cpu().numpy()
 
-        # Correct slicing based on family_key
-        token_embeddings_for_avg = None
-        per_residue_slice = None
-
-        if family_key == "esm_transformer":
-            # Skip <cls> and <eos>
-            token_embeddings_for_avg = embeddings[1:-1, :]
-            per_residue_slice = embeddings[1:-1, :]
-        elif family_key == "prost_t5":
-            # Skip <AA2fold> prefix (and potential BOS) and <eos>
-            token_embeddings_for_avg = embeddings[1:-1, :]
-            per_residue_slice = embeddings[1:-1, :]
-        elif family_key == "ankh":
-            token_embeddings_for_avg = embeddings[:-1, :]
-            per_residue_slice = embeddings[:-1, :]
-        elif family_key == "prot_t5":
-            token_embeddings_for_avg = embeddings[:-1, :]
-            per_residue_slice = embeddings[:-1, :]
-        else:
-            token_embeddings_for_avg = embeddings
-            per_residue_slice = embeddings
+        # Same per-family trim as the batched path, read from the same table
+        # rather than restated as literal slices — the two paths interleave
+        # within one output file (a failed batch falls back to here), so a
+        # disagreement would put differently-trimmed vectors side by side.
+        n_lead, n_trail = SPECIAL_TOKEN_TRIM[family_key]
+        residues = embeddings[n_lead : embeddings.shape[0] - n_trail, :]
 
         if embedding_type == "per_protein":
-            if token_embeddings_for_avg.shape[0] == 0:
+            if residues.shape[0] == 0:
                 print(
                     f"WARNING: No token embeddings to average for sequence after slicing. Family: {family_key}, Original shape: {embeddings.shape}",
                     file=sys.stderr,
                 )
                 return np.array([])
-            return token_embeddings_for_avg.mean(axis=0)
+            return residues.mean(axis=0)
         elif embedding_type == "per_residue":
-            return per_residue_slice
+            return residues
         else:
             raise ValueError(f"Invalid embedding_type: {embedding_type}")
     else:
@@ -577,6 +929,166 @@ def generate_single_embedding(
 # --------------------------------------------------------------------------- #
 
 
+#: HDF5 flush cadence for the batched writer. Flushing per batch was ~12k
+#: metadata round-trips per cohort, which is cheap on a local SSD and not on the
+#: DSS/GPFS mount this actually runs against.
+FLUSH_EVERY_N_BATCHES = 100
+
+
+def _select_pending(
+    sequences_to_process: List[Tuple[str, str]],
+    h5_file: Any,
+    max_seq_len: Optional[int],
+    write: Callable[[str], None],
+) -> Tuple[List[str], List[str], int]:
+    """Split the cohort into what still needs embedding and what does not.
+
+    Shared by the batched and single-sequence loops so the three filters — and,
+    more importantly, the definition of "processed" that both report back — stay
+    the same. They previously disagreed: one counted an already-present protein
+    as a success, the other silently dropped it, so the completion count meant
+    something different depending on ``--token_budget``.
+
+    Returns ``(headers, sequences, n_already_present)``.
+    """
+    headers: List[str] = []
+    seqs: List[str] = []
+    n_present = 0
+    for header, sequence in sequences_to_process:
+        base_header = header.split()[0]
+        if base_header in h5_file:
+            n_present += 1
+            continue
+        if not sequence:
+            write(f"⚠️ Sequence '{base_header}' is empty. Skipping.")
+            continue
+        if max_seq_len is not None and len(sequence) > max_seq_len:
+            write(
+                f"⚠️ Sequence '{base_header}' (length {len(sequence)}) exceeds "
+                f"max length {max_seq_len}. Skipping."
+            )
+            continue
+        headers.append(base_header)
+        seqs.append(sequence)
+    return headers, seqs, n_present
+
+
+def _embed_batch_with_fallback(
+    model: Any,
+    tokenizer: Any,
+    names: List[str],
+    prepared: List[str],
+    family_key: str,
+    device: torch.device,
+    autocast_dtype: Optional[torch.dtype],
+) -> List[np.ndarray]:
+    """Embed one batch, halving it on out-of-memory rather than dropping to one.
+
+    A plain "retry each sequence alone" fallback is the 25-75x-slower path this
+    whole module exists to avoid, and because ``length_buckets`` emits batches
+    shortest-first, an OOM part-way through means the *entire long tail* runs
+    unbatched. Halving keeps the cost of an oversized budget proportional.
+
+    ``empty_cache()`` first: without it the allocator stays fragmented and the
+    retries OOM too, which turns a recoverable batch into silently dropped
+    proteins.
+    """
+    try:
+        return list(_embed_one_batch(
+            model, tokenizer, prepared, family_key, device, autocast_dtype
+        ))
+    except torch.cuda.OutOfMemoryError as exc:
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        if len(prepared) == 1:
+            tqdm.write(f"ERROR embedding '{names[0]}': out of memory ({exc})")
+            return [np.array([])]
+        half = len(prepared) // 2
+        tqdm.write(
+            f"⚠️ batch of {len(prepared)} hit OOM; splitting into "
+            f"{half} + {len(prepared) - half}"
+        )
+        return _embed_batch_with_fallback(
+            model, tokenizer, names[:half], prepared[:half],
+            family_key, device, autocast_dtype,
+        ) + _embed_batch_with_fallback(
+            model, tokenizer, names[half:], prepared[half:],
+            family_key, device, autocast_dtype,
+        )
+    except Exception as exc:  # noqa: BLE001 — fall back rather than lose the batch
+        tqdm.write(
+            f"⚠️ batch of {len(prepared)} failed ({type(exc).__name__}: {exc}); "
+            "retrying those sequences individually"
+        )
+        vectors: List[np.ndarray] = []
+        for name, seq in zip(names, prepared, strict=True):
+            try:
+                vectors.append(_embed_one_batch(
+                    model, tokenizer, [seq], family_key, device, autocast_dtype
+                )[0])
+            except Exception as inner:  # noqa: BLE001
+                tqdm.write(f"ERROR embedding '{name}': {type(inner).__name__}: {inner}")
+                vectors.append(np.array([]))
+        return vectors
+
+
+def _process_batched(
+    sequences_to_process: List[Tuple[str, str]],
+    model: Any,
+    tokenizer: Any,
+    family_key: str,
+    device: torch.device,
+    h5_file: Any,
+    max_seq_len: Optional[int],
+    model_key_for_filename: str,
+    token_budget: int,
+    autocast_dtype: Optional[torch.dtype],
+) -> Tuple[int, int]:
+    """Batched variant of the per-sequence loop, with the same filtering.
+
+    Returns ``(n_accounted, n_failed)`` — see :func:`process_sequences_and_save`.
+    """
+    todo_headers, todo_seqs, n_present = _select_pending(
+        sequences_to_process,
+        h5_file,
+        max_seq_len,
+        lambda msg: print(msg, file=sys.stderr),
+    )
+
+    prepared = [preprocess_sequence(s, family_key) for s in todo_seqs]
+    n_written = 0
+    n_failed = 0
+    batches = length_buckets(todo_seqs, token_budget=token_budget)
+    for n_batch, batch_idx in enumerate(tqdm(
+        batches, unit="batch", desc=f"Embedding ({model_key_for_filename}, batched)"
+    ), start=1):
+        names = [todo_headers[i] for i in batch_idx]
+        vectors = _embed_batch_with_fallback(
+            model,
+            tokenizer,
+            names,
+            [prepared[i] for i in batch_idx],
+            family_key,
+            device,
+            autocast_dtype,
+        )
+
+        for name, vector in zip(names, vectors, strict=True):
+            if vector.size == 0:
+                tqdm.write(f"ERROR: empty embedding for '{name}'. Skipping.")
+                n_failed += 1
+                continue
+            # Already float32: _embed_one_batch pools through .float(). asarray
+            # avoids copying all 481k vectors to prove it.
+            h5_file.create_dataset(name=name, data=np.asarray(vector, dtype=np.float32))
+            n_written += 1
+        if n_batch % FLUSH_EVERY_N_BATCHES == 0:
+            h5_file.flush()
+
+    h5_file.flush()
+    return n_written + n_present, n_failed
+
+
 def process_sequences_and_save(
     sequences_to_process: List[Tuple[str, str]],
     model: Any,
@@ -587,55 +1099,88 @@ def process_sequences_and_save(
     h5_output_path: Path,
     max_seq_len: Optional[int],
     model_key_for_filename: str,  # Used for logging and progress bar description
+    random_init: bool = False,
+    token_budget: int = 0,
+    autocast_dtype: Optional[torch.dtype] = None,
 ):
     """
     Processes sequences, generates embeddings, and saves them to an HDF5 file.
     Embeddings are saved as top-level datasets in the HDF5 file.
-    """
-    num_successfully_embedded = 0
 
-    with h5py.File(h5_output_path, "a") as h5_file:  # Open in append mode
+    Append mode lets a long pretrained run resume, which is worth keeping. But
+    the "already exists" branch below counts a skip as a success, so under
+    ``--random_init`` appending is how a second seed silently produces a file
+    holding only the first seed's vectors and still exits 0. Random-init runs
+    therefore open exclusively and fail loudly on collision.
+
+    Returns ``(n_accounted, n_failed)``: proteins now present in the file (newly
+    written plus already there), and proteins that were meant to be embedded and
+    were not. The caller needs the second number — every failure in here is
+    caught and logged, so without it a run that embedded nothing looks identical
+    to one that embedded everything.
+    """
+    # "w-" raises FileExistsError rather than resuming into another seed's file.
+    open_mode = "w-" if random_init else "a"
+    batched = (
+        token_budget > 0
+        and embedding_type == "per_protein"
+        and family_key in SPECIAL_TOKEN_TRIM
+    )
+    if token_budget > 0 and not batched:
+        # Silently ignoring a throughput flag is invisible to a batch scheduler:
+        # the job just runs 25-75x slower and gets killed at the wall clock, with
+        # nothing in the log to say why. ESM-3/ESM-C are 3 of the 13 arms.
+        reason = (
+            f"family '{family_key}' has no tokenizer + forward path"
+            if family_key not in SPECIAL_TOKEN_TRIM
+            else f"--embedding_type is '{embedding_type}', not per_protein"
+        )
+        print(
+            f"⚠️ --token_budget {token_budget} requested but batching is NOT "
+            f"available here: {reason}. Falling back to one sequence per forward "
+            f"pass — expect a 25-75x longer run, and size any wall-clock limit "
+            f"for that.",
+            file=sys.stderr,
+        )
+
+    with h5py.File(h5_output_path, open_mode) as h5_file:
+        if batched:
+            return _process_batched(
+                sequences_to_process,
+                model,
+                tokenizer,
+                family_key,
+                device,
+                h5_file,
+                max_seq_len,
+                model_key_for_filename,
+                token_budget,
+                autocast_dtype,
+            )
+
+        todo_headers, todo_seqs, n_present = _select_pending(
+            sequences_to_process, h5_file, max_seq_len, tqdm.write
+        )
+        n_written = 0
+        n_failed = 0
+
         progress_bar = tqdm(
-            sequences_to_process,
+            zip(todo_headers, todo_seqs, strict=True),
+            total=len(todo_headers),
             unit="seq",
             desc=f"Embedding ({model_key_for_filename})",
         )
 
-        for header, original_sequence in progress_bar:
-            base_header = header.split()[0]
-
-            if base_header in h5_file:
-                tqdm.write(
-                    f"ℹ️ Embedding for '{base_header}' already exists in {h5_output_path}. Skipping."
-                )
-                num_successfully_embedded += 1
-                continue
-
-            if not original_sequence:
-                tqdm.write(f"⚠️ Sequence '{base_header}' is empty. Skipping.")
-                continue
-
-            # Determine sequence length for filtering (before ProstT5 prefixing/spacing)
-            seq_len_for_check = len(original_sequence)
-            if max_seq_len is not None and seq_len_for_check > max_seq_len:
-                tqdm.write(
-                    f"⚠️ Sequence '{base_header}' (length {seq_len_for_check}) "
-                    f"exceeds max length {max_seq_len}. Skipping."
-                )
-                continue
-
+        for base_header, original_sequence in progress_bar:
             progress_bar.set_postfix_str(
-                f"Processing: {base_header[:25]}... (len: {seq_len_for_check})"
+                f"Processing: {base_header[:25]}... (len: {len(original_sequence)})"
             )
 
             try:
-                processed_sequence_for_embedding = preprocess_sequence(
-                    original_sequence, family_key
-                )
                 embedding = generate_single_embedding(
                     model,
                     tokenizer,
-                    processed_sequence_for_embedding,
+                    preprocess_sequence(original_sequence, family_key),
                     family_key,
                     embedding_type,
                     device,
@@ -645,13 +1190,14 @@ def process_sequences_and_save(
                     tqdm.write(
                         f"ERROR: Embedding for '{base_header}' resulted in an empty array. Skipping."
                     )
+                    n_failed += 1
                     continue
 
                 h5_file.create_dataset(
-                    name=base_header, data=embedding.astype(np.float32)
+                    name=base_header, data=np.asarray(embedding, dtype=np.float32)
                 )
                 h5_file.flush()
-                num_successfully_embedded += 1
+                n_written += 1
 
             except Exception as e:
                 error_msg = (
@@ -660,8 +1206,9 @@ def process_sequences_and_save(
                 )
                 sys.stderr.write(error_msg)
                 tqdm.write(error_msg.strip())
+                n_failed += 1
 
-    return num_successfully_embedded
+    return n_written + n_present, n_failed
 
 
 # --------------------------------------------------------------------------- #
@@ -721,8 +1268,28 @@ def main():
         action="store_true",
         help="Use randomly initialized (non-pretrained) model weights. "
         "Produces contextual embeddings shaped by architecture alone, "
-        "without any learned biology. Output files are named random_init_<model>.h5. "
+        "without any learned biology. Output files are named "
+        "random_init_<model>_seed<N>.h5 — the seed is part of the name because D-6 "
+        "reports this arm as mean±sd over seeds 0/1/2, and a shared filename would "
+        "make runs 2 and 3 skip every protein and exit 0. "
         "See also random_embeddings.py for simpler i.i.d. random vectors.",
+    )
+    parser.add_argument(
+        "--token_budget",
+        type=int,
+        default=0,
+        help="Batch sequences up to this many padded tokens per forward pass "
+        "(len(batch) * longest_in_batch). 0 (default) keeps the exact "
+        "one-sequence-at-a-time behaviour. ~16384 is a reasonable start on an "
+        "80GB card; batching is 25-75x faster on large cohorts. Only applies to "
+        "per_protein output on tokenizer-based families (ESM-2/ProtT5/ProstT5/Ankh).",
+    )
+    parser.add_argument(
+        "--bf16",
+        action="store_true",
+        help="Run the forward pass under bfloat16 autocast on CUDA. Off by "
+        "default: it changes the numbers slightly, so it is the caller's choice. "
+        "Pooling is always accumulated in float32.",
     )
     parser.add_argument(
         "--random_seed",
@@ -745,21 +1312,17 @@ def main():
         )
         sys.exit(1)
 
-    sanitized_model_key = args.model_key.replace("/", "_")
-
     # --- Ivan infrastructure (2026-03-19): random init output naming ---
-    # random_init embeddings go to random_init_<model>.h5 to clearly
-    # distinguish from pretrained <model>.h5 and i.i.d. random_<dim>.h5
-    output_h5_path: Path
+    # random_init embeddings go to random_init_<model>_seed<N>.h5 to distinguish
+    # them from pretrained <model>.h5, from i.i.d. random_<dim>.h5, and — the
+    # part that matters for D-6's mean±sd — from each other.
     if args.output_hdf5_file is None:
-        if args.random_init:
-            output_h5_path = args.fasta_file.with_name(
-                f"random_init_{sanitized_model_key}.h5"
-            )
-        else:
-            output_h5_path = args.fasta_file.with_name(
-                f"{args.fasta_file.stem}_{sanitized_model_key}.h5"
-            )
+        output_h5_path = default_output_path(
+            args.fasta_file,
+            args.model_key,
+            random_init=args.random_init,
+            random_seed=args.random_seed,
+        )
     else:
         output_h5_path = args.output_hdf5_file
 
@@ -769,11 +1332,18 @@ def main():
 
     # Removed NATIVE_ESM_AVAILABLE check for model config here
 
-    max_len_to_use = args.max_seq_len
-    if max_len_to_use is not None:
-        print(f"ℹ️ Using max sequence length: {max_len_to_use}")
-    else:
+    # Clamp to the architecture's own ceiling (ESM-1b: absolute positions, 1026)
+    # so a forgotten --max_seq_len fails at the flag rather than mid-cohort.
+    max_len_to_use = effective_max_seq_len(model_config, args.max_seq_len)
+    if max_len_to_use is None:
         print("ℹ️ No max sequence length limit applied (beyond inherent model limits).")
+    else:
+        clamped = (
+            f" (clamped from {args.max_seq_len} by the '{args.model_key}' architecture limit)"
+            if max_len_to_use != args.max_seq_len
+            else ""
+        )
+        print(f"ℹ️ Using max sequence length: {max_len_to_use}{clamped}")
 
     # Conditional login based on model config
     if model_config.get("requires_explicit_login", False):
@@ -798,6 +1368,26 @@ def main():
         random_seed=args.random_seed,
     )
 
+    if args.bf16:
+        if device.type != "cuda":
+            print(
+                f"⚠️ --bf16 is ignored on {device.type}: autocast is only applied on "
+                "CUDA, so this run proves nothing about what a GPU run will produce.",
+                file=sys.stderr,
+            )
+        elif any(p.dtype == torch.float16 for p in model.parameters()):
+            # ProtT5/ProstT5 are .half()'d at load. Stacking bf16 autocast on top
+            # does not crash — the residual adds promote to fp32 and T5LayerNorm
+            # casts back each layer — but the result is neither fp16 nor bf16, and
+            # measured ~4.5e-3 relative drift from either.
+            print(
+                f"⚠️ --bf16 on '{args.model_key}', whose weights are already float16. "
+                "The forward runs in neither pure fp16 nor pure bf16. Drop --bf16, or "
+                "remove the model's fp16 load_kwargs/post_load_hook, before comparing "
+                "these vectors with any other arm.",
+                file=sys.stderr,
+            )
+
     print(f"Reading sequences from: {args.fasta_file}")
     all_sequences = read_fasta_sequences(args.fasta_file)
     if not all_sequences:
@@ -806,7 +1396,7 @@ def main():
 
     print(f"Found {len(all_sequences)} sequences in FASTA file.")
 
-    num_embedded = process_sequences_and_save(
+    num_embedded, num_failed = process_sequences_and_save(
         sequences_to_process=all_sequences,
         model=model,
         tokenizer=tokenizer,
@@ -816,6 +1406,9 @@ def main():
         h5_output_path=output_h5_path,
         max_seq_len=max_len_to_use,
         model_key_for_filename=args.model_key,
+        random_init=args.random_init,
+        token_budget=args.token_budget,
+        autocast_dtype=torch.bfloat16 if args.bf16 else None,
     )
 
     print("\n--- Embedding Generation Complete ---")
@@ -838,6 +1431,20 @@ def main():
             print(
                 f"⚠️ Could not delete index file {fai_file_path}: {e}", file=sys.stderr
             )
+
+    # Every per-sequence and per-batch failure above is caught and logged so one
+    # bad protein does not lose the run. That makes the exit status the only
+    # signal a batch scheduler can act on, and it has to be honest: a task that
+    # dropped its whole long tail to a device-side assert otherwise reports
+    # COMPLETED, and the truncated .h5 is treated as a finished arm.
+    if num_failed:
+        print(
+            f"\nERROR: {num_failed} sequence(s) failed to embed and are MISSING from "
+            f"{output_h5_path}. The file is incomplete — delete it and rerun rather "
+            f"than treating it as a finished arm.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     print("✓ Done.")
 
