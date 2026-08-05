@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Tuple
 
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
@@ -44,6 +43,7 @@ class ProteinAnalysisPipeline:
         base_data_dir: str | Path = "data",
         output_dir: str | Path = "out",
         dataset: str = "2024_new",
+        dedupe: bool = True,
     ):
         """Initialize pipeline with base directories and dataset type.
 
@@ -51,10 +51,15 @@ class ProteinAnalysisPipeline:
             base_data_dir: Base data directory path
             output_dir: Output directory path
             dataset: Dataset type - either "sprot_pre2024" or "2024_new"
+            dedupe: Collapse both orientations of each pair into one canonical
+                unordered pair. On by default. Turning it off reproduces the
+                pre-2026-08 directional table (written to a distinct filename)
+                so the effect of deduplication stays separately attributable.
         """
         self.base_data_dir = Path(base_data_dir)
         self.output_dir = Path(output_dir)
         self.dataset = dataset
+        self._dedupe = dedupe
 
         # Validate dataset parameter
         if dataset not in ["sprot_pre2024", "2024_new"]:
@@ -116,7 +121,14 @@ class ProteinAnalysisPipeline:
         else:
             mmseqs_parquet = self.mmseqs_tsv.with_suffix(".parquet")
             foldseek_parquet = self.foldseek_tsv.with_suffix(".parquet")
-            final_merged = self.interm_dir / "merged_protein_similarity.parquet"
+            # A non-deduplicated run writes to its own filename so it can never
+            # silently overwrite the canonical (deduplicated) pair table.
+            merged_name = (
+                "merged_protein_similarity.parquet"
+                if getattr(self, "_dedupe", True)
+                else "merged_protein_similarity_nodedup.parquet"
+            )
+            final_merged = self.interm_dir / merged_name
             plots_dir = self.plots_dir
             low_plddt_ids = self.foldcomp_low_plddt_ids
 
@@ -207,6 +219,11 @@ class ProteinAnalysisPipeline:
         # Remove self-matches
         df = self._remove_self_matches(df, "MMSeqs2")
 
+        # Collapse both orientations of each pair BEFORE scoring, so HFSP is
+        # computed once per unordered pair from the surviving alignment.
+        if self._dedupe:
+            df = self._dedupe_mmseqs_pairs(df)
+
         # Compute HFSP scores efficiently
         df = self._compute_hfsp_scores(df)
 
@@ -280,6 +297,12 @@ class ProteinAnalysisPipeline:
         df = self._remove_self_matches(df, "FoldSeek")
         df = self._filter_low_confidence_structures(df)
 
+        # Collapse both orientations BEFORE thresholding, so the quality filter
+        # is applied once to the canonical pair value rather than to whichever
+        # orientation happened to be reported.
+        if self._dedupe:
+            df = self._dedupe_foldseek_pairs(df)
+
         print(f"📊 FoldSeek final shape: {df.shape}")
         return df
 
@@ -308,6 +331,65 @@ class ProteinAnalysisPipeline:
             print(f"📖 Loaded parquet: {parquet_file}")
 
         return df
+
+    @staticmethod
+    def _canonicalise_pairs(df: pl.DataFrame) -> pl.DataFrame:
+        """Rewrite (query, target) to the lexicographically ordered orientation.
+
+        Both expressions are evaluated against the *input* frame, so assigning
+        query and target simultaneously is a safe swap rather than a two-step
+        clobber. Pinned by test_canonicalises_pair_orientation.
+        """
+        return df.with_columns(
+            [
+                pl.min_horizontal("query", "target").alias("query"),
+                pl.max_horizontal("query", "target").alias("target"),
+            ]
+        )
+
+    def _dedupe_mmseqs_pairs(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Collapse both orientations of a pair, keeping the lowest-E-value hit.
+
+        The profile search (``--num-iterations 3``) is directional, so a pair may
+        be reported once or twice, with different alignments. Keeping one whole
+        real alignment -- rather than averaging -- matters here because HFSP is a
+        non-linear function of (PIDE, L): averaging would fabricate an alignment
+        that never existed and leave fident/nident/mismatch mutually inconsistent.
+        """
+        before = df.height
+        deduped = (
+            self._canonicalise_pairs(df)
+            .sort("evalue")
+            .unique(subset=["query", "target"], keep="first", maintain_order=True)
+        )
+        removed = before - deduped.height
+        print(
+            f"🔁 MMSeqs2: collapsed {removed:,} duplicate orientations "
+            f"({removed / before * 100:.1f}%), {deduped.height:,} unordered pairs"
+        )
+        return deduped
+
+    def _dedupe_foldseek_pairs(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Collapse both orientations of a pair, averaging the structural scores.
+
+        ``alntmscore`` is normalised over the alignment (not by query or target
+        length), so the two reports are two estimates of one symmetric quantity
+        and the mean is the unbiased combination. Taking the max instead would
+        re-introduce an upward bias on precisely the duplicated subset that this
+        deduplication exists to stop over-weighting.
+        """
+        before = df.height
+        deduped = (
+            self._canonicalise_pairs(df)
+            .group_by(["query", "target"])
+            .agg([pl.col("min_cov").mean(), pl.col("alntmscore").mean()])
+        )
+        removed = before - deduped.height
+        print(
+            f"🔁 FoldSeek: collapsed {removed:,} duplicate orientations "
+            f"({removed / before * 100:.1f}%), {deduped.height:,} unordered pairs"
+        )
+        return deduped
 
     def _remove_self_matches(self, df: pl.DataFrame, dataset_name: str) -> pl.DataFrame:
         """Remove rows where query equals target."""
@@ -682,7 +764,7 @@ class ProteinAnalysisPipeline:
         data: np.ndarray,
         threshold: float,
         title: str,
-        ylim: Tuple[float, float],
+        ylim: tuple[float, float],
         output_path: Path,
         scale: float = 1.5,
     ) -> None:
@@ -803,18 +885,39 @@ Examples:
         help="Dataset to process: 'sprot_pre2024' or '2024_new' (default: 2024_new)",
     )
 
+    parser.add_argument(
+        "--no-dedupe",
+        dest="dedupe",
+        action="store_false",
+        help=(
+            "Keep both orientations of every pair (the pre-2026-08 behaviour). "
+            "The profile search is directional, so this double-weights the pairs "
+            "reported both ways -- which are measurably the more similar ones. "
+            "Writes to merged_protein_similarity_nodedup.parquet so it cannot "
+            "overwrite the canonical table. Use only to reproduce the old numbers."
+        ),
+    )
+    parser.set_defaults(dedupe=True)
+
     args = parser.parse_args()
 
     print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
     print("=" * 50)
+    print(
+        f"🔁 Pair deduplication: {'ON (canonical unordered pairs)' if args.dedupe else 'OFF (directional, legacy)'}"
+    )
 
     if args.test:
         print(f"🧪 TEST MODE: Processing 100K rows per dataset ({args.dataset})")
-        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir, args.dataset)
+        pipeline = ProteinAnalysisPipeline(
+            args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
+        )
         result_df = pipeline.run(test_mode=True, test_size=100_000)
     else:
         print(f"🚀 FULL MODE: Processing complete datasets ({args.dataset})")
-        pipeline = ProteinAnalysisPipeline(args.data_dir, args.output_dir, args.dataset)
+        pipeline = ProteinAnalysisPipeline(
+            args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
+        )
         result_df = pipeline.run(test_mode=False)
 
     print("✅ Pipeline completed successfully!")
