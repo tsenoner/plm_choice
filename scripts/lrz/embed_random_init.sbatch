@@ -71,6 +71,9 @@ export DATA_DIR="${DATA_DIR:-$DSS/plm_choice_data/data}"
 # globs "<data_dir>/embeddings/*.h5" and needs a sibling sets/, so the files must
 # be moved or symlinked into embeddings/ before the probe grid runs. Kept separate
 # here so a half-finished array cannot be picked up by an unrelated probe run.
+#
+# scripts/run_ivan_pipeline.sh's RANDOM_INIT_OUT_DIR resolves to this same path via
+# PROBE_COHORT_DIR. The two entry points to the random-init arm must be changed together.
 OUT_DIR="${OUT_DIR:-$DATA_DIR/processed/sprot_pre2024_subset/embeddings_random_init}"
 
 # Keep the HuggingFace cache off the 100 GB backed-up HOME.

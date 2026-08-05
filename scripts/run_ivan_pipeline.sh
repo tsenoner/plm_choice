@@ -5,9 +5,9 @@
 #
 # Chains all Ivan infrastructure scripts in the correct order:
 #   1. Download reference data (GO ontology, SIFTS, SCOP, ECOD, EC)
-#   2. GO semantic similarity (Wang method) on test pairs, merge into splits
+#   2. GO semantic similarity (Wang method) on test pairs
 #   3. EC hierarchy distances  — NOT AVAILABLE, see the step 3 block below
-#   4. PDB experimental TM-scores on test pairs, merge into splits
+#   4. PDB experimental TM-scores on test pairs
 #   5. BRENDA/HFSP validation (produces JSON report, no merge)
 #   6. Random-init baselines (esm2_650m and prot_t5)
 #   7. Classification evaluation at SCOP/ECOD hierarchy levels
@@ -28,29 +28,72 @@ set -euo pipefail
 # --------------------------------------------------------------------------- #
 #                         CONFIGURABLE VARIABLES
 # --------------------------------------------------------------------------- #
-# Override these to point at your data layout. Defaults follow the project
-# convention: data/processed/sprot_pre2024/ with sets/ and embeddings/ subdirs.
+# There used to be a single DATA_DIR here, described as "the project convention:
+# data/processed/sprot_pre2024/". That was the only cohort-policy statement
+# tracked in git and it was WRONG — and worse, no single value could have been
+# right, because DATA_DIR was answering three different questions at once and two
+# of them have OPPOSITE correct answers:
+#
+#   role                                  wants    why
+#   ------------------------------------  -------  ---------------------------------
+#   annotation READ source (2a/4a/5/7)     FULL     subset test pairs are a strict 10%
+#                                                   sample of full test pairs, so one
+#                                                   computation covers BOTH cohorts at
+#                                                   100%; computing on the subset covers
+#                                                   10% and cannot be back-filled
+#   merge WRITE target (was 2b/4b)         neither  destructive; see step 2
+#   step 6 .h5 destination                 SUBSET   matches scripts/lrz/embed_random_init.sbatch
+#
+# Cohort sizes (train / val / test pairs):
+#   sprot_pre2024        113,186,256 / 16,105,295 / 15,719,249   (FULL)
+#   sprot_pre2024_subset  11,318,625 /  1,610,529 /  1,571,924   (uniform 10% row
+#                         sample at seed 42 — scripts/create_subset_datasets.py)
+#
+# The probe trains on the SUBSET: every published cell used it. See
+# scripts/lrz/embed_random_init.sbatch and docs/SPECIFICATION.md ("Cohorts").
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Root of the processed dataset (contains sets/ and embeddings/ subdirs)
-DATA_DIR="${DATA_DIR:-${PROJECT_ROOT}/data/processed/sprot_pre2024}"
+# A rename without this guard is strictly WORSE than the old name: an exported
+# DATA_DIR would be silently ignored and the caller would get the new defaults
+# while believing they had set the cohort.
+if [[ -n "${DATA_DIR:-}${SETS_DIR:-}${EMBEDDINGS_DIR:-}" ]]; then
+    echo "ERROR: DATA_DIR / SETS_DIR / EMBEDDINGS_DIR are no longer read." >&2
+    echo "       One variable cannot answer three questions with two opposite" >&2
+    echo "       correct answers. They were split into:" >&2
+    echo "         ANNOT_SOURCE_DIR    which cohort's test pairs get annotated (default: FULL)" >&2
+    echo "         ANNOT_PAIRS         the exact pairs parquet to read" >&2
+    echo "         PROBE_COHORT_DIR    which cohort the probe trains on (default: SUBSET)" >&2
+    echo "         RANDOM_INIT_OUT_DIR where step 6 writes its .h5 files" >&2
+    echo "       Unset the old name and use the one matching your intent." >&2
+    exit 2
+fi
 
-# Directory with train.parquet, val.parquet, test.parquet
-SETS_DIR="${SETS_DIR:-${DATA_DIR}/sets}"
+# READ-ONLY source for the annotation producers (steps 2a, 4a, 5, 7).
+ANNOT_SOURCE_DIR="${ANNOT_SOURCE_DIR:-${PROJECT_ROOT}/data/processed/sprot_pre2024}"
+ANNOT_PAIRS="${ANNOT_PAIRS:-${ANNOT_SOURCE_DIR}/sets/test.parquet}"
 
-# Directory with per-model .h5 embedding files
-EMBEDDINGS_DIR="${EMBEDDINGS_DIR:-${DATA_DIR}/embeddings}"
+# The cohort the probe trains on — step 6's outputs are staged against this.
+PROBE_COHORT_DIR="${PROBE_COHORT_DIR:-${PROJECT_ROOT}/data/processed/sprot_pre2024_subset}"
 
-# Pipeline output directory for intermediate files
-OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_ROOT}/out/ivan_pipeline}"
+# Pipeline output directory, namespaced by the cohort it was computed from.
+# Un-namespaced, a FULL-cohort test_with_go.parquet satisfies step 2's run_or_skip
+# check for a SUBSET run: the step prints SKIP, and the merge then left-joins the
+# FULL cohort's GO table into SUBSET splits on (query, target) — which largely
+# SUCCEEDS, because subset pairs are a strict subset. Silently wrong data, exit 0.
+OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_ROOT}/out/ivan_pipeline/$(basename "${ANNOT_SOURCE_DIR}")}"
 
 # Reference data directory (GO ontology, SIFTS, SCOP, ECOD, EC annotations)
 REFERENCE_DIR="${REFERENCE_DIR:-${PROJECT_ROOT}/data/reference}"
 
 # FASTA file for embedding generation (random init baselines)
-FASTA_FILE="${FASTA_FILE:-${DATA_DIR}/sequences.fasta}"
+# No default: the old ${DATA_DIR}/sequences.fasta names a file that has never existed
+# under either cohort and has no producer in this repo. Deliberately NOT defaulted to
+# the real data/raw/sprot_2024/sprot.fasta — that would make a 2-of-13-arm laptop demo
+# runnable for the first time, duplicating a job scripts/lrz/embed_random_init.sbatch
+# already does properly for all 39 arms. The loud failure is a free interlock.
+FASTA_FILE="${FASTA_FILE:-}"
 
 # GO annotations file (CAFA5 train_terms.tsv or custom TSV)
 GO_ANNOTATIONS="${GO_ANNOTATIONS:-${REFERENCE_DIR}/go/cafa5/Train/train_terms.tsv}"
@@ -59,7 +102,10 @@ GO_ANNOTATIONS="${GO_ANNOTATIONS:-${REFERENCE_DIR}/go/cafa5/Train/train_terms.ts
 EC_ANNOTATIONS="${EC_ANNOTATIONS:-${REFERENCE_DIR}/ec/uniprot_ec_reviewed.tsv}"
 
 # SCOP/ECOD classification parquet for step 7
-CLASSIFICATION_PARQUET="${CLASSIFICATION_PARQUET:-${DATA_DIR}/scop_classifications.parquet}"
+# Cohort-INDEPENDENT: classification_eval.py consumes this as a flat protein_id -> class
+# map, so it has no cohort. NOTE no producer for it exists in this repo yet, and step 7
+# has a second, separate blocker — see the comment above its invocation.
+CLASSIFICATION_PARQUET="${CLASSIFICATION_PARQUET:-${REFERENCE_DIR}/scop/scop_classifications.parquet}"
 
 # --------------------------------------------------------------------------- #
 #                         CLI ARGUMENT PARSING
@@ -101,9 +147,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --dry-run    Show what would be done without executing"
             echo ""
             echo "Environment variables for custom paths:"
-            echo "  DATA_DIR, SETS_DIR, EMBEDDINGS_DIR, OUTPUT_DIR,"
-            echo "  REFERENCE_DIR, FASTA_FILE, GO_ANNOTATIONS,"
-            echo "  EC_ANNOTATIONS, CLASSIFICATION_PARQUET"
+            echo "  ANNOT_SOURCE_DIR, ANNOT_PAIRS, PROBE_COHORT_DIR,"
+            echo "  RANDOM_INIT_OUT_DIR, OUTPUT_DIR, REFERENCE_DIR,"
+            echo "  FASTA_FILE, GO_ANNOTATIONS, EC_ANNOTATIONS,"
+            echo "  CLASSIFICATION_PARQUET"
             exit 0
             ;;
         *)
@@ -119,6 +166,31 @@ done
 
 STEPS_RAN=()
 STEPS_SKIPPED=()
+
+print_merge_hint() {
+    # Usage: print_merge_hint <source_parquet> <columns...>
+    #
+    # The merge is deliberately NOT run automatically. merge_parquet_columns.py
+    # rewrites the target splits IN PLACE via atomic_write(..., mode="replace")
+    # with NO backup (src/shared/atomic_io.py), and its --splits defaults to
+    # train+val+test. Since these producers run on TEST pairs only, the default
+    # writes columns that are 100% null into train and val — it warns, then exits
+    # 0 with the files already replaced. That was the one path in this script that
+    # produced silently wrong data rather than a wasted run.
+    local source_file="$1"
+    local columns="$2"
+    echo ""
+    echo "  Computed: ${source_file}"
+    echo "  NOT merged into any split — that rewrites train/val/test IN PLACE with no backup."
+    echo "  To merge deliberately (note --splits test: the source covers test pairs only):"
+    echo ""
+    echo "      uv run python src/data_preparation/merge_parquet_columns.py \\"
+    echo "          --source \"${source_file}\" \\"
+    echo "          --target_dir \"<cohort>/sets\" \\"
+    echo "          --columns ${columns} \\"
+    echo "          --splits test"
+    echo ""
+}
 
 run_or_skip() {
     # Usage: run_or_skip <step_number> <output_file> <description> <command...>
@@ -186,17 +258,12 @@ step_2_go_similarity() {
     echo "  [2a] Computing GO semantic similarity on test.parquet..."
     uv run python src/data_preparation/go_semantic_similarity.py \
         --annotations "${GO_ANNOTATIONS}" \
-        --pairs_parquet "${SETS_DIR}/test.parquet" \
+        --pairs_parquet "${ANNOT_PAIRS}" \
         --output_parquet "${GO_OUTPUT}" \
         --obo_path "${REFERENCE_DIR}/go/go-basic.obo" \
         --aspects MFO BPO CCO
 
-    # 2b: Merge GO columns into train/val/test splits
-    echo "  [2b] Merging GO columns into train/val/test..."
-    uv run python src/data_preparation/merge_parquet_columns.py \
-        --source "${GO_OUTPUT}" \
-        --target_dir "${SETS_DIR}" \
-        --columns go_wang_mfo go_wang_bpo go_wang_cco
+    print_merge_hint "${GO_OUTPUT}" "go_wang_mfo go_wang_bpo go_wang_cco"
 }
 
 # --------------------------------------------------------------------------- #
@@ -234,18 +301,13 @@ step_4_pdb_tmscore() {
     echo "  [4a] Computing PDB experimental TM-scores on test.parquet..."
     echo "  (This step downloads PDB structures and runs TMalign — may take hours)"
     uv run python src/data_preparation/pdb_tmscore.py \
-        --pairs_parquet "${SETS_DIR}/test.parquet" \
+        --pairs_parquet "${ANNOT_PAIRS}" \
         --output_parquet "${TMSCORE_OUTPUT}" \
         --pdb_cache_dir "${REFERENCE_DIR}/pdb_cache" \
         --sifts_mapping "${REFERENCE_DIR}/sifts/uniprot_pdb.tsv" \
         --max_workers 4
 
-    # 4b: Merge tmscore_exp column into train/val/test splits
-    echo "  [4b] Merging tmscore_exp into train/val/test..."
-    uv run python src/data_preparation/merge_parquet_columns.py \
-        --source "${TMSCORE_OUTPUT}" \
-        --target_dir "${SETS_DIR}" \
-        --columns tmscore_exp
+    print_merge_hint "${TMSCORE_OUTPUT}" "tmscore_exp"
 }
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +320,7 @@ step_5_brenda_validation() {
     # Run HFSP validation on beta-lactamases (EC 3.5.2.6)
     echo "  Validating HFSP on beta-lactamases (EC 3.5.2.6)..."
     uv run python src/data_preparation/brenda_hfsp_validation.py \
-        --pairs_parquet "${SETS_DIR}/test.parquet" \
+        --pairs_parquet "${ANNOT_PAIRS}" \
         --output_dir "${OUTPUT_DIR}/hfsp_validation" \
         --enzyme_ec 3.5.2.6
 }
@@ -272,14 +334,26 @@ step_5_brenda_validation() {
 # and exit 0, publishing sd = 0.000. This step demonstrates ONE seed; the full
 # 13-model x 3-seed grid is scripts/lrz/embed_random_init.sbatch.
 RANDOM_SEED="${RANDOM_SEED:-0}"
-RANDOM_INIT_ESM2="${EMBEDDINGS_DIR}/random_init_esm2_650m_seed${RANDOM_SEED}.h5"
-RANDOM_INIT_PROTT5="${EMBEDDINGS_DIR}/random_init_prot_t5_seed${RANDOM_SEED}.h5"
+# Staged OUTSIDE embeddings/, and at the same path scripts/lrz/embed_random_init.sbatch
+# uses. run_experiments.py globs "<data_dir>/embeddings/*.h5" with no allowlist, and
+# distance_computation.py / all_vs_all_distance_computation.py glob the same directory
+# and deliberately do NOT exclude random_init_* — so writing into embeddings/ is an
+# implicit "enroll this in the next probe grid and add a dist_ column to the pair
+# tables". Promote by moving or symlinking, as a deliberate act.
+RANDOM_INIT_OUT_DIR="${RANDOM_INIT_OUT_DIR:-${PROBE_COHORT_DIR}/embeddings_random_init}"
+RANDOM_INIT_ESM2="${RANDOM_INIT_OUT_DIR}/random_init_esm2_650m_seed${RANDOM_SEED}.h5"
+RANDOM_INIT_PROTT5="${RANDOM_INIT_OUT_DIR}/random_init_prot_t5_seed${RANDOM_SEED}.h5"
 
 step_6_random_init() {
     # Check that FASTA file exists
     if [[ ! -f "${FASTA_FILE}" ]]; then
-        echo "  ERROR: FASTA file not found: ${FASTA_FILE}" >&2
-        echo "  Set FASTA_FILE to the path of your sequences FASTA." >&2
+        echo "  ERROR: FASTA_FILE is unset or missing: '${FASTA_FILE}'" >&2
+        echo "  There is deliberately no default. This step is a 2-arm local demo;" >&2
+        echo "  the real 13-model x 3-seed grid is:" >&2
+        echo "      sbatch --array=0-38 scripts/lrz/embed_random_init.sbatch" >&2
+        echo "  For a single local arm:" >&2
+        echo "      FASTA_FILE=data/raw/sprot_2024/sprot.fasta \\" >&2
+        echo "          ./scripts/run_ivan_pipeline.sh --step 6" >&2
         return 1
     fi
 
@@ -330,8 +404,14 @@ step_7_classification_eval() {
     fi
 
     echo "  Running classification evaluation at SCOP/ECOD hierarchy levels..."
+    # SECOND BLOCKER, independent of the missing classification parquet above: the
+    # dist_* columns below are read from test.parquet, but both cohorts' test schema
+    # is exactly (query, target, fident, hfsp, alntmscore). The dist_* columns live
+    # in train_ext.parquet. classification_eval.py skips all three and then exits 1.
+    # Fix by pointing --pairs_parquet at an _ext table, or by running
+    # distance_computation.py over ANNOT_PAIRS first.
     uv run python src/evaluation/classification_eval.py \
-        --pairs_parquet "${SETS_DIR}/test.parquet" \
+        --pairs_parquet "${ANNOT_PAIRS}" \
         --classification_parquet "${CLASSIFICATION_PARQUET}" \
         --distance_columns dist_prott5 dist_esm2_650m dist_esm2_3b \
         --hierarchy_columns fold_id sf_id fa_id \
@@ -348,12 +428,13 @@ echo "  pLM Choice Revision (2026-03-19)"
 echo "============================================================"
 echo ""
 echo "Configuration:"
-echo "  DATA_DIR:               ${DATA_DIR}"
-echo "  SETS_DIR:               ${SETS_DIR}"
-echo "  EMBEDDINGS_DIR:         ${EMBEDDINGS_DIR}"
+echo "  ANNOT_SOURCE_DIR:       ${ANNOT_SOURCE_DIR}"
+echo "  ANNOT_PAIRS:            ${ANNOT_PAIRS}"
+echo "  PROBE_COHORT_DIR:       ${PROBE_COHORT_DIR}"
+echo "  RANDOM_INIT_OUT_DIR:    ${RANDOM_INIT_OUT_DIR}"
 echo "  OUTPUT_DIR:             ${OUTPUT_DIR}"
 echo "  REFERENCE_DIR:          ${REFERENCE_DIR}"
-echo "  FASTA_FILE:             ${FASTA_FILE}"
+echo "  FASTA_FILE:             ${FASTA_FILE:-(unset — required for step 6)}"
 echo "  GO_ANNOTATIONS:         ${GO_ANNOTATIONS}"
 echo "  EC_ANNOTATIONS:         ${EC_ANNOTATIONS}"
 echo "  CLASSIFICATION_PARQUET: ${CLASSIFICATION_PARQUET}"
