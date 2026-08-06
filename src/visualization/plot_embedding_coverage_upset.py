@@ -178,6 +178,15 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
     by scattered metadata reads, so the answer is cached beside the file as
     ``<stem>.keys.txt``. The cache is invalidated on (size, mtime), because a stale key
     list would silently misreport coverage -- exactly the failure this figure documents.
+
+    Cold reads use the ``core`` driver, which slurps the file in one sequential pass
+    instead of chasing scattered metadata. These are superblock-v0 symbol-table groups:
+    ~0.52 metadata reads per key at 356 B each, and on GPFS an identical 356 B read
+    costs 3.0 us confined to an 8.4 MB span versus 175 us across a 4.62 GB span. Reading
+    the whole 4.6 GB sequentially takes 2.76 s at 1.7 GB/s while the scattered
+    equivalent takes 60-100 s at ~95% iowait. Measured end to end: esm1b.h5
+    161.7 s -> 2.4 s (66.8x), esm2_650m.h5 106.8 s -> 1.85 s (57.8x), key sets
+    byte-identical.
     """
     import h5py
 
@@ -191,7 +200,16 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
             if lines and lines[0] == stamp:
                 sets[h5_path.stem] = set(lines[1:])
                 continue
-        with h5py.File(h5_path, "r") as handle:
+        # The driver holds the whole file in RAM, so it must fit the process limit.
+        # Measured on an LRZ login node (4 GiB per-user cgroup): 3.53 GB file OK at
+        # 3.70 GB RSS, 4.62 GB file SIGKILLed at 4.18 GB. Fall back rather than die,
+        # and never run this concurrently -- P>=2 was observed to SIGKILL.
+        kwargs = (
+            {"driver": "core", "backing_store": False}
+            if stat.st_size < CORE_DRIVER_MAX_BYTES
+            else {}
+        )
+        with h5py.File(h5_path, "r", **kwargs) as handle:
             keys = list(handle.keys())
         sets[h5_path.stem] = set(keys)
         try:
@@ -204,6 +222,11 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
 # --------------------------------------------------------------------------- #
 # Figure
 # --------------------------------------------------------------------------- #
+
+#: Largest file to read with the in-RAM ``core`` driver. Sized against the LRZ login
+#: node's 4 GiB per-user cgroup, where a 3.53 GB file peaked at 3.70 GB RSS and a
+#: 4.62 GB one was SIGKILLed at 4.18 GB. Raise it only where the memory limit is known.
+CORE_DRIVER_MAX_BYTES = 4.0e9
 
 #: Committed coverage freeze -- the default source, so redrawing needs no cluster access.
 DEFAULT_COVERAGE_FREEZE = (
