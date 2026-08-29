@@ -1,7 +1,15 @@
+from pathlib import Path
+
 import h5py
 import numpy as np
 import polars as pl
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
+
+from shared.protein_cohort import (
+    exclusion_summary,
+    load_excluded_proteins,
+    restrict_to_cohort,
+)
 
 
 class H5PyDataset(Dataset):
@@ -95,6 +103,19 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
         raise IOError(
             f"Error opening or reading HDF5 file {hdf_file}. Original error: {e}"
         )
+
+    # Restrict to the cohort shared by every embedding arm. Without this each arm
+    # keeps whatever proteins its own HDF5 happens to contain, and since a pair is
+    # dropped when EITHER protein is missing, the arms end up scored on different --
+    # and differently sized -- test sets. See shared.protein_cohort for why this is a
+    # load-time filter over a committed id list rather than a deletion, and why
+    # completing the arms cannot substitute for it (ESM-1b's 1022-token cap).
+    # No freeze committed => empty exclusion => this is a no-op.
+    excluded = load_excluded_proteins()
+    if excluded:
+        summary = exclusion_summary(valid_keys, excluded)
+        valid_keys = restrict_to_cohort(valid_keys, excluded)
+        print(summary.describe(Path(hdf_file).stem))
 
     filtered_df = df.filter(
         pl.col("query").is_in(valid_keys) & pl.col("target").is_in(valid_keys)

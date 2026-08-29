@@ -68,3 +68,40 @@ The policy is set reproducibly via `--esm1b-paired-policy` (validated against
 `ESM1B_PAIRED_POLICIES`), not a hand-edit. Regardless of policy, no analysis may silently
 `dropna()` esm1b into a mixed-cohort mean — `assert_population(..., allow_capped=True)` for
 esm1b and report its `n = 267` separately.
+
+---
+
+## `embedding_key_coverage.json` (added 2026-08-05)
+
+Which proteins each pLM embedding set actually covers, for the **sprot_pre2024** cohort —
+the manifest behind the coverage UpSet figure.
+
+**Why it is committed.** The `.h5` files are on LRZ/Zenodo, not local, and enumerating ~542k
+HDF5 group keys costs **~3 minutes per file** over GPFS (~45 min for all 15). Without this
+cache every restyle of the figure would need cluster access. Same philosophy as the pair index
+above: **the repo pins the manifest; the image is a reproducible build product.** 2.2 KB.
+
+- `counts` — keys per model. `patterns` — bitmask over `models` → number of proteins with
+  exactly that membership. `intersection_all` — present in every arm.
+- Integrity: the patterns reconstruct `counts`, `universe` and `intersection_all` exactly
+  (asserted when the file is written).
+
+**What it shows.** Only **422,972 of 542,238 (78.00%)** proteins are in *every* arm, in five
+tiers: 542,238 complete · 542,237 (one outlier protein) · 540,881 (default `--max_seq_len
+2000`) · 526,871 (**ESM-1b's 1022-token cap; CLEAN inherits it**) · 435,298 (`esm2_3b`, an
+interrupted run, being completed). Note this is the *same* ESM-1b ceiling documented for the
+319 set above — there 267/319, here 526,871/542,238.
+
+This matters because `src/shared/datasets.py:99-105` drops a pair when *either* protein is
+missing, so coverage loss is **quadratic**: `esm2_3b` was scored on 558,947 test pairs where
+ten other arms got 872,572, yet is published at rank #10.
+
+## Regenerate
+
+```bash
+plm figures coverage-upset --out out/figures/coverage_upset.png   # offline, from this freeze
+plm figures coverage-upset --h5-dir <dir of .h5>                  # rebuild from the HDF5 files
+```
+
+The `--h5-dir` path caches each key list as a `<stem>.keys.txt` sidecar stamped with
+`(size, mtime)`, so a re-scan is instant and a changed `.h5` invalidates its cache.
