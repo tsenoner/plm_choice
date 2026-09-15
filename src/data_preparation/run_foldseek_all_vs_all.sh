@@ -169,14 +169,24 @@ if [ ! -f "${RESULT_DB_NAME}.dbtype" ]; then
 
 
 # --- Search breadth (affects WHICH PAIRS EXIST, not just runtime) -------------
-# MAX_SEQS caps how many prefilter hits per query reach the alignment stage.
-# At the default of 1000, any query whose family has more than 1000 detectable
-# relatives silently loses the rest, so the "all-vs-all" in this script's name
-# is bounded. The value is echoed below so it lands in the run log, and it is
-# overridable:  MAX_SEQS=10000 ./run_foldseek_all_vs_all.sh ...
-# The resubmission plan (Track B5) recommends 10000 for the stringent rebuild.
-# The default is left at 1000 so previously generated pair tables remain
-# reproducible - raise it deliberately, and regenerate everything downstream.
+# MAX_SEQS caps how many prefilter hits per query reach the alignment stage. Any
+# query whose family has more relatives than this silently loses the rest, so the
+# "all-vs-all" in this script's name is bounded. The value is echoed below so it
+# lands in the run log, and it is overridable:
+#   MAX_SEQS=10000 ./run_foldseek_all_vs_all.sh ...
+#
+# 1000 reproduces the structural pair table on disk. Measured on
+# data/interm/sprot_pre2024/foldseek/afdb_swissprot_v4_all_vs_all.parquet: max
+# hits/query is exactly 1000, with 63,514 of 539,280 queries (11.8%) at that
+# ceiling, contributing 22.9% of all rows.
+#
+# NOTE the deliberate asymmetry with run_mmseqs_all_vs_all.sh, which uses 300.
+# That 300 is Mahlich et al. 2018's parameterisation, and HFSP is defined only
+# against the SEQUENCE search -- it says nothing about a structural one. Binding
+# Foldseek to 300 as well would buy no methodological fidelity while invalidating
+# the structural pair table and every alntmscore-target probe. Decision taken
+# 2026-08-04; the two arms' truncation rates differ (43.3% vs 11.8% of queries
+# saturated) and that belongs in Methods.
 MAX_SEQS="${MAX_SEQS:-1000}"
 
 echo "  search breadth: --max-seqs $MAX_SEQS (queries with more relatives than this lose the remainder)"

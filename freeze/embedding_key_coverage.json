@@ -1,0 +1,61 @@
+{
+  "_comment": "Protein coverage of each pLM embedding set over the sprot_pre2024 cohort. Cached so the UpSet figure can be regenerated and iterated on WITHOUT cluster access: the .h5 files live on LRZ/Zenodo and enumerating 542k HDF5 group keys takes ~3 min per file over GPFS.",
+  "cohort": "sprot_pre2024",
+  "source": "/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2/data/zenodo_17469268/*.h5 (the md5-verified Zenodo deposit, read-only)",
+  "measured_utc": "2026-08-05",
+  "state": "PRE-FIX: esm2_3b was mid-completion (LRZ job 5732148). See esm2_3b_note.",
+  "esm2_3b_note": "435,298 of 542,238 = an interrupted run, not a length filter: present vs missing length distributions are indistinguishable (median 295 vs 296, p95 860 vs 864) and the longest protein (13,477 aa) was embedded. Once completed, the all-arm intersection rises 422,972 -> 526,871.",
+  "cause_by_tier": {
+    "542238": "complete",
+    "542237": "one protein short - the single 9-arm-missing outlier",
+    "540881": "default --max_seq_len 2000 skips longer sequences",
+    "526871": "ESM-1b positional cap of 1022 tokens; CLEAN inherits it (built on ESM-1b)",
+    "435298": "interrupted embedding run (being fixed)"
+  },
+  "models": [
+    "ankh_base",
+    "ankh_large",
+    "clean",
+    "esm1b",
+    "esm2_150m",
+    "esm2_35m",
+    "esm2_3b",
+    "esm2_650m",
+    "esm2_8m",
+    "esm3_open",
+    "esmc_300m",
+    "esmc_600m",
+    "prott5",
+    "prottucker",
+    "random_1024"
+  ],
+  "counts": {
+    "ankh_base": 542238,
+    "ankh_large": 542238,
+    "clean": 526871,
+    "esm1b": 526871,
+    "esm2_150m": 542238,
+    "esm2_35m": 542238,
+    "esm2_3b": 435298,
+    "esm2_650m": 542238,
+    "esm2_8m": 542238,
+    "esm3_open": 540881,
+    "esmc_300m": 540881,
+    "esmc_600m": 540881,
+    "prott5": 542237,
+    "prottucker": 542237,
+    "random_1024": 542237
+  },
+  "universe": 542238,
+  "intersection_all": 422972,
+  "patterns_note": "key = bitmask over `models` (bit i set => present in models[i]); value = number of proteins with exactly that membership.",
+  "patterns": {
+    "32767": 422972,
+    "32703": 103899,
+    "32755": 11234,
+    "32691": 2776,
+    "29171": 1091,
+    "29107": 265,
+    "499": 1
+  }
+}

@@ -259,11 +259,22 @@ def run_tmalign(
         # docstring's claim of "normalized by shorter chain" was never true.
         #
         # Take the minimum, i.e. normalization by the LONGER chain. That is
-        # symmetric under query/target swap and matches the convention used on
-        # the Foldseek side, where the pipeline takes min(qtmscore, ttmscore)
-        # because alntmscore alone is asymmetric. It is the conservative choice:
+        # symmetric under query/target swap, and it is the conservative choice:
         # a partial match of a short domain against a long protein cannot inflate
         # the score.
+        #
+        # This is a property of TMalign's OWN output, not a convention borrowed
+        # from Foldseek. An earlier version of this comment claimed the pipeline
+        # takes min(qtmscore, ttmscore) on the Foldseek side "because alntmscore
+        # alone is asymmetric" -- both halves are wrong, and the second
+        # contradicts merge_datasets._dedupe_foldseek_pairs, whose mean
+        # aggregation rests on alntmscore being symmetric. Checked:
+        # run_foldseek_all_vs_all.sh requests --format-output
+        # "query,target,fident,evalue,qcov,tcov,alntmscore" and nothing in this
+        # repo ever reads qtmscore or ttmscore. alntmscore is normalised over the
+        # ALIGNMENT, which is one object per pair regardless of direction; the
+        # query- and target-normalised variants are the asymmetric ones, and we
+        # do not use them.
         scores = [
             float(match.group(1))
             for line in result.stdout.split("\n")

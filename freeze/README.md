@@ -68,3 +68,108 @@ The policy is set reproducibly via `--esm1b-paired-policy` (validated against
 `ESM1B_PAIRED_POLICIES`), not a hand-edit. Regardless of policy, no analysis may silently
 `dropna()` esm1b into a mixed-cohort mean — `assert_population(..., allow_capped=True)` for
 esm1b and report its `n = 267` separately.
+
+---
+
+## `embedding_key_coverage.json` (added 2026-08-05)
+
+Which proteins each pLM embedding set actually covers, for the **sprot_pre2024** cohort —
+the manifest behind the coverage UpSet figure.
+
+**Why it is committed.** The `.h5` files are on LRZ/Zenodo, not local, and enumerating ~542k
+HDF5 group keys costs **~3 minutes per file** over GPFS (~45 min for all 15). Without this
+cache every restyle of the figure would need cluster access. Same philosophy as the pair index
+above: **the repo pins the manifest; the image is a reproducible build product.** 2.2 KB.
+
+- `counts` — keys per model. `patterns` — bitmask over `models` → number of proteins with
+  exactly that membership. `intersection_all` — present in every arm.
+- Integrity: the patterns reconstruct `counts`, `universe` and `intersection_all` exactly.
+  `load_keysets_json` re-derives all three from `patterns` on every read and raises if they
+  disagree, so a hand-edit that desynchronises them fails instead of drawing a confident
+  wrong figure. Both coverage files were measured on the cluster and committed by hand.
+
+**What it shows.** Only **422,972 of 542,238 (78.00%)** proteins are in *every* arm, in five
+tiers: 542,238 complete · 542,237 (one outlier protein) · 540,881 (default `--max_seq_len
+2000`) · 526,871 (**ESM-1b's 1022-token cap; CLEAN inherits it**) · 435,298 (`esm2_3b`, an
+interrupted run, being completed). Note this is the *same* ESM-1b ceiling documented for the
+319 set above — there 267/319, here 526,871/542,238.
+
+This matters because `src/shared/datasets.py:99-105` drops a pair when *either* protein is
+missing, so coverage loss is **quadratic**: `esm2_3b` was scored on 558,947 test pairs where
+ten other arms got 872,572, yet is published at rank #10.
+
+## Regenerate
+
+```bash
+# offline, from this freeze (the default source)
+plm figures coverage-upset --out out/figures/coverage_upset.png
+
+# after the <=2000 aa cut
+plm figures coverage-upset --out out/figures/coverage_upset_cohort2k.png \
+    --keysets-json freeze/embedding_key_coverage_cohort2k.json
+
+# rebuild from the HDF5 files (needs cluster access)
+plm figures coverage-upset --out <png> --h5-dir <dir of .h5>
+```
+
+The `--h5-dir` path caches each key list as a `<stem>.keys.txt` sidecar stamped with
+`(size, mtime)`, so a re-scan is instant and a changed `.h5` invalidates its cache.
+
+## `embedding_key_coverage_cohort2k.json` (added 2026-08-06)
+
+Same schema, same cohort, measured **after** the M-12 cut to ≤2000 residues (LRZ job
+5734016) — so it is the *post-fix* companion to the file above, not a replacement for it.
+Keep both: the pre-fix file is the evidence that the defect existed, this one is the
+evidence that it was fixed.
+
+Membership collapses from seven patterns to two: **526,871 of 540,881 (97.41%)** proteins
+are in every arm, and the remaining **14,010** are missing only from `clean`/`esm1b` —
+ESM-1b's 1022-token positional cap, which CLEAN inherits by construction. That shortfall is
+**documented, not fixed**: cutting the cohort to 1022 would cost every one of the 15 arms
+those proteins to accommodate one model. Because a pair needs both proteins, 97.41% protein
+coverage is ~94.9% of pairs for those two arms — disclose it wherever either is ranked.
+
+`state` records that `esm2_3b` is counted from the completed working copy (542,187 keys
+pre-cut), not the stale deposit (435,298).
+
+
+---
+
+## `embedding_excluded_proteins.json` — the shared-cohort exclusion
+
+The id list that `shared.datasets._load_and_filter_data` subtracts from every arm's key set, so
+all 15 arms are scored on **one** cohort. Not committed here yet — derive it on the cluster.
+
+**Why exclusion and not inclusion.** The excluded set is ~34x smaller than the included one
+(14,010 vs 526,871 ids), so it is the compact half to commit.
+
+**Why a load-time filter and not deleting datasets.** The `.h5` files are the md5-verified Zenodo
+deposit. Deleting from them is irreversible and would make each file stop matching its published
+checksum. A filter over a committed id list is reversible, reviewable, and reproducible from the
+deposit as published.
+
+**Why it matters.** `shared/datasets.py` drops a pair when *either* protein is missing, so coverage
+loss is **quadratic** — `esm2_3b` was scored on 558,947 test pairs where ten other arms got 872,572,
+yet is published at rank #10. A cross-pLM ranking whose rows were scored on different data is not a
+ranking. **Until this file exists the filter is a no-op**, which is deliberate: adopting the cohort
+is an explicit act (commit the freeze), not an accident.
+
+Schema: `schema_version`, `arms`, `counts` (keys per arm), `universe`, `intersection_all`,
+`n_excluded`, `content_sha256` (SHA-256 of the sorted id list), `excluded_ids`.
+
+### Regenerate
+
+```bash
+plm data cohort-freeze --h5-dir <dir of .h5>            # writes freeze/embedding_excluded_proteins.json
+plm data cohort-freeze --h5-dir <dir> --overwrite       # replace an existing freeze
+```
+
+Run it against the cohort the analysis actually uses (`embeddings_cohort2k/`, not the raw deposit).
+The writer is atomic (`shared.atomic_io.atomic_write`), lands at the canonical path, and **refuses
+to clobber an existing freeze unless `--overwrite` is passed** — same contract as the EC freeze
+above. `verify_exclusion` re-derives the hash and both counts from `excluded_ids` alone on every
+write, so a hand-edited list cannot filter a different cohort than it claims to.
+
+Against `embedding_key_coverage_cohort2k.json` this must produce **14,010** ids
+(540,881 − 526,871) — the proteins `clean`/`esm1b` lack to ESM-1b's 1022-token cap. That identity is
+pinned by `tests/test_protein_cohort.py::test_derivation_matches_the_committed_coverage_freeze`.

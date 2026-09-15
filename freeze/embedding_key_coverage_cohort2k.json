@@ -1,0 +1,49 @@
+{
+  "_comment": "Protein coverage per pLM arm AFTER the M-12 cut to <=2000 residues. Cached so the UpSet figure regenerates offline; see embedding_key_coverage.json for the pre-cut state.",
+  "cohort": "sprot_pre2024, proteins <=2000 aa",
+  "measured_utc": "2026-08-06",
+  "state": "POST-CUT. esm2_3b is the completed working copy (542,187 keys before the cut); all other arms measured from the Zenodo deposit. The physical rewrite is LRZ job 5734016; these counts are what that job will produce.",
+  "result": "13 of 15 arms hold the full 540,881. clean and esm1b hold 526,871 (97.41%) because ESM-1b's learned positional embeddings cap at 1022 tokens and CLEAN is built on ESM-1b, inheriting its coverage exactly. That 14,010-protein shortfall is DOCUMENTED, not fixed -- cutting to 1022 would cost every arm those proteins to accommodate one model.",
+  "quadratic_note": "A pair needs BOTH proteins, so 97.41% protein coverage is ~94.9% of pairs for clean/esm1b. Disclose wherever either appears in a ranking.",
+  "models": [
+    "ankh_base",
+    "ankh_large",
+    "clean",
+    "esm1b",
+    "esm2_150m",
+    "esm2_35m",
+    "esm2_3b",
+    "esm2_650m",
+    "esm2_8m",
+    "esm3_open",
+    "esmc_300m",
+    "esmc_600m",
+    "prott5",
+    "prottucker",
+    "random_1024"
+  ],
+  "counts": {
+    "ankh_base": 540881,
+    "ankh_large": 540881,
+    "clean": 526871,
+    "esm1b": 526871,
+    "esm2_150m": 540881,
+    "esm2_35m": 540881,
+    "esm2_3b": 540881,
+    "esm2_650m": 540881,
+    "esm2_8m": 540881,
+    "esm3_open": 540881,
+    "esmc_300m": 540881,
+    "esmc_600m": 540881,
+    "prott5": 540881,
+    "prottucker": 540881,
+    "random_1024": 540881
+  },
+  "universe": 540881,
+  "intersection_all": 526871,
+  "patterns_note": "key = bitmask over `models`; value = proteins with exactly that membership.",
+  "patterns": {
+    "32767": 526871,
+    "32755": 14010
+  }
+}

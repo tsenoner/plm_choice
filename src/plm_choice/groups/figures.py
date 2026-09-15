@@ -45,6 +45,22 @@ def summary(ctx: typer.Context) -> None:
 
 
 @_cmd(
+    "coverage-upset",
+    panel=_SUMMARY,
+    help_=(
+        "UpSet: which proteins each pLM embedding set actually covers. Defaults to the "
+        "committed freeze, so it redraws offline with no cluster or .h5 access."
+    ),
+)
+def coverage_upset(ctx: typer.Context) -> None:
+    run_module_main(
+        "visualization.plot_embedding_coverage_upset",
+        ctx.args,
+        prog="plm figures coverage-upset",
+    )
+
+
+@_cmd(
     "grid",
     panel=_SUMMARY,
     help_="Evaluation grid: model type x embedding x target, one cell per run.",

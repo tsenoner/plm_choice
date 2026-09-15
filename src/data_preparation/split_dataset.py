@@ -17,7 +17,9 @@ import polars as pl
 class DatasetSplitter:
     """Class to handle clustering and splitting of datasets."""
 
-    def __init__(self, database_path, output_dir, tool_type="mmseqs", threads=8):
+    def __init__(
+        self, database_path, output_dir, tool_type="mmseqs", threads=8, pairs_file=None
+    ):
         self.database_path = database_path
         self.output_dir = Path(output_dir)
         self.tool_type = tool_type
@@ -40,8 +42,14 @@ class DatasetSplitter:
         self.split_dir = self.output_dir / "splits"
 
         # Protein pair splitting paths
+        # Overridable so a --no-dedupe run is actually splittable. merge_datasets
+        # writes the legacy table to merged_protein_similarity_nodedup.parquet; with
+        # this path hardcoded, "reproduce the old numbers" stopped at the parquet and
+        # the only way forward was to edit this file.
         self.merged_protein_file = Path(
-            "data/interm/sprot_pre2024/merged_protein_similarity.parquet"
+            pairs_file
+            if pairs_file is not None
+            else "data/interm/sprot_pre2024/merged_protein_similarity.parquet"
         )
         self.processed_dir = Path("data/processed/sprot_pre2024/sets")
 
@@ -424,6 +432,14 @@ def main():
     parser.add_argument(
         "-t", "--threads", type=int, default=8, help="Number of threads"
     )
+    parser.add_argument(
+        "--pairs-file",
+        default=None,
+        help=(
+            "Merged pair table to split. Defaults to the canonical deduplicated table; "
+            "pass merged_protein_similarity_nodedup.parquet to split a --no-dedupe run."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -433,6 +449,7 @@ def main():
         output_dir=args.output_dir,
         tool_type=args.tool,
         threads=args.threads,
+        pairs_file=args.pairs_file,
     )
     splitter.run()
 

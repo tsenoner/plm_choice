@@ -54,15 +54,29 @@ fi
 # Step 2: Run All-Against-All Search
 
 # --- Search breadth (affects WHICH PAIRS EXIST, not just runtime) -------------
-# MAX_SEQS caps how many prefilter hits per query reach the alignment stage.
-# At the default of 1000, any query whose family has more than 1000 detectable
-# relatives silently loses the rest, so the "all-vs-all" in this script's name
-# is bounded. The value is echoed below so it lands in the run log, and it is
-# overridable:  MAX_SEQS=10000 ./run_mmseqs_all_vs_all.sh ...
-# The resubmission plan (Track B5) recommends 10000 for the stringent rebuild.
-# The default is left at 1000 so previously generated pair tables remain
-# reproducible - raise it deliberately, and regenerate everything downstream.
-MAX_SEQS="${MAX_SEQS:-1000}"
+# MAX_SEQS caps how many prefilter hits per query reach the alignment stage. Any
+# query whose family has more relatives than this silently loses the rest, so the
+# "all-vs-all" in this script's name is bounded. The value is echoed below so it
+# lands in the run log, and it is overridable:
+#   MAX_SEQS=10000 ./run_mmseqs_all_vs_all.sh ...
+#
+# 300 is deliberate, for two independent reasons:
+#   1. It is MMseqs2's own default, which is what Mahlich et al. 2018
+#      (Bioinformatics 34:i304-i312) used -- their Methods set --alignment-mode 3,
+#      --num-iterations 3, --e-profile 1e-10 and -e 1e-3 but never --max-seqs. HFSP
+#      is only defined against that parameterisation, so raising it here would take
+#      the sequence arm off the published HFSP method.
+#   2. It reproduces the pair table already on disk. Measured on
+#      data/interm/sprot_pre2024/mmseqs/sprot_all_vs_all.parquet: max hits/query is
+#      exactly 300, and 234,571 of 542,238 queries (43.3%) sit at that ceiling,
+#      contributing 68.7% of all rows. The previous default of 1000 did NOT
+#      describe this data.
+#
+# The cap therefore bites: for 43% of the proteome the more remote homologues were
+# dropped, because the prefilter ranks by score. Treat the pair set as enriched for
+# high-identity pairs within large families and say so in Methods. Raising it is a
+# deliberate, documented deviation that regenerates everything downstream.
+MAX_SEQS="${MAX_SEQS:-300}"
 
 echo "  search breadth: --max-seqs $MAX_SEQS (queries with more relatives than this lose the remainder)"
 echo "Step 2: Running all-against-all search..."
