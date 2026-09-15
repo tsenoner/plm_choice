@@ -5,7 +5,7 @@ import numpy as np
 import polars as pl
 from torch.utils.data import DataLoader, Dataset
 
-from shared.protein_cohort import load_excluded_proteins, restrict_to_cohort
+from shared.protein_cohort import cohort_size, load_excluded_proteins, restrict_to_cohort
 
 
 class H5PyDataset(Dataset):
@@ -111,6 +111,14 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
     if excluded:
         valid_keys, summary = restrict_to_cohort(valid_keys, excluded)
         print(summary.describe(Path(hdf_file).stem))
+        # Subtracting the exclusion is necessary but NOT sufficient. The filter only
+        # removes ids the freeze names; it cannot notice an arm that is short for a
+        # reason the freeze does not describe -- a stale or interrupted embedding run,
+        # a torn .fai rewrite (see 447d875), or simply an --h5-dir pointing at arms
+        # that were never cut to the cohort. Each leaves this arm on a different test
+        # set than its peers, which is the exact defect the freeze exists to prevent,
+        # and the count check is the only thing that can see it.
+        cohort_size(warn_if_not=summary.kept, label=Path(hdf_file).stem)
 
     filtered_df = df.filter(
         pl.col("query").is_in(valid_keys) & pl.col("target").is_in(valid_keys)

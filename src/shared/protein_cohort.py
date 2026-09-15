@@ -21,8 +21,10 @@ md5-verified Zenodo deposit. Deleting from them is irreversible and would make
 each file stop matching its published checksum. A filter over a committed id list
 is reversible, reviewable, and reproducible from the deposit as published.
 
-**Why the freeze stores the excluded ids.** The exclusion is ~34x smaller than the
-inclusion (15,367 vs 526,871 ids), so it is the compact half to commit.
+**Why the freeze stores the excluded ids.** The exclusion is ~38x smaller than the
+inclusion (14,010 vs 526,871 ids), so it is the compact half to commit. (15,367 was the
+pre-cut figure, against the 542,238 deposit; the cohort is the 540,881 proteins of
+<=2000 residues, so the exclusion is 540,881 - 526,871.)
 """
 
 from __future__ import annotations
@@ -133,6 +135,38 @@ def restrict_to_cohort(
     )
 
 
+def cohort_size(*, warn_if_not: int | None = None, label: str = "") -> int | None:
+    """The number of proteins the committed freeze says every arm should hold.
+
+    ``restrict_to_cohort`` only subtracts, so on its own it cannot distinguish an arm
+    that is complete from one that was already missing proteins the freeze says nothing
+    about. Both come out "filtered". This is the other half of the guarantee: the
+    freeze states ``intersection_all``, so any arm that does not land exactly there
+    after filtering is on a different cohort than its peers.
+
+    It WARNS rather than raises. Two legitimate callers land off the number -- an arm
+    that was never cut to <=2000 residues keeps the 1,357 proteins above that (the
+    freeze removes the 1023-2000 band, the cohort *cut* removed the rest), and a run
+    deliberately scoped to a subset holds fewer. Raising would break both; staying
+    silent is how a stale arm gets published at rank #10. Returns the expected size,
+    or ``None`` when no freeze is committed.
+    """
+    freeze = _default_freeze_path()
+    if not freeze.exists():
+        return None
+    expected = json.loads(freeze.read_text()).get("intersection_all")
+    if expected is not None and warn_if_not is not None and warn_if_not != expected:
+        delta = warn_if_not - expected
+        print(
+            f"cohort WARNING [{label}]: {warn_if_not:,} proteins after filtering, but the "
+            f"freeze defines a {expected:,}-protein cohort ({delta:+,}). This arm is NOT on "
+            f"the shared cohort -- {'it was never cut to the cohort, or ' if delta > 0 else ''}"
+            f"its embedding run is incomplete. Pairs need both proteins, so any metric from "
+            f"it is scored on different data than the other arms."
+        )
+    return expected
+
+
 # --------------------------------------------------------------------------- #
 # Derivation + freeze writing
 # --------------------------------------------------------------------------- #
@@ -225,6 +259,11 @@ def write_exclusion_freeze(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Imported here, not at module scope, to keep the load-time half of this module
+    # (load_excluded_proteins / restrict_to_cohort, on every training run's hot path)
+    # free of the h5py dependency that only the derivation half needs.
+    from shared.h5_keys import CORE_DRIVER_MAX_BYTES, load_h5_keysets
+
     parser = argparse.ArgumentParser(
         description="Derive the shared-cohort exclusion freeze from the embedding HDF5 files.",
     )
@@ -239,11 +278,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--no-cache", action="store_true", help="Ignore the .keys.txt sidecars when scanning."
     )
+    parser.add_argument(
+        "--core-driver-max-bytes",
+        type=float,
+        default=None,
+        help=(
+            "Largest file to read with the in-RAM 'core' driver (default: "
+            f"{CORE_DRIVER_MAX_BYTES:.1e}). Pass 0 to disable it entirely -- the whole "
+            "scan then costs ~1 GB instead of ~4 GB, at ~2-3x the read time."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    from shared.h5_keys import load_h5_keysets
-
-    keysets = load_h5_keysets(args.h5_dir, use_cache=not args.no_cache)
+    # Why this is a knob and not a constant: the ceiling is sized against the machine,
+    # not the data (see h5_keys.CORE_DRIVER_MAX_BYTES). Its 4.0e9 default is the LRZ
+    # login node's 4 GiB cgroup -- but that budget is per USER per NODE and holds every
+    # accumulated key set too, so a 15-arm scan peaks at ~4.1 GB there and the default
+    # is the wrong way round for exactly the caller it was written for. Disabling the
+    # core driver costs ~2-3x on read and removes the memory question.
+    keysets = load_h5_keysets(
+        args.h5_dir,
+        use_cache=not args.no_cache,
+        **(
+            {}
+            if args.core_driver_max_bytes is None
+            else {"core_driver_max_bytes": args.core_driver_max_bytes}
+        ),
+    )
     if not keysets:
         print(f"no .h5 files in {args.h5_dir}", file=sys.stderr)
         return 1

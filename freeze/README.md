@@ -124,10 +124,19 @@ evidence that it was fixed.
 
 Membership collapses from seven patterns to two: **526,871 of 540,881 (97.41%)** proteins
 are in every arm, and the remaining **14,010** are missing only from `clean`/`esm1b` —
-ESM-1b's 1022-token positional cap, which CLEAN inherits by construction. That shortfall is
-**documented, not fixed**: cutting the cohort to 1022 would cost every one of the 15 arms
-those proteins to accommodate one model. Because a pair needs both proteins, 97.41% protein
-coverage is ~94.9% of pairs for those two arms — disclose it wherever either is ranked.
+ESM-1b's 1022-token positional cap, which CLEAN inherits by construction.
+
+**That shortfall WAS documented-not-fixed; since 2026-09-15 it is fixed** (M-12, Option A):
+`embedding_excluded_proteins.json` below removes those 14,010 from every arm, so all fifteen
+are scored on the same 526,871 proteins. The earlier policy — keep the 14,010 and footnote the
+two short arms — was reversed because the headline claim is a *ranking*, and "two of fifteen
+rows were scored on a different test set" is the objection to avoid. The precedent it was
+modelled on (`footnote_esm1b_out`, canonical-319) stands: there the loss is 52/319 = 16% of a
+small contamination-control set, here it is 2.6% of a 540k comparison cohort. Different cost,
+different purpose.
+
+The pre-fix consequence, kept because the pre-fix file above still records it: a pair needs both
+proteins, so 97.41% protein coverage was ~94.9% of pairs for those two arms.
 
 `state` records that `esm2_3b` is counted from the completed working copy (542,187 keys
 pre-cut), not the stale deposit (435,298).
@@ -138,9 +147,16 @@ pre-cut), not the stale deposit (435,298).
 ## `embedding_excluded_proteins.json` — the shared-cohort exclusion
 
 The id list that `shared.datasets._load_and_filter_data` subtracts from every arm's key set, so
-all 15 arms are scored on **one** cohort. Not committed here yet — derive it on the cluster.
+all 15 arms are scored on **one** cohort. **Committed 2026-09-15** (14,010 ids, 193 KB).
 
-**Why exclusion and not inclusion.** The excluded set is ~34x smaller than the included one
+**What the 14,010 are.** Exactly the Swiss-Prot proteins of **1023–2000 residues** — verified two
+independent ways that agree with zero symmetric difference: union-minus-intersection over the 15
+physical `.h5` key sets, and a pure length cut over `data/raw/sprot_2024/sprot.fasta.fai`. So this
+is not a 2.6% trim of a ≤2000 cohort; it **redefines the cohort as ≤1022 residues**, with ESM-1b's
+context window setting the limit for all fifteen models. Methods must say so in those words (M-12).
+**Consequence: no claim about long or multi-domain proteins is available from this cohort.**
+
+**Why exclusion and not inclusion.** The excluded set is ~38x smaller than the included one
 (14,010 vs 526,871 ids), so it is the compact half to commit.
 
 **Why a load-time filter and not deleting datasets.** The `.h5` files are the md5-verified Zenodo
@@ -172,4 +188,12 @@ write, so a hand-edited list cannot filter a different cohort than it claims to.
 
 Against `embedding_key_coverage_cohort2k.json` this must produce **14,010** ids
 (540,881 − 526,871) — the proteins `clean`/`esm1b` lack to ESM-1b's 1022-token cap. That identity is
-pinned by `tests/test_protein_cohort.py::test_derivation_matches_the_committed_coverage_freeze`.
+pinned by `tests/test_protein_cohort.py::test_the_exclusion_and_coverage_freezes_describe_the_same_cohort`,
+the committed artifact by `::test_the_committed_exclusion_freeze_is_the_one_the_paper_describes`, and
+the length claim by `::test_the_excluded_proteins_are_exactly_the_ones_longer_than_esm1bs_context`.
+
+On the LRZ login node pass `--core-driver-max-bytes 0`. The default 4.0e9 ceiling loads each arm
+into RAM, and fifteen accumulated key sets plus one 3.5 GB arm peak at ~4.1 GB against that node's
+4 GiB per-user cgroup. Disabling the core driver costs ~2x on read and drops the peak to 854 MB —
+measured 105.7 s end to end for all 15 arms, versus a 4-day queue wait for the `lrz-cpu` batch
+equivalent in `scripts/lrz/cohort_freeze.sbatch` (kept for the reproduction record).
