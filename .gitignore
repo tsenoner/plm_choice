@@ -68,3 +68,6 @@ scripts/backup/
 # and the nested .git means even a forced add would store a gitlink rather than the files — two
 # independent barriers, which is the point. Edit the paper in manuscript/, commit it there.
 /manuscript/
+
+# Playwright MCP scratch (browser automation leaves this behind)
+.playwright-mcp/
