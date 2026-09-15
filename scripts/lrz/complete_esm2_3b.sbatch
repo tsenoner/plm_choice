@@ -46,7 +46,9 @@ FASTA="$DSS/plm_choice_data/data/raw/sprot_2024/sprot.fasta"
 PRISTINE="$DSS/data/zenodo_17469268/esm2_3b.h5"       # the md5-verified Zenodo deposit
 WORKDIR="$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings"
 OUT="$WORKDIR/esm2_3b.h5"
-EXPECTED=542238
+EXPECTED=542238          # h5 keys this arm must end up with
+FASTA_RECORDS=542238     # records sprot.fasta must yield -- same number today, but a
+                         # DIFFERENT quantity; do not collapse them
 
 cd "$HOME/plm_choice"
 mkdir -p "$WORKDIR"
@@ -71,10 +73,18 @@ import h5py; f=h5py.File('$OUT','r'); print('keys:', len(f.keys())); f.close()"
 # NO --bf16: the existing 435,298 vectors are float32. Mixing precision inside
 #   one file would make this arm internally inconsistent -- the exact class of
 #   confound the reviewers objected to.
+# --expect_sequences: this job and the --array=0-14 cohort job read ONE shared
+#   sprot.fasta, and pyfaidx rewrites its .fai non-atomically. A reader landing
+#   mid-rewrite gets a silent subset -- or, when the cut falls inside the trailing
+#   lenc/lenb field, five still-parseable columns with the wrong stride, i.e. real
+#   accessions carrying the WRONG RESIDUES. Neither outcome raises. The AFTER check
+#   below cannot catch the second case at all: the key count comes out right and the
+#   vectors are wrong. This exits 8 in seconds, before the 3B checkpoint is fetched.
 ./.venv/bin/python src/data_preparation/embeddings/embedding_generation.py \
     "$FASTA" esm2_3b \
     --output_hdf5_file "$OUT" \
     --weights_dir "$DSS/cache/huggingface" \
+    --expect_sequences "$FASTA_RECORDS" \
     --max_seq_len 6000 \
     --token_budget 8192
 # token_budget 8192, not 16384: the MIG slice is 20 GB and ESM2-3B's fp32 weights
