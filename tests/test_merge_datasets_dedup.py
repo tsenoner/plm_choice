@@ -140,3 +140,22 @@ def test_hfsp_is_computed_from_the_retained_alignment():
     # formula has already shipped wrong once (see test_merge_datasets_hfsp) and a
     # second transcription would not be found when it is revised again.
     assert abs(out["hfsp"][0] - _mahlich_hfsp(0.55, 160)) < 1e-4
+
+
+def test_foldseek_dedup_row_order_is_deterministic():
+    """polars' group_by is multithreaded and unordered by default.
+
+    Two identical runs then write byte-different parquets -- and
+    create_subset_datasets.py draws the 10% training subset with a seeded but
+    POSITIONAL df.sample(), so a reshuffled table is a different training set.
+    """
+    rows = [(f"P{i}", f"P{j}", 0.5 + i / 100, 0.8) for i in range(60) for j in range(i + 1, 12)]
+    df = pl.DataFrame({
+        "query": [r[0] for r in rows], "target": [r[1] for r in rows],
+        "alntmscore": [r[2] for r in rows], "min_cov": [r[3] for r in rows],
+    })
+    orders = {
+        tuple(_pipe()._dedupe_foldseek_pairs(df).select(["query", "target"]).rows())
+        for _ in range(5)
+    }
+    assert len(orders) == 1

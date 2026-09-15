@@ -150,36 +150,87 @@ def test_verify_rejects_duplicate_ids():
         verify_exclusion(manifest)
 
 
-def test_derivation_matches_the_committed_coverage_freeze():
-    """Anti-tautology: the arm counts must reproduce the independently-measured freeze.
-
-    freeze/embedding_key_coverage_cohort2k.json was measured on the cluster from the
-    real .h5 files. Deriving from key sets reconstructed out of its own pattern
-    bitmasks must land on the same universe/intersection, or the two committed
-    artifacts disagree about what the cohort is.
-    """
-    blob = json.loads(
+def _cohort2k_freeze() -> dict:
+    return json.loads(
         (
             Path(__file__).resolve().parents[1]
             / "freeze"
             / "embedding_key_coverage_cohort2k.json"
         ).read_text()
     )
+
+
+def test_the_committed_freeze_states_the_exclusion_size_it_implies():
+    """Pure arithmetic on the freeze -- no ids materialised.
+
+    540,881 - 526,871 = the 14,010 proteins clean/esm1b lack to ESM-1b's 1022-token cap.
+    """
+    blob = _cohort2k_freeze()
+    assert blob["universe"] - blob["intersection_all"] == 14010
+
+
+def test_derivation_reproduces_the_committed_coverage_freeze_structure():
+    """Anti-tautology: derive_exclusion must agree with the independently-measured freeze.
+
+    Scaled 1000x down. The value here is the pattern-bitmask -> membership -> union /
+    intersection round trip, which is scale-free; materialising all 540,881 ids cost
+    ~1 GB and ~3 s for an identity that holds at any size.
+    """
+    blob = _cohort2k_freeze()
     models = list(blob["models"])
-    # Rebuild synthetic key sets with the right membership structure from the patterns.
-    keysets = {m: set() for m in models}
+    scale = 1000
+
+    keysets: dict[str, set] = {m: set() for m in models}
+    expected: dict[str, int] = {m: 0 for m in models}
     pid = 0
     for mask_str, n in blob["patterns"].items():
         mask = int(mask_str)
         members = [m for i, m in enumerate(models) if mask & (1 << i)]
-        for _ in range(n):
+        for _ in range(max(1, n // scale)):
             for m in members:
                 keysets[m].add(f"P{pid}")
+                expected[m] += 1
             pid += 1
 
     manifest = derive_exclusion(keysets)
-    assert manifest["counts"] == blob["counts"]
-    assert manifest["universe"] == blob["universe"]
-    assert manifest["intersection_all"] == blob["intersection_all"]
-    # 540,881 - 526,871 = the 14,010 proteins clean/esm1b lack (ESM-1b's 1022 cap)
-    assert manifest["n_excluded"] == blob["universe"] - blob["intersection_all"] == 14010
+    assert manifest["counts"] == expected
+    assert manifest["universe"] == pid
+    # the deficient arms must be exactly the ones the freeze reports short
+    short_here = {m for m, n in manifest["counts"].items() if n < manifest["universe"]}
+    short_there = {m for m, n in blob["counts"].items() if n < blob["universe"]}
+    assert short_here == short_there == {"clean", "esm1b"}
+    assert manifest["n_excluded"] == manifest["universe"] - manifest["intersection_all"]
+
+
+def test_a_hand_edited_freeze_fails_on_LOAD_not_only_on_write(tmp_path):
+    """The guard has to sit where drift can actually happen.
+
+    At write time the manifest was just derived in-process and cannot have been
+    edited; on disk between runs it can. Verifying only on write puts the check in
+    the one place it cannot help.
+    """
+    manifest = derive_exclusion({"a": {"P1", "P2", "P3"}, "b": {"P1"}})
+    path = write_exclusion_freeze(manifest, tmp_path / "ex.json")
+    blob = json.loads(path.read_text())
+    blob["excluded_ids"] = ["P2"]  # dropped P3 by hand; hash and counts now stale
+    path.write_text(json.dumps(blob))
+    load_excluded_proteins.cache_clear()
+    with pytest.raises(ValueError):
+        load_excluded_proteins(path)
+
+
+def test_derive_accepts_frozensets():
+    """set().union() takes a frozenset; the unbound set.intersection() does not."""
+    manifest = derive_exclusion({"a": frozenset({"P1", "P2"}), "b": frozenset({"P1"})})
+    assert manifest["excluded_ids"] == ["P2"]
+
+
+def test_default_freeze_path_does_not_assume_a_source_checkout(tmp_path, monkeypatch):
+    """The wheel ships src/* but NOT freeze/, so parents[2] resolves outside the tree."""
+    from shared import protein_cohort
+
+    # No pyproject.toml above a site-packages-like location -> cwd-relative fallback,
+    # never a path built by counting parents off __file__.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(protein_cohort, "__file__", str(tmp_path / "sp" / "shared" / "protein_cohort.py"))
+    assert protein_cohort._default_freeze_path() == Path("freeze") / protein_cohort.FREEZE_NAME

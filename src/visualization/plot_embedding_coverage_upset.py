@@ -51,11 +51,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
 from shared.h5_keys import load_h5_keysets  # noqa: E402,F401  (re-exported for callers)
-from visualization.plm_constants import (  # noqa: E402
-    EMBEDDING_COLOR_MAP,
-    EMBEDDING_DISPLAY_NAMES,
-)
-
+from visualization.plm_constants import EMBEDDING_COLOR_MAP, EMBEDDING_DISPLAY_NAMES  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Set maths (pure -- pinned by tests/test_coverage_upset.py)

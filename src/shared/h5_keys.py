@@ -10,7 +10,10 @@ previously restated in prose in a figure module and an sbatch heredoc.
 from __future__ import annotations
 
 from itertools import chain
+from operator import methodcaller
 from pathlib import Path
+
+from shared.atomic_io import atomic_write
 
 #: Largest file to read with the in-RAM ``core`` driver. Sized against the LRZ login
 #: node's 4 GiB per-user cgroup, where a 3.53 GB file peaked at 3.70 GB RSS and a
@@ -61,7 +64,14 @@ def load_h5_keysets(
             keys = list(handle.keys())
         sets[h5_path.stem] = set(keys)
         try:
-            sidecar.write_text("\n".join(chain((stamp,), keys)))
+            # Atomically: a job killed mid-write would otherwise leave a TRUNCATED key
+            # list whose (size, mtime) stamp still matches, so the next run trusts it
+            # and reports a phantom-deficient arm -- the exact silent miscount this
+            # cache exists to avoid. The OSError catch would swallow the partial write.
+            payload = "\n".join(chain((stamp,), keys))
+            # methodcaller rather than a lambda: no closure over the loop variables,
+            # so there is nothing to late-bind and nothing keeping `keys` alive.
+            atomic_write(sidecar, methodcaller("write_text", payload), mode="replace")
         except OSError:
             pass  # read-only location (e.g. the Zenodo deposit) -- caching is optional
     return sets

@@ -380,7 +380,12 @@ class ProteinAnalysisPipeline:
         """
         deduped = (
             self._canonicalise_pairs(df)
-            .group_by(["query", "target"])
+            # maintain_order=True: polars' group_by is multithreaded and its default
+            # emits groups in a nondeterministic order, so two identical runs wrote
+            # byte-different parquets. That matters beyond tidiness --
+            # create_subset_datasets.py draws the 10% training subset with a seeded but
+            # POSITIONAL df.sample(), so a reshuffled table is a different training set.
+            .group_by(["query", "target"], maintain_order=True)
             .agg([pl.col("min_cov").mean(), pl.col("alntmscore").mean()])
         )
         return self._report_dedupe("FoldSeek", df.height, deduped)

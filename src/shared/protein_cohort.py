@@ -28,20 +28,40 @@ inclusion (15,367 vs 526,871 ids), so it is the compact half to commit.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
+import operator
 import sys
-from dataclasses import dataclass
-from functools import lru_cache
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 SCHEMA_VERSION = 1
 
-#: Committed exclusion list. Absent freeze => empty exclusion => unchanged behaviour.
-DEFAULT_EXCLUSION_FREEZE = (
-    Path(__file__).resolve().parents[2] / "freeze" / "embedding_excluded_proteins.json"
-)
+def _default_freeze_path() -> Path:
+    """Locate ``freeze/embedding_excluded_proteins.json`` without assuming the repo layout.
+
+    ``parents[2]`` only works from a source checkout. The wheel ships ``src/*`` and NOT
+    ``freeze/`` (``pyproject.toml [tool.hatch.build.targets.wheel]``), so from
+    ``site-packages/shared/`` that expression points two levels above site-packages and
+    the freeze is never found -- and because an absent freeze is a deliberate no-op, the
+    cohort filter would switch itself off with no visible sign. Walk up for the repo
+    marker instead, then fall back to a cwd-relative ``freeze/``, which is the convention
+    ``ec_freeze`` and ``orphan_freeze`` already use.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent / "freeze" / FREEZE_NAME
+    return Path("freeze") / FREEZE_NAME
+
+
+FREEZE_NAME = "embedding_excluded_proteins.json"
+
+#: Committed exclusion list. Absent freeze => empty exclusion => unchanged behaviour,
+#: but the absence is announced (see ``load_excluded_proteins``) rather than silent.
+DEFAULT_EXCLUSION_FREEZE = None  # resolved lazily by _default_freeze_path()
 
 
 @dataclass(frozen=True)
@@ -63,7 +83,7 @@ class ExclusionSummary:
         )
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def load_excluded_proteins(path: Path | str | None = None) -> frozenset[str]:
     """Read the committed exclusion list.
 
@@ -73,11 +93,20 @@ def load_excluded_proteins(path: Path | str | None = None) -> frozenset[str]:
 
     Cached because every loader in a run reads the same freeze -- one parse per
     process, not one per arm per split.
+
+    The manifest is verified HERE, not only where it is written. A freeze is hand-
+    editable on disk between runs; at write time it was just derived in-process and
+    cannot have drifted. Verifying only on write puts the guard in the one place it
+    cannot help.
     """
-    freeze = Path(path) if path is not None else DEFAULT_EXCLUSION_FREEZE
+    freeze = Path(path) if path is not None else _default_freeze_path()
     if not freeze.exists():
+        # Announce it: an absent freeze is a legitimate no-op, but a silent one is
+        # indistinguishable from a filter that ran and found nothing to remove.
+        print(f"cohort filter: no exclusion freeze at {freeze} -- every arm keeps its own keys")
         return frozenset()
     blob = json.loads(freeze.read_text())
+    verify_exclusion(blob)
     return frozenset(blob["excluded_ids"])
 
 
@@ -133,7 +162,10 @@ def derive_exclusion(keysets: dict[str, set]) -> dict:
         raise ValueError("no key sets given -- nothing to derive a cohort from")
     arms = sorted(keysets)
     universe: set[str] = set().union(*(keysets[a] for a in arms))
-    intersection: set[str] = set.intersection(*(keysets[a] for a in arms))
+    # reduce(&) rather than set.intersection(*...): the unbound method rejects a
+    # frozenset as `self`, while the set().union() above accepts one -- an asymmetry
+    # that shows up only at a caller that happens to hold immutable key sets.
+    intersection: set[str] = functools.reduce(operator.and_, (keysets[a] for a in arms))
     excluded = sorted(universe - intersection)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -181,7 +213,7 @@ def write_exclusion_freeze(
     from shared.atomic_io import atomic_write
 
     verify_exclusion(manifest)
-    out = Path(path) if path is not None else DEFAULT_EXCLUSION_FREEZE
+    out = Path(path) if path is not None else _default_freeze_path()
     if out.exists() and not overwrite:
         raise FileExistsError(f"{out} exists; pass --overwrite to replace")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -200,7 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--h5-dir", type=Path, required=True, help="Directory of per-arm .h5 files."
     )
     parser.add_argument(
-        "--out", type=Path, default=None, help=f"Output path (default: {DEFAULT_EXCLUSION_FREEZE})"
+        "--out", type=Path, default=None,
+        help=f"Output path (default: {_default_freeze_path()})",
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing freeze.")
     parser.add_argument(
