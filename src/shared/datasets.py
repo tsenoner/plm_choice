@@ -5,11 +5,7 @@ import numpy as np
 import polars as pl
 from torch.utils.data import DataLoader, Dataset
 
-from shared.protein_cohort import (
-    exclusion_summary,
-    load_excluded_proteins,
-    restrict_to_cohort,
-)
+from shared.protein_cohort import load_excluded_proteins, restrict_to_cohort
 
 
 class H5PyDataset(Dataset):
@@ -113,8 +109,7 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
     # No freeze committed => empty exclusion => this is a no-op.
     excluded = load_excluded_proteins()
     if excluded:
-        summary = exclusion_summary(valid_keys, excluded)
-        valid_keys = restrict_to_cohort(valid_keys, excluded)
+        valid_keys, summary = restrict_to_cohort(valid_keys, excluded)
         print(summary.describe(Path(hdf_file).stem))
 
     filtered_df = df.filter(

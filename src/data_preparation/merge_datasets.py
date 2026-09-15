@@ -38,6 +38,11 @@ pl.Config.set_tbl_cols(20)
 class ProteinAnalysisPipeline:
     """Main pipeline class for protein similarity analysis."""
 
+    #: Class-level default so the tests' ``object.__new__`` bypass of ``__init__``
+    #: (which needs the on-disk data-directory layout) still sees the real default.
+    #: One declaration here beats a defensive ``getattr`` at each read site.
+    _dedupe: bool = True
+
     def __init__(
         self,
         base_data_dir: str | Path = "data",
@@ -105,6 +110,10 @@ class ProteinAnalysisPipeline:
 
     def get_file_paths(self, test_mode: bool = False) -> dict[str, Path]:
         """Get file paths, with test mode suffixes if needed."""
+        # A non-deduplicated run writes to its own filename so it can never silently
+        # overwrite the canonical (deduplicated) pair table -- in test mode too, where
+        # the two would otherwise collide on merged_protein_similarity_test.parquet.
+        dedupe_suffix = "" if self._dedupe else "_nodedup"
         if test_mode:
             # For test mode, modify the stem (filename without extension)
             mmseqs_parquet = self.mmseqs_tsv.with_stem(
@@ -113,7 +122,9 @@ class ProteinAnalysisPipeline:
             foldseek_parquet = self.foldseek_tsv.with_stem(
                 f"{self.foldseek_tsv.stem}_test"
             ).with_suffix(".parquet")
-            final_merged = self.interm_dir / "merged_protein_similarity_test.parquet"
+            final_merged = (
+                self.interm_dir / f"merged_protein_similarity{dedupe_suffix}_test.parquet"
+            )
             plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}_test")
             low_plddt_ids = self.foldcomp_low_plddt_ids.with_stem(
                 f"{self.foldcomp_low_plddt_ids.stem}_test"
@@ -121,14 +132,9 @@ class ProteinAnalysisPipeline:
         else:
             mmseqs_parquet = self.mmseqs_tsv.with_suffix(".parquet")
             foldseek_parquet = self.foldseek_tsv.with_suffix(".parquet")
-            # A non-deduplicated run writes to its own filename so it can never
-            # silently overwrite the canonical (deduplicated) pair table.
-            merged_name = (
-                "merged_protein_similarity.parquet"
-                if getattr(self, "_dedupe", True)
-                else "merged_protein_similarity_nodedup.parquet"
+            final_merged = (
+                self.interm_dir / f"merged_protein_similarity{dedupe_suffix}.parquet"
             )
-            final_merged = self.interm_dir / merged_name
             plots_dir = self.plots_dir
             low_plddt_ids = self.foldcomp_low_plddt_ids
 
@@ -356,18 +362,12 @@ class ProteinAnalysisPipeline:
         non-linear function of (PIDE, L): averaging would fabricate an alignment
         that never existed and leave fident/nident/mismatch mutually inconsistent.
         """
-        before = df.height
         deduped = (
             self._canonicalise_pairs(df)
             .sort("evalue")
             .unique(subset=["query", "target"], keep="first", maintain_order=True)
         )
-        removed = before - deduped.height
-        print(
-            f"🔁 MMSeqs2: collapsed {removed:,} duplicate orientations "
-            f"({removed / before * 100:.1f}%), {deduped.height:,} unordered pairs"
-        )
-        return deduped
+        return self._report_dedupe("MMSeqs2", df.height, deduped)
 
     def _dedupe_foldseek_pairs(self, df: pl.DataFrame) -> pl.DataFrame:
         """Collapse both orientations of a pair, averaging the structural scores.
@@ -378,16 +378,21 @@ class ProteinAnalysisPipeline:
         re-introduce an upward bias on precisely the duplicated subset that this
         deduplication exists to stop over-weighting.
         """
-        before = df.height
         deduped = (
             self._canonicalise_pairs(df)
             .group_by(["query", "target"])
             .agg([pl.col("min_cov").mean(), pl.col("alntmscore").mean()])
         )
+        return self._report_dedupe("FoldSeek", df.height, deduped)
+
+    @staticmethod
+    def _report_dedupe(name: str, before: int, deduped: pl.DataFrame) -> pl.DataFrame:
+        """Report one arm's collapse. Shared so the two arms' numbers stay comparable."""
         removed = before - deduped.height
+        share = f"{removed / before * 100:.1f}%" if before else "n/a"
         print(
-            f"🔁 FoldSeek: collapsed {removed:,} duplicate orientations "
-            f"({removed / before * 100:.1f}%), {deduped.height:,} unordered pairs"
+            f"🔁 {name}: collapsed {removed:,} duplicate orientations "
+            f"({share}), {deduped.height:,} unordered pairs"
         )
         return deduped
 
@@ -901,24 +906,17 @@ Examples:
 
     args = parser.parse_args()
 
-    print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
-    print("=" * 50)
+    # run() prints its own mode banner and defaults test_size; only the dedupe state
+    # is decided out here, because it is what picks the output filename.
+    print(f"📦 Dataset: {args.dataset}")
     print(
         f"🔁 Pair deduplication: {'ON (canonical unordered pairs)' if args.dedupe else 'OFF (directional, legacy)'}"
     )
 
-    if args.test:
-        print(f"🧪 TEST MODE: Processing 100K rows per dataset ({args.dataset})")
-        pipeline = ProteinAnalysisPipeline(
-            args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
-        )
-        result_df = pipeline.run(test_mode=True, test_size=100_000)
-    else:
-        print(f"🚀 FULL MODE: Processing complete datasets ({args.dataset})")
-        pipeline = ProteinAnalysisPipeline(
-            args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
-        )
-        result_df = pipeline.run(test_mode=False)
+    pipeline = ProteinAnalysisPipeline(
+        args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
+    )
+    result_df = pipeline.run(test_mode=args.test)
 
     print("✅ Pipeline completed successfully!")
     print(f"📊 Final dataset shape: {result_df.shape}")

@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import json
 
-from shared.protein_cohort import (
-    exclusion_summary,
-    load_excluded_proteins,
-    restrict_to_cohort,
-)
+from shared.protein_cohort import load_excluded_proteins, restrict_to_cohort
+
+
+def _kept(keys, excluded):
+    return restrict_to_cohort(keys, excluded)[0]
 
 
 def _freeze(tmp_path, ids, **extra):
@@ -45,21 +45,21 @@ def test_missing_freeze_excludes_nothing(tmp_path):
 
 def test_restrict_removes_excluded_keys(tmp_path):
     keys = {"P1", "P2", "P3"}
-    assert restrict_to_cohort(keys, frozenset({"P2"})) == {"P1", "P3"}
+    assert _kept(keys, frozenset({"P2"})) == {"P1", "P3"}
 
 
 def test_restrict_is_a_noop_for_an_empty_exclusion():
     keys = {"P1", "P2"}
-    assert restrict_to_cohort(keys, frozenset()) == keys
+    assert _kept(keys, frozenset()) == keys
 
 
 def test_restrict_ignores_excluded_ids_absent_from_this_arm():
     """An arm may already lack an excluded id; that must not be an error."""
-    assert restrict_to_cohort({"P1"}, frozenset({"P2", "P3"})) == {"P1"}
+    assert _kept({"P1"}, frozenset({"P2", "P3"})) == {"P1"}
 
 
 def test_exclusion_summary_reports_what_was_removed():
-    summary = exclusion_summary({"P1", "P2", "P3"}, frozenset({"P2", "P9"}))
+    _, summary = restrict_to_cohort({"P1", "P2", "P3"}, frozenset({"P2", "P9"}))
     assert summary.kept == 2
     assert summary.removed == 1
     # P9 is not in this arm at all -- reported separately, never counted as removed
@@ -71,3 +71,4 @@ def test_freeze_may_carry_provenance_without_breaking_the_loader(tmp_path):
         tmp_path, ["P1"], cohort="sprot_pre2024", reason="missing from >=1 arm"
     )
     assert load_excluded_proteins(path) == frozenset({"P1"})
+

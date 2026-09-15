@@ -41,6 +41,7 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import chain
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,14 +51,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
-try:  # keep the set maths importable without the repo's plotting stack
-    from visualization.plm_constants import (
-        EMBEDDING_DISPLAY_NAMES,
-        EMBEDDING_FAMILY_COLOR_MAP,
-        EMBEDDING_FAMILY_MAP,
-    )
-except ImportError:  # pragma: no cover - exercised only outside the package
-    EMBEDDING_DISPLAY_NAMES, EMBEDDING_FAMILY_COLOR_MAP, EMBEDDING_FAMILY_MAP = {}, {}, {}
+from visualization.plm_constants import (  # noqa: E402
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_DISPLAY_NAMES,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +69,6 @@ class PatternRow:
     members: frozenset[str]
     count: int
     complete: bool
-    missing: tuple[str, ...]
 
     @property
     def degree(self) -> int:
@@ -86,17 +82,23 @@ def membership_patterns(sets: Mapping[str, Iterable[str]]) -> dict[frozenset[str
     |sets|) hash lookups rather than materialising 2^n intersections -- at 15 sets the
     latter would be 32,768 combinations, almost all empty.
     """
-    materialised = {name: set(values) for name, values in sets.items()}
-    universe: set = set()
-    for values in materialised.values():
-        universe |= values
-
-    counts: Counter = Counter()
-    for element in universe:
-        combo = frozenset(name for name, values in materialised.items() if element in values)
-        if combo:  # an element in no set is not in the union; guard anyway
-            counts[combo] += 1
-    return dict(counts)
+    # Re-``set()``ing an input that is already a set duplicates every hash table --
+    # measured at +487 MB for the 15 arms, against a 4 GiB per-user cgroup on the
+    # login node this is meant to run on.
+    materialised = {
+        name: values if isinstance(values, (set, frozenset)) else set(values)
+        for name, values in sets.items()
+    }
+    if not materialised:
+        return {}
+    universe = set().union(*materialised.values())
+    # Every element of the union is in >=1 set, so no combination is ever empty.
+    return dict(
+        Counter(
+            frozenset(name for name, values in materialised.items() if element in values)
+            for element in universe
+        )
+    )
 
 
 def set_sizes_from_patterns(
@@ -116,16 +118,14 @@ def set_sizes_from_patterns(
 
 
 def pattern_rows(
-    patterns: Mapping[frozenset[str], int],
-    order: Sequence[str],
-    max_rows: int | None = None,
-    return_dropped: bool = False,
-):
+    patterns: Mapping[frozenset[str], int], order: Sequence[str]
+) -> list[PatternRow]:
     """Sort patterns by size (descending) and annotate each one.
 
-    ``max_rows`` truncates for legibility. Truncation is **reported**, never silent:
-    pass ``return_dropped=True`` to get the number of patterns left out, and put it in
-    the caption. A figure that quietly drops intersections misstates the coverage.
+    Returns **every** row. Truncating for legibility is the caller's slice, so the
+    rows it left out stay in hand and can be reported -- a figure that quietly drops
+    intersections misstates the coverage, and a caller that has to rebuild the table
+    to describe what it dropped will eventually describe it wrongly.
     """
     known = set(order)
     for combo in patterns:
@@ -135,31 +135,26 @@ def pattern_rows(
 
     full = frozenset(order)
     rows = [
-        PatternRow(
-            members=combo,
-            count=n,
-            complete=(combo == full),
-            missing=tuple(name for name in order if name not in combo),
-        )
+        PatternRow(members=combo, count=n, complete=(combo == full))
         for combo, n in patterns.items()
     ]
     # size first; ties broken by higher degree then by name so output is deterministic
     rows.sort(key=lambda r: (-r.count, -r.degree, sorted(r.members)))
-
-    dropped = 0
-    if max_rows is not None and len(rows) > max_rows:
-        dropped = len(rows) - max_rows
-        rows = rows[:max_rows]
-    return (rows, dropped) if return_dropped else rows
+    return rows
 
 
 # --------------------------------------------------------------------------- #
 # Loading
 # --------------------------------------------------------------------------- #
 
-
 def load_keysets_json(path: Path) -> tuple[list[str], dict[frozenset[str], int]]:
-    """Read the compact summary produced by the cluster-side key scan."""
+    """Read the compact summary produced by the cluster-side key scan.
+
+    ``patterns`` is the only load-bearing field; ``counts``, ``universe`` and
+    ``intersection_all`` are redundant with it. That redundancy is the integrity
+    check -- these files are committed by hand, and a hand-edit that desynchronises
+    them must fail here rather than draw a confident wrong figure.
+    """
     blob = json.loads(Path(path).read_text())
     models: list[str] = list(blob["models"])
     patterns: dict[frozenset[str], int] = {}
@@ -168,7 +163,24 @@ def load_keysets_json(path: Path) -> tuple[list[str], dict[frozenset[str], int]]
         combo = frozenset(m for i, m in enumerate(models) if mask & (1 << i))
         if combo:
             patterns[combo] = patterns.get(combo, 0) + n
+
+    for field, stated, derived in (
+        ("counts", blob.get("counts"), set_sizes_from_patterns(patterns, models)),
+        ("universe", blob.get("universe"), sum(patterns.values())),
+        ("intersection_all", blob.get("intersection_all"), patterns.get(frozenset(models), 0)),
+    ):
+        if stated is not None and stated != derived:
+            raise ValueError(
+                f"{path}: `{field}` disagrees with `patterns` "
+                f"(stated {stated}, patterns give {derived})"
+            )
     return models, patterns
+
+
+#: Largest file to read with the in-RAM ``core`` driver. Sized against the LRZ login
+#: node's 4 GiB per-user cgroup, where a 3.53 GB file peaked at 3.70 GB RSS and a
+#: 4.62 GB one was SIGKILLed at 4.18 GB. Raise it only where the memory limit is known.
+CORE_DRIVER_MAX_BYTES = 4.0e9
 
 
 def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
@@ -180,13 +192,8 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
     list would silently misreport coverage -- exactly the failure this figure documents.
 
     Cold reads use the ``core`` driver, which slurps the file in one sequential pass
-    instead of chasing scattered metadata. These are superblock-v0 symbol-table groups:
-    ~0.52 metadata reads per key at 356 B each, and on GPFS an identical 356 B read
-    costs 3.0 us confined to an 8.4 MB span versus 175 us across a 4.62 GB span. Reading
-    the whole 4.6 GB sequentially takes 2.76 s at 1.7 GB/s while the scattered
-    equivalent takes 60-100 s at ~95% iowait. Measured end to end: esm1b.h5
-    161.7 s -> 2.4 s (66.8x), esm2_650m.h5 106.8 s -> 1.85 s (57.8x), key sets
-    byte-identical.
+    instead of chasing scattered metadata. Measured end to end: esm1b.h5 161.7 s -> 2.4 s
+    (66.8x), esm2_650m.h5 106.8 s -> 1.85 s (57.8x), key sets byte-identical.
     """
     import h5py
 
@@ -196,9 +203,9 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
         sidecar = h5_path.with_suffix(".keys.txt")
         stamp = f"# {stat.st_size} {int(stat.st_mtime)}"
         if use_cache and sidecar.exists():
-            lines = sidecar.read_text().splitlines()
-            if lines and lines[0] == stamp:
-                sets[h5_path.stem] = set(lines[1:])
+            lines = iter(sidecar.read_text().splitlines())
+            if next(lines, None) == stamp:
+                sets[h5_path.stem] = set(lines)  # consume the iterator, don't copy 542k
                 continue
         # The driver holds the whole file in RAM, so it must fit the process limit.
         # Measured on an LRZ login node (4 GiB per-user cgroup): 3.53 GB file OK at
@@ -213,7 +220,7 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
             keys = list(handle.keys())
         sets[h5_path.stem] = set(keys)
         try:
-            sidecar.write_text("\n".join([stamp, *keys]))
+            sidecar.write_text("\n".join(chain((stamp,), keys)))
         except OSError:
             pass  # read-only location (e.g. the Zenodo deposit) -- caching is optional
     return sets
@@ -222,11 +229,6 @@ def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
 # --------------------------------------------------------------------------- #
 # Figure
 # --------------------------------------------------------------------------- #
-
-#: Largest file to read with the in-RAM ``core`` driver. Sized against the LRZ login
-#: node's 4 GiB per-user cgroup, where a 3.53 GB file peaked at 3.70 GB RSS and a
-#: 4.62 GB one was SIGKILLed at 4.18 GB. Raise it only where the memory limit is known.
-CORE_DRIVER_MAX_BYTES = 4.0e9
 
 #: Committed coverage freeze -- the default source, so redrawing needs no cluster access.
 DEFAULT_COVERAGE_FREEZE = (
@@ -243,12 +245,13 @@ def _label(model: str) -> str:
     return EMBEDDING_DISPLAY_NAMES.get(model, model).replace("\n", " ")
 
 
-def _family_color(model: str) -> str:
-    return EMBEDDING_FAMILY_COLOR_MAP.get(EMBEDDING_FAMILY_MAP.get(model, ""), "#8a8f94")
-
-
 def _fmt(n: int) -> str:
     return f"{n:,}"
+
+
+def _despine(ax, *sides: str) -> None:
+    for side in sides:
+        ax.spines[side].set_visible(False)
 
 
 def plot_upset(
@@ -261,7 +264,9 @@ def plot_upset(
     dpi: int = 300,
 ) -> Path:
     """Draw the UpSet figure and write it to ``out_path`` (plus a .pdf sibling)."""
-    rows, dropped = pattern_rows(patterns, models, max_rows=max_rows, return_dropped=True)
+    # Truncation happens here, so the omitted rows stay in hand for the caption below.
+    all_rows = pattern_rows(patterns, models)
+    rows, omitted = all_rows[:max_rows], all_rows[max_rows:]
     sizes = set_sizes_from_patterns(patterns, models)
     # Draw sets largest-first so the deficient arms sit together at the bottom.
     order = sorted(models, key=lambda m: (-sizes[m], m))
@@ -307,12 +312,10 @@ def plot_upset(
     ax_bar.margins(y=0.28)
     ax_bar.grid(axis="y", color="#eceef0", zorder=0)
     ax_bar.set_axisbelow(True)
-    for side in ("top", "right", "bottom"):
-        ax_bar.spines[side].set_visible(False)
+    _despine(ax_bar, "top", "right", "bottom")
     ax_bar.tick_params(axis="x", labelbottom=False, length=0)
 
     # --- membership matrix -------------------------------------------------------
-    ypos = {name: i for i, name in enumerate(order)}
     for xi, row in enumerate(rows):
         ax_matrix.scatter(
             [xi] * n_sets,
@@ -321,7 +324,7 @@ def plot_upset(
             color=[_DOT_ON if m in row.members else _DOT_OFF for m in order],
             zorder=3,
         )
-        present = sorted(ypos[m] for m in row.members)
+        present = [i for i, m in enumerate(order) if m in row.members]  # already ascending
         if len(present) > 1:  # the spine that makes a combination readable as one unit
             ax_matrix.plot(
                 [xi, xi],
@@ -331,23 +334,21 @@ def plot_upset(
                 zorder=2,
                 solid_capstyle="round",
             )
-    for i in range(n_sets):  # zebra banding aids row tracking across many columns
-        if i % 2 == 0:
-            ax_matrix.axhspan(i - 0.5, i + 0.5, color="#f7f8f9", zorder=0)
+    for i in range(0, n_sets, 2):  # zebra banding aids row tracking across many columns
+        ax_matrix.axhspan(i - 0.5, i + 0.5, color="#f7f8f9", zorder=0)
     ax_matrix.set_yticks(range(n_sets))
     ax_matrix.set_yticklabels([_label(m) for m in order], fontsize=8)
     ax_matrix.set_ylim(n_sets - 0.5, -0.5)
     ax_matrix.set_xticks([])
     ax_matrix.set_xlabel("Membership combination")
-    for side in ("top", "right", "bottom", "left"):
-        ax_matrix.spines[side].set_visible(False)
+    _despine(ax_matrix, "top", "right", "bottom", "left")
     ax_matrix.tick_params(length=0)
 
     # --- per-model totals (identity -> the paper's family colours) ----------------
     ax_sets.barh(
         range(n_sets),
         [sizes[m] for m in order],
-        color=[_family_color(m) for m in order],
+        color=[EMBEDDING_COLOR_MAP.get(m, "#8a8f94") for m in order],
         height=0.62,
         zorder=3,
     )
@@ -372,8 +373,7 @@ def plot_upset(
     ax_sets.grid(axis="x", color="#eceef0", zorder=0)
     ax_sets.set_axisbelow(True)
     ax_sets.tick_params(axis="y", labelleft=False, length=0)
-    for side in ("top", "right", "left"):
-        ax_sets.spines[side].set_visible(False)
+    _despine(ax_sets, "top", "right", "left")
 
     # Identity is never colour-alone: the legend names both categories.
     ax_bar.legend(
@@ -388,12 +388,12 @@ def plot_upset(
 
     if title:
         fig.suptitle(title, fontsize=11, y=0.98)
-    if dropped:
+    if omitted:
         fig.text(
             0.01,
             0.01,
-            f"{dropped} further combination(s) omitted for legibility "
-            f"({_fmt(sum(r.count for r in pattern_rows(patterns, models)[max_rows:]))} proteins).",
+            f"{len(omitted)} further combination(s) omitted for legibility "
+            f"({_fmt(sum(r.count for r in omitted))} proteins).",
             fontsize=7,
             color="#6b7075",
             ha="left",

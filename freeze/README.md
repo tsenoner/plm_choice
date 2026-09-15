@@ -83,8 +83,11 @@ above: **the repo pins the manifest; the image is a reproducible build product.*
 
 - `counts` — keys per model. `patterns` — bitmask over `models` → number of proteins with
   exactly that membership. `intersection_all` — present in every arm.
-- Integrity: the patterns reconstruct `counts`, `universe` and `intersection_all` exactly
-  (asserted when the file is written).
+- Integrity: the patterns reconstruct `counts`, `universe` and `intersection_all` exactly.
+  `load_keysets_json` re-derives all three from `patterns` on every read and raises if they
+  disagree, so a hand-edit that desynchronises them fails instead of drawing a confident
+  wrong figure. (There is no writer yet — both files below were measured on the cluster and
+  committed by hand; the check is what stands in for one.)
 
 **What it shows.** Only **422,972 of 542,238 (78.00%)** proteins are in *every* arm, in five
 tiers: 542,238 complete · 542,237 (one outlier protein) · 540,881 (default `--max_seq_len
@@ -99,9 +102,34 @@ ten other arms got 872,572, yet is published at rank #10.
 ## Regenerate
 
 ```bash
-plm figures coverage-upset --out out/figures/coverage_upset.png   # offline, from this freeze
-plm figures coverage-upset --h5-dir <dir of .h5>                  # rebuild from the HDF5 files
+# offline, from this freeze (the default source)
+plm figures coverage-upset --out out/figures/coverage_upset.png
+
+# after the <=2000 aa cut
+plm figures coverage-upset --out out/figures/coverage_upset_cohort2k.png \
+    --keysets-json freeze/embedding_key_coverage_cohort2k.json
+
+# rebuild from the HDF5 files (needs cluster access)
+plm figures coverage-upset --out <png> --h5-dir <dir of .h5>
 ```
 
 The `--h5-dir` path caches each key list as a `<stem>.keys.txt` sidecar stamped with
 `(size, mtime)`, so a re-scan is instant and a changed `.h5` invalidates its cache.
+
+## `embedding_key_coverage_cohort2k.json` (added 2026-08-06)
+
+Same schema, same cohort, measured **after** the M-12 cut to ≤2000 residues (LRZ job
+5734016) — so it is the *post-fix* companion to the file above, not a replacement for it.
+Keep both: the pre-fix file is the evidence that the defect existed, this one is the
+evidence that it was fixed.
+
+Membership collapses from seven patterns to two: **526,871 of 540,881 (97.41%)** proteins
+are in every arm, and the remaining **14,010** are missing only from `clean`/`esm1b` —
+ESM-1b's 1022-token positional cap, which CLEAN inherits by construction. That shortfall is
+**documented, not fixed**: cutting the cohort to 1022 would cost every one of the 15 arms
+those proteins to accommodate one model. Because a pair needs both proteins, 97.41% protein
+coverage is ~94.9% of pairs for those two arms — disclose it wherever either is ranked.
+
+`state` records that `esm2_3b` is counted from the completed working copy (542,187 keys
+pre-cut), not the stale deposit (435,298).
+

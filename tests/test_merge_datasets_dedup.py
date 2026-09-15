@@ -31,6 +31,7 @@ from __future__ import annotations
 import polars as pl
 
 from data_preparation.merge_datasets import ProteinAnalysisPipeline
+from tests.test_merge_datasets_hfsp import _mahlich_hfsp
 
 
 def _pipe() -> ProteinAnalysisPipeline:
@@ -135,5 +136,7 @@ def test_hfsp_is_computed_from_the_retained_alignment():
     assert out.height == 1
     # surviving alignment: fident=0.55, L = 120 + 40 = 160
     assert out["ungapped_len"][0] == 160
-    expected = 0.55 * 100 - 770 * 160 ** (-0.33 * (1 + pow(2.718281828459045, -0.160)))
-    assert abs(out["hfsp"][0] - expected) < 1e-4
+    # Score against the reference implementation, not a hand-expanded literal: the
+    # formula has already shipped wrong once (see test_merge_datasets_hfsp) and a
+    # second transcription would not be found when it is revised again.
+    assert abs(out["hfsp"][0] - _mahlich_hfsp(0.55, 160)) < 1e-4

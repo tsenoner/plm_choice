@@ -63,15 +63,17 @@ def test_pattern_rows_marks_the_complete_intersection():
     rows = pattern_rows(pats, ["a", "b"])
     assert rows[0].complete is True
     assert rows[1].complete is False
-    assert rows[1].missing == ("b",)
+    assert rows[1].members == frozenset({"a"})
 
 
-def test_pattern_rows_can_be_truncated_and_reports_the_remainder():
+def test_pattern_rows_returns_every_pattern_so_truncation_can_be_reported():
+    """The caller slices; the rows it drops stay in hand and get named in the caption."""
     pats = {frozenset({"a"}): 10, frozenset({"b"}): 5, frozenset({"a", "b"}): 1}
-    rows, dropped = pattern_rows(pats, ["a", "b"], max_rows=2, return_dropped=True)
-    assert len(rows) == 2
-    # truncation must be reported, never silent
-    assert dropped == 1
+    rows = pattern_rows(pats, ["a", "b"])
+    assert len(rows) == 3
+    kept, omitted = rows[:2], rows[2:]
+    assert [r.count for r in kept] == [10, 5]
+    assert sum(r.count for r in omitted) == 1
 
 
 def test_pattern_rows_rejects_a_set_name_not_in_the_order():

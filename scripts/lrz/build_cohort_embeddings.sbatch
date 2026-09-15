@@ -42,6 +42,11 @@ WORK="$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings"
 FASTA="$DSS/plm_choice_data/data/raw/sprot_2024/sprot.fasta"
 OUTDIR="$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings_cohort2k"
 
+# The cohort's defining threshold, in ONE place -- it is also the pipeline's own
+# --max_seq_len default (embedding_generation.py). Overridable, but changing it
+# changes what "the cohort" means, so change it here and nowhere else.
+MAX_AA="${MAX_AA:-2000}"
+
 ARMS=(ankh_base ankh_large clean esm1b esm2_150m esm2_35m esm2_3b esm2_650m
       esm2_8m esm3_open esmc_300m esmc_600m prott5 prottucker random_1024)
 N=${#ARMS[@]}
@@ -56,27 +61,24 @@ cd "$HOME/plm_choice"
 mkdir -p "$OUTDIR"
 echo "arm=$ARM  src=$SRC"
 
-./.venv/bin/python - "$ARM" "$SRC" "$FASTA" "$OUTDIR" <<'PY'
-import os, re, sys, h5py, numpy as np
+./.venv/bin/python - "$ARM" "$SRC" "$FASTA" "$OUTDIR" "$MAX_AA" <<'PY'
+import os, sys, h5py
+from evaluation.canonical_set import parse_fasta
 
-arm, src, fasta, outdir = sys.argv[1:5]
+arm, src, fasta, outdir, max_aa = sys.argv[1:6]
+max_aa = int(max_aa)
 out = os.path.join(outdir, f"{arm}.h5")
 tmp = out + ".partial"
 
-# --- the cohort: every protein of <=2000 residues -------------------------------
-keep, acc, n = set(), None, 0
-with open(fasta) as fh:
-    for line in fh:
-        if line.startswith(">"):
-            m = re.match(r">(?:sp|tr)\|([^|]+)\|", line) or re.match(r">(\S+)", line)
-            acc, n = (m.group(1) if m else None), 0
-        elif acc:
-            n += len(line.strip())
-            if n <= 2000:
-                keep.add(acc)
-            else:
-                keep.discard(acc)   # crossed the cap on a later line
-print(f"cohort (<=2000 aa): {len(keep):,}", flush=True)
+# --- the cohort: every protein of <=MAX_AA residues -----------------------------
+# parse_fasta defines the id as the first whitespace token after '>', which is
+# EXACTLY the convention the HDF5 keys were written with (embedding_generation.py:605,
+# `base_header = header.split()[0]`). A local regex that pulled the bare accession out
+# of `sp|P12345|NAME` would disagree with every key in the file, and the job could not
+# notice: the expected-count assert below is derived from `keep` too, so 0 == 0 passes
+# and the arm ships empty.
+keep = {pid for pid, seq in parse_fasta(fasta) if len(seq) <= max_aa}
+print(f"cohort (<={max_aa} aa): {len(keep):,}", flush=True)
 
 # --- read with the core driver: one sequential pass, not scattered metadata ------
 # Measured 57-67x faster on these superblock-v0 symbol-table groups. --mem=32G is
@@ -86,24 +88,29 @@ with h5py.File(src, "r", driver="core", backing_store=False) as fin:
     src_keys = list(fin.keys())
     print(f"source keys: {len(src_keys):,}  ({src_size/1e9:.2f} GB)", flush=True)
     selected = [k for k in src_keys if k in keep]
-    print(f"writing {len(selected):,}  (dropping {len(src_keys)-len(selected):,} > 2000 aa)",
+    print(f"writing {len(selected):,}  (dropping {len(src_keys)-len(selected):,} > {max_aa} aa)",
           flush=True)
     if os.path.exists(tmp):
         os.remove(tmp)
     with h5py.File(tmp, "w") as fout:
         for i, k in enumerate(selected):
-            fout.create_dataset(k, data=fin[k][:], dtype=fin[k].dtype)
+            d = fin[k]                      # bind once: two H5Dopen per key cost ~23%
+            fout.create_dataset(k, data=d[:], dtype=d.dtype)
             if i and i % 100_000 == 0:
                 print(f"  {i:,}/{len(selected):,}", flush=True)
 
 # --- verify BEFORE publishing the name ------------------------------------------
+# One open, one traversal: re-opening to re-enumerate is the scattered-metadata read
+# this script's core driver exists to avoid (60-100 s per file on GPFS).
 with h5py.File(tmp, "r") as f:
-    n_out = len(f.keys())
-    first = f[next(iter(f.keys()))]
+    out_keys = set(f)
+    first = f[next(iter(out_keys))]
     dtype, shape = first.dtype, first.shape
-expected = len(keep & set(src_keys))
-assert n_out == expected, f"{arm}: wrote {n_out}, expected {expected}"
-assert not (set(h5py.File(tmp, 'r').keys()) - keep), f"{arm}: output contains a >2000 aa protein"
+n_out = len(out_keys)
+# `selected` is already `keep & src_keys` (HDF5 names are unique), so this needs no
+# second intersection -- and it lets the 542k-name src_keys list be freed earlier.
+assert n_out == len(selected), f"{arm}: wrote {n_out}, expected {len(selected)}"
+assert not (out_keys - keep), f"{arm}: output contains a >{max_aa} aa protein"
 os.replace(tmp, out)
 print(f"OK {arm}: {n_out:,} keys, dtype={dtype}, shape={shape} -> {out}")
 PY
