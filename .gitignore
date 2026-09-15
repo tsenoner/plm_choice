@@ -61,3 +61,10 @@ scripts/backup/
 # drafts and a journal cover letter. Ignoring the class, not just that one file.
 *.zip
 *.docx
+
+# The manuscript workspace is a NESTED PRIVATE REPO (github.com/tsenoner/plm_choice_publication).
+# This repo is PUBLIC and linked from the preprint; the paper text, the reviewer responses and the
+# master plan must never land in it. Ignoring the directory means git never offers it to `add -A`,
+# and the nested .git means even a forced add would store a gitlink rather than the files — two
+# independent barriers, which is the point. Edit the paper in manuscript/, commit it there.
+/manuscript/
