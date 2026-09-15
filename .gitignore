@@ -53,3 +53,11 @@ scripts/backup/
 *.npy
 *.ai
 *.parquet
+
+# Manuscript / Drive exports. A 42.7 MB Google Drive export of the MANUSCRIPT folder sat
+# untracked AND unignored in the repo root for six weeks (removed 2026-09-15, verified
+# byte-identical to _plm_choice_internal_backup/manuscript/plm_choice/ first). Origin is
+# PUBLIC and linked from the preprint, so one `git add -A` would have published the paper
+# drafts and a journal cover letter. Ignoring the class, not just that one file.
+*.zip
+*.docx
