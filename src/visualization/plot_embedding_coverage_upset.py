@@ -41,7 +41,6 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from itertools import chain
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +50,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
+from shared.h5_keys import load_h5_keysets  # noqa: E402,F401  (re-exported for callers)
 from visualization.plm_constants import (  # noqa: E402
     EMBEDDING_COLOR_MAP,
     EMBEDDING_DISPLAY_NAMES,
@@ -175,55 +175,6 @@ def load_keysets_json(path: Path) -> tuple[list[str], dict[frozenset[str], int]]
                 f"(stated {stated}, patterns give {derived})"
             )
     return models, patterns
-
-
-#: Largest file to read with the in-RAM ``core`` driver. Sized against the LRZ login
-#: node's 4 GiB per-user cgroup, where a 3.53 GB file peaked at 3.70 GB RSS and a
-#: 4.62 GB one was SIGKILLed at 4.18 GB. Raise it only where the memory limit is known.
-CORE_DRIVER_MAX_BYTES = 4.0e9
-
-
-def load_h5_keysets(h5_dir: Path, use_cache: bool = True) -> dict[str, set]:
-    """Read dataset names from every ``.h5`` in a directory, with a sidecar cache.
-
-    Enumerating ~542k names out of one HDF5 group on a network filesystem is dominated
-    by scattered metadata reads, so the answer is cached beside the file as
-    ``<stem>.keys.txt``. The cache is invalidated on (size, mtime), because a stale key
-    list would silently misreport coverage -- exactly the failure this figure documents.
-
-    Cold reads use the ``core`` driver, which slurps the file in one sequential pass
-    instead of chasing scattered metadata. Measured end to end: esm1b.h5 161.7 s -> 2.4 s
-    (66.8x), esm2_650m.h5 106.8 s -> 1.85 s (57.8x), key sets byte-identical.
-    """
-    import h5py
-
-    sets: dict[str, set] = {}
-    for h5_path in sorted(Path(h5_dir).glob("*.h5")):
-        stat = h5_path.stat()
-        sidecar = h5_path.with_suffix(".keys.txt")
-        stamp = f"# {stat.st_size} {int(stat.st_mtime)}"
-        if use_cache and sidecar.exists():
-            lines = iter(sidecar.read_text().splitlines())
-            if next(lines, None) == stamp:
-                sets[h5_path.stem] = set(lines)  # consume the iterator, don't copy 542k
-                continue
-        # The driver holds the whole file in RAM, so it must fit the process limit.
-        # Measured on an LRZ login node (4 GiB per-user cgroup): 3.53 GB file OK at
-        # 3.70 GB RSS, 4.62 GB file SIGKILLed at 4.18 GB. Fall back rather than die,
-        # and never run this concurrently -- P>=2 was observed to SIGKILL.
-        kwargs = (
-            {"driver": "core", "backing_store": False}
-            if stat.st_size < CORE_DRIVER_MAX_BYTES
-            else {}
-        )
-        with h5py.File(h5_path, "r", **kwargs) as handle:
-            keys = list(handle.keys())
-        sets[h5_path.stem] = set(keys)
-        try:
-            sidecar.write_text("\n".join(chain((stamp,), keys)))
-        except OSError:
-            pass  # read-only location (e.g. the Zenodo deposit) -- caching is optional
-    return sets
 
 
 # --------------------------------------------------------------------------- #

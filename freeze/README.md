@@ -86,8 +86,7 @@ above: **the repo pins the manifest; the image is a reproducible build product.*
 - Integrity: the patterns reconstruct `counts`, `universe` and `intersection_all` exactly.
   `load_keysets_json` re-derives all three from `patterns` on every read and raises if they
   disagree, so a hand-edit that desynchronises them fails instead of drawing a confident
-  wrong figure. (There is no writer yet — both files below were measured on the cluster and
-  committed by hand; the check is what stands in for one.)
+  wrong figure. Both coverage files were measured on the cluster and committed by hand.
 
 **What it shows.** Only **422,972 of 542,238 (78.00%)** proteins are in *every* arm, in five
 tiers: 542,238 complete · 542,237 (one outlier protein) · 540,881 (default `--max_seq_len
@@ -133,3 +132,44 @@ coverage is ~94.9% of pairs for those two arms — disclose it wherever either i
 `state` records that `esm2_3b` is counted from the completed working copy (542,187 keys
 pre-cut), not the stale deposit (435,298).
 
+
+---
+
+## `embedding_excluded_proteins.json` — the shared-cohort exclusion
+
+The id list that `shared.datasets._load_and_filter_data` subtracts from every arm's key set, so
+all 15 arms are scored on **one** cohort. Not committed here yet — derive it on the cluster.
+
+**Why exclusion and not inclusion.** The excluded set is ~34x smaller than the included one
+(14,010 vs 526,871 ids), so it is the compact half to commit.
+
+**Why a load-time filter and not deleting datasets.** The `.h5` files are the md5-verified Zenodo
+deposit. Deleting from them is irreversible and would make each file stop matching its published
+checksum. A filter over a committed id list is reversible, reviewable, and reproducible from the
+deposit as published.
+
+**Why it matters.** `shared/datasets.py` drops a pair when *either* protein is missing, so coverage
+loss is **quadratic** — `esm2_3b` was scored on 558,947 test pairs where ten other arms got 872,572,
+yet is published at rank #10. A cross-pLM ranking whose rows were scored on different data is not a
+ranking. **Until this file exists the filter is a no-op**, which is deliberate: adopting the cohort
+is an explicit act (commit the freeze), not an accident.
+
+Schema: `schema_version`, `arms`, `counts` (keys per arm), `universe`, `intersection_all`,
+`n_excluded`, `content_sha256` (SHA-256 of the sorted id list), `excluded_ids`.
+
+### Regenerate
+
+```bash
+plm data cohort-freeze --h5-dir <dir of .h5>            # writes freeze/embedding_excluded_proteins.json
+plm data cohort-freeze --h5-dir <dir> --overwrite       # replace an existing freeze
+```
+
+Run it against the cohort the analysis actually uses (`embeddings_cohort2k/`, not the raw deposit).
+The writer is atomic (`shared.atomic_io.atomic_write`), lands at the canonical path, and **refuses
+to clobber an existing freeze unless `--overwrite` is passed** — same contract as the EC freeze
+above. `verify_exclusion` re-derives the hash and both counts from `excluded_ids` alone on every
+write, so a hand-edited list cannot filter a different cohort than it claims to.
+
+Against `embedding_key_coverage_cohort2k.json` this must produce **14,010** ids
+(540,881 − 526,871) — the proteins `clean`/`esm1b` lack to ESM-1b's 1022-token cap. That identity is
+pinned by `tests/test_protein_cohort.py::test_derivation_matches_the_committed_coverage_freeze`.

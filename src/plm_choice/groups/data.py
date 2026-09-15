@@ -107,6 +107,21 @@ def ec_freeze(ctx: typer.Context) -> None:
     run_repo_script("scripts/derive_ec_freeze.py", ctx.args, prog="plm data ec-freeze")
 
 
+@_cmd(
+    "cohort-freeze",
+    panel=_FREEZE,
+    help_=(
+        "Derive the shared-cohort exclusion freeze from the embedding .h5 files. "
+        "Until this freeze exists the cross-arm cohort filter in shared/datasets.py "
+        "is a no-op and each arm is scored on whatever proteins its own file holds."
+    ),
+)
+def cohort_freeze(ctx: typer.Context) -> None:
+    run_module_main(
+        "shared.protein_cohort", ctx.args, prog="plm data cohort-freeze"
+    )
+
+
 # ── Pairwise distances ────────────────────────────────────────────────────────
 
 

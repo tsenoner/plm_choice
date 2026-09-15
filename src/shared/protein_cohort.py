@@ -27,10 +27,16 @@ inclusion (15,367 vs 526,871 ids), so it is the compact half to commit.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from collections.abc import Sequence
 from pathlib import Path
+
+SCHEMA_VERSION = 1
 
 #: Committed exclusion list. Absent freeze => empty exclusion => unchanged behaviour.
 DEFAULT_EXCLUSION_FREEZE = (
@@ -97,3 +103,130 @@ def restrict_to_cohort(
         not_present=len(excluded) - len(removed),
     )
 
+
+# --------------------------------------------------------------------------- #
+# Derivation + freeze writing
+# --------------------------------------------------------------------------- #
+#
+# Until this existed, ``DEFAULT_EXCLUSION_FREEZE`` named a file that nothing in the
+# repo produced, so the filter above was a permanent no-op and the "one cohort shared
+# by every arm" guarantee was aspirational. The exclusion is not recoverable from
+# ``freeze/embedding_key_coverage*.json`` -- that stores pattern *counts*, not ids --
+# so deriving it has to go back to the HDF5 key sets.
+
+
+def content_hash(excluded_ids: list[str]) -> str:
+    """SHA-256 of the sorted id list. Changes iff the excluded *set* changes."""
+    payload = json.dumps(sorted(excluded_ids), separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def derive_exclusion(keysets: dict[str, set]) -> dict:
+    """Build the exclusion manifest from one key set per arm.
+
+    Excluded = union - intersection: every protein that at least one arm is missing.
+    Dropping them is what makes the arms comparable, and it is done on the *pair*
+    loader rather than in the HDF5 files because those are the md5-verified Zenodo
+    deposit (see the module docstring).
+    """
+    if not keysets:
+        raise ValueError("no key sets given -- nothing to derive a cohort from")
+    arms = sorted(keysets)
+    universe: set[str] = set().union(*(keysets[a] for a in arms))
+    intersection: set[str] = set.intersection(*(keysets[a] for a in arms))
+    excluded = sorted(universe - intersection)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "arms": arms,
+        "counts": {a: len(keysets[a]) for a in arms},
+        "universe": len(universe),
+        "intersection_all": len(intersection),
+        "n_excluded": len(excluded),
+        "content_sha256": content_hash(excluded),
+        "excluded_ids": excluded,
+    }
+
+
+def verify_exclusion(manifest: dict) -> bool:
+    """Re-derive the hash and the counts from ``excluded_ids`` alone.
+
+    Independent of :func:`derive_exclusion` on purpose: a hand-edited freeze whose
+    ``n_excluded`` or hash no longer matches its own id list must fail here rather
+    than quietly filter a different cohort than it claims to.
+    """
+    ids = list(manifest["excluded_ids"])
+    if len(set(ids)) != len(ids):
+        raise ValueError("exclusion freeze contains duplicate ids")
+    stated_n, actual_n = manifest.get("n_excluded"), len(ids)
+    if stated_n is not None and stated_n != actual_n:
+        raise ValueError(f"n_excluded {stated_n} != {actual_n} ids present")
+    stated_u, stated_i = manifest.get("universe"), manifest.get("intersection_all")
+    if stated_u is not None and stated_i is not None and stated_u - stated_i != actual_n:
+        raise ValueError(
+            f"universe - intersection_all = {stated_u - stated_i}, but {actual_n} ids listed"
+        )
+    stated_h, actual_h = manifest.get("content_sha256"), content_hash(ids)
+    if stated_h is not None and stated_h != actual_h:
+        raise ValueError(f"content drift: manifest {stated_h!r} != re-derived {actual_h!r}")
+    return True
+
+
+def write_exclusion_freeze(
+    manifest: dict,
+    path: Path | str | None = None,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Write the manifest, refusing to clobber an existing freeze without intent."""
+    from shared.atomic_io import atomic_write
+
+    verify_exclusion(manifest)
+    out = Path(path) if path is not None else DEFAULT_EXCLUSION_FREEZE
+    if out.exists() and not overwrite:
+        raise FileExistsError(f"{out} exists; pass --overwrite to replace")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return atomic_write(
+        out,
+        lambda p: p.write_text(json.dumps(manifest, indent=2) + "\n"),
+        mode="replace",
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Derive the shared-cohort exclusion freeze from the embedding HDF5 files.",
+    )
+    parser.add_argument(
+        "--h5-dir", type=Path, required=True, help="Directory of per-arm .h5 files."
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None, help=f"Output path (default: {DEFAULT_EXCLUSION_FREEZE})"
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing freeze.")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Ignore the .keys.txt sidecars when scanning."
+    )
+    args = parser.parse_args(argv)
+
+    from shared.h5_keys import load_h5_keysets
+
+    keysets = load_h5_keysets(args.h5_dir, use_cache=not args.no_cache)
+    if not keysets:
+        print(f"no .h5 files in {args.h5_dir}", file=sys.stderr)
+        return 1
+
+    manifest = derive_exclusion(keysets)
+    for arm in manifest["arms"]:
+        n = manifest["counts"][arm]
+        print(f"  {arm:14s} {n:>9,}  (missing {manifest['universe'] - n:>6,})")
+    print(
+        f"universe {manifest['universe']:,} | in every arm {manifest['intersection_all']:,} "
+        f"| excluded {manifest['n_excluded']:,}"
+    )
+    out = write_exclusion_freeze(manifest, args.out, overwrite=args.overwrite)
+    print(f"wrote {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
