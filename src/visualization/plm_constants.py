@@ -11,7 +11,7 @@ Keys are the lowercase HDF5 file stem of each embedding set.
 
 from __future__ import annotations
 
-from shared.embedding_names import RANDOM_INIT_PREFIX
+from shared.embedding_names import random_init_stem
 
 #: Parameter count per pLM. ``random_1024`` is the untrained floor, hence 0.
 PLM_SIZES: dict[str, int] = {
@@ -87,23 +87,31 @@ EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
     "random_1024": "Random",
 }
 
-#: Untrained-architecture baselines (reviewer R1.9). ``embedding_generation.py
-#: --random_init`` writes ``random_init_<MODEL_CONFIGS key>.h5``, so the figure key is
-#: the file stem. Each maps to its pretrained twin: the architecture — and therefore the
-#: parameter count and the display label — is the same, only the weights differ. Values
-#: are derived from the twin below rather than restated, so a size fix lands in one place.
-#: Adding a new untrained arm means adding one line here.
+#: Untrained-architecture baselines (reviewer R1.9), keyed by ``MODEL_CONFIGS``
+#: key and mapped to the pretrained twin: the architecture — and therefore the
+#: parameter count and the display label — is the same, only the weights differ.
+#: Values are derived from the twin below rather than restated, so a size fix lands
+#: in one place. Adding a new untrained arm means adding one line here.
 RANDOM_INIT_TWINS: dict[str, str] = {
-    f"{RANDOM_INIT_PREFIX}_esm2_650m": "esm2_650m",
-    f"{RANDOM_INIT_PREFIX}_prot_t5": "prott5",
+    "esm2_650m": "esm2_650m",
+    "prot_t5": "prott5",
 }
 
-for _key, _twin in RANDOM_INIT_TWINS.items():
-    PLM_SIZES[_key] = PLM_SIZES[_twin]
-    EMBEDDING_FAMILY_MAP[_key] = "Untrained"
+#: The seeds D-6 reports the untrained arm over (mean±sd). The figure key is the
+#: HDF5 stem, which carries the seed, so every seed needs its own entry — built
+#: through ``random_init_stem`` rather than reformatted here, because a producer
+#: that renames its files and a figure that greys them out as "unknown" is a
+#: silent failure: the arm simply vanishes from the plot.
+RANDOM_INIT_SEEDS: tuple[int, ...] = (0, 1, 2)
+
+for _model_key, _twin in RANDOM_INIT_TWINS.items():
     _label = EMBEDDING_DISPLAY_NAMES[_twin].replace("\n", " ")
-    EMBEDDING_DISPLAY_NAMES[_key] = _label + "\n(untrained)"
-del _key, _twin, _label
+    for _seed in RANDOM_INIT_SEEDS:
+        _key = random_init_stem(_model_key, _seed)
+        PLM_SIZES[_key] = PLM_SIZES[_twin]
+        EMBEDDING_FAMILY_MAP[_key] = "Untrained"
+        EMBEDDING_DISPLAY_NAMES[_key] = _label + "\n(untrained)"
+del _model_key, _twin, _label, _seed, _key
 
 #: Family colour projected onto each individual embedding set.
 EMBEDDING_COLOR_MAP: dict[str, str] = {

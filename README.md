@@ -3,7 +3,7 @@
 [![CI](https://github.com/tsenoner/plm_choice/actions/workflows/ci.yml/badge.svg)](https://github.com/tsenoner/plm_choice/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/data-10.5281%2Fzenodo.17469267-blue.svg)](https://doi.org/10.5281/zenodo.17469267)
-[![Preprint](https://img.shields.io/badge/bioRxiv-2025.10.30.685515-b31b1b.svg)](https://doi.org/10.1101/2025.10.30.685515)
+[![Preprint](https://img.shields.io/badge/bioRxiv-2025.10.30.685515-b31b1b.svg)](https://www.biorxiv.org/content/10.1101/2025.10.30.685515v1)
 
 Analysis code for a systematic comparison of protein language model (pLM) embeddings.
 
@@ -160,7 +160,7 @@ If you use this code or data, cite the paper; `CITATION.cff` in this repository 
 the machine-readable metadata and GitHub renders it under "Cite this repository".
 
 > Senoner, T.; Koludarov, I.; Günther, J.; Shehu, A.; Rost, B.; Bromberg, Y.
-> *Which pLM to choose?* bioRxiv (2025). https://doi.org/10.1101/2025.10.30.685515
+> *Which pLM to choose?* bioRxiv (2025). https://www.biorxiv.org/content/10.1101/2025.10.30.685515v1
 
 ## License
 

@@ -96,16 +96,19 @@ The primary entry point for reproducing results is the experiment orchestrator:
 ```bash
 # Run all model types for all parameters
 python src/training/run_experiments.py \
-    --csv_dir data/processed/sprot_train \
+    --data_dir data/processed/sprot_pre2024_subset \
     --evaluate_after_train \
     --model_types fnn linear linear_distance euclidean
 
 # Run specific combinations
 python src/training/run_experiments.py \
-    --csv_dir data/processed/sprot_train \
+    --data_dir data/processed/sprot_pre2024_subset \
     --model_types fnn linear \
     --target_params fident alntmscore
 ```
+
+`--data_dir` is required and has no default — it selects the cohort, which *is* the probe
+budget. `sprot_pre2024_subset` is what every published cell used.
 
 ### 2. Data Preparation Pipeline
 

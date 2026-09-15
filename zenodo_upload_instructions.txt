@@ -76,7 +76,7 @@ ZENODO UPLOAD STEPS:
 
 3. Metadata (should already be filled):
    - Title: "Which pLM to choose? - Complete Dataset and Analysis Results"
-   - Authors: Senoner, Tobias (0000-0002-6315-0458),
+   - Authors: Senoner, Tobias (0000-0002-7900-5896),
              Koludarov, Ivan (0000-0002-9073-4758), et al.
    - Description: See abstract in CITATION.cff
    - License: CC-BY 4.0

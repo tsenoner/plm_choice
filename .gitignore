@@ -36,6 +36,7 @@ scripts/backup/
 # resubmission_plan.html holds reviewer strategy, journal/APC decisions and
 # co-author coordination notes. A copy lives outside the repo at
 # ~/Documents/projects/_plm_choice_internal_backup/.
+/docs/NEXT.md
 /docs/resubmission_plan.html
 /docs/talks/
 /docs/lrz_setup.md

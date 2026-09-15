@@ -56,15 +56,21 @@ models/
 ```bash
 # Run all combinations with evaluation
 uv run python src/training/run_experiments.py \
-    --data_dir data/processed/sprot_pre2024 \
+    --data_dir data/processed/sprot_pre2024_subset \
     --evaluate_after_train
 
 # Run specific subset
 uv run python src/training/run_experiments.py \
+    --data_dir data/processed/sprot_pre2024_subset \
     --model_types fnn linear \
     --target_params fident \
     --evaluate_after_train
 ```
+
+`--data_dir` is **required and has no default**: `sprot_pre2024_subset` is the cohort every
+published cell was trained on (~11.3M train pairs); `sprot_pre2024` is 10x larger and appears
+in no published result. Results land in `models/<basename>/`, so a mismatched cohort collides
+with nothing — it silently produces an orphan cell that looks comparable and is not.
 
 ## Key Features
 
