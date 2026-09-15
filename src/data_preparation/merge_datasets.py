@@ -125,7 +125,7 @@ class ProteinAnalysisPipeline:
             final_merged = (
                 self.interm_dir / f"merged_protein_similarity{dedupe_suffix}_test.parquet"
             )
-            plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}_test")
+            plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}{dedupe_suffix}_test")
             low_plddt_ids = self.foldcomp_low_plddt_ids.with_stem(
                 f"{self.foldcomp_low_plddt_ids.stem}_test"
             )
@@ -135,7 +135,7 @@ class ProteinAnalysisPipeline:
             final_merged = (
                 self.interm_dir / f"merged_protein_similarity{dedupe_suffix}.parquet"
             )
-            plots_dir = self.plots_dir
+            plots_dir = self.plots_dir.with_name(f"{self.plots_dir.name}{dedupe_suffix}")
             low_plddt_ids = self.foldcomp_low_plddt_ids
 
         return {
@@ -342,16 +342,29 @@ class ProteinAnalysisPipeline:
     def _canonicalise_pairs(df: pl.DataFrame) -> pl.DataFrame:
         """Rewrite (query, target) to the lexicographically ordered orientation.
 
-        Both expressions are evaluated against the *input* frame, so assigning
-        query and target simultaneously is a safe swap rather than a two-step
-        clobber. Pinned by test_canonicalises_pair_orientation.
+        Every expression is evaluated against the *input* frame, so the assignments
+        happen simultaneously -- a safe swap rather than a two-step clobber. Pinned by
+        test_canonicalises_pair_orientation.
+
+        Columns whose meaning is tied to which protein was the query have to travel
+        with the swap. ``qcov`` is the QUERY's coverage; leaving it in place on a
+        flipped row makes it the target's, silently, for roughly half the table. That
+        is invisible today because every reader goes through
+        ``min_horizontal("qcov", "tcov")``, which is swap-invariant -- but it is a trap
+        armed for the first direction-sensitive filter or probe target anyone adds.
         """
-        return df.with_columns(
-            [
-                pl.min_horizontal("query", "target").alias("query"),
-                pl.max_horizontal("query", "target").alias("target"),
-            ]
-        )
+        flip = pl.col("query") > pl.col("target")
+        exprs = [
+            pl.min_horizontal("query", "target").alias("query"),
+            pl.max_horizontal("query", "target").alias("target"),
+        ]
+        for q_col, t_col in (("qcov", "tcov"), ("qlen", "tlen")):
+            if q_col in df.columns and t_col in df.columns:
+                exprs += [
+                    pl.when(flip).then(pl.col(t_col)).otherwise(pl.col(q_col)).alias(q_col),
+                    pl.when(flip).then(pl.col(q_col)).otherwise(pl.col(t_col)).alias(t_col),
+                ]
+        return df.with_columns(exprs)
 
     def _dedupe_mmseqs_pairs(self, df: pl.DataFrame) -> pl.DataFrame:
         """Collapse both orientations of a pair, keeping the lowest-E-value hit.

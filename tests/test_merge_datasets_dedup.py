@@ -159,3 +159,34 @@ def test_foldseek_dedup_row_order_is_deterministic():
         for _ in range(5)
     }
     assert len(orders) == 1
+
+
+def test_canonicalisation_carries_qcov_tcov_with_the_swap():
+    """qcov is the QUERY's coverage, so it has to travel when the pair is flipped.
+
+    Invisible to today's readers -- they all go through min_horizontal("qcov","tcov"),
+    which is swap-invariant -- but leaving it behind silently relabels roughly half the
+    table for the first direction-sensitive consumer.
+    """
+    df = _mmseqs_frame([("P2", "P1", 0.55, 1e-60, 120, 40, 0.95, 0.30)])
+    out = _pipe()._canonicalise_pairs(df)
+    row = out.row(0, named=True)
+    assert (row["query"], row["target"]) == ("P1", "P2")
+    # P1 is now the query, and P1's coverage was tcov=0.30 in the original row
+    assert row["qcov"] == 0.30
+    assert row["tcov"] == 0.95
+
+
+def test_canonicalisation_leaves_an_already_ordered_pair_alone():
+    df = _mmseqs_frame([("P1", "P2", 0.55, 1e-60, 120, 40, 0.95, 0.30)])
+    row = _pipe()._canonicalise_pairs(df).row(0, named=True)
+    assert (row["query"], row["target"], row["qcov"], row["tcov"]) == ("P1", "P2", 0.95, 0.30)
+
+
+def test_min_cov_is_unchanged_by_the_swap():
+    """The fix must not move any number the pipeline currently computes."""
+    flipped = _mmseqs_frame([("P2", "P1", 0.55, 1e-60, 120, 40, 0.95, 0.30)])
+    out = _pipe()._canonicalise_pairs(flipped).with_columns(
+        pl.min_horizontal("qcov", "tcov").alias("min_cov")
+    )
+    assert out.row(0, named=True)["min_cov"] == 0.30
