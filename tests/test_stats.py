@@ -345,3 +345,39 @@ def test_r2_ci_via_r_degenerate_inputs_return_nan():
     out2 = r2_ci_via_r(np.array([1.0]), np.array([2.0]), B=500, rng=0)
     assert out2["n_pairs"] == 1
     assert np.isnan(out2["r2"])
+
+
+def test_dropping_the_jackknife_gives_the_bias_corrected_percentile_interval():
+    """M-16: ``jackknife_statistic=None`` sets a=0 and keeps z0.
+
+    The jackknife is O(n) calls each over C(n-1,2) pairs, and for the matrix callers each
+    one also copies an (n-1)x(n-1) matrix pair -- it dominates the cell. Dropping it must
+    (a) still produce an interval, (b) keep the point estimate exactly, and (c) move the
+    endpoints only slightly, since z0 carries the correction that matters.
+
+    What it must NOT do is change the resampling unit: both paths resample VERTICES, so
+    neither reintroduces the M-10 pair-bootstrap defect. That is the whole reason this is
+    an acceptable shortcut rather than a cheat.
+    """
+    import numpy as np
+
+    from evaluation.stats import correlation_vertex_bca_ci
+
+    rng = np.random.default_rng(0)
+    n = 60
+    x = rng.random((n, 8))
+    d = np.linalg.norm(x[:, None, :] - x[None, :, :], axis=-1)
+    e = np.rint(d * 2.0)  # a coarse, heavily-tied margin, like EC distance
+    np.fill_diagonal(d, 0.0)
+    np.fill_diagonal(e, 0.0)
+
+    lo_a, hi_a, pt_a, degen_a, _ = correlation_vertex_bca_ci(d, e, n_boot=300, seed=1)
+    lo_b, hi_b, pt_b, degen_b, _ = correlation_vertex_bca_ci(
+        d, e, n_boot=300, seed=1, accelerate=False
+    )
+
+    assert not degen_a and not degen_b
+    assert pt_a == pt_b, "the point estimate must not depend on the acceleration"
+    assert lo_b < hi_b
+    # Same bootstrap draw (same seed) and same z0, so only the skewness term differs.
+    assert abs(lo_a - lo_b) < 0.02 and abs(hi_a - hi_b) < 0.02

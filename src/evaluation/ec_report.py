@@ -171,6 +171,7 @@ def ec_correlation_report(
     n_boot: int = 2000,
     n_perm: int = 1000,
     ci_alpha: float = 0.05,
+    accelerate: bool = True,
     allow_capped: bool = False,
     superfamily: dict | None = None,
     overwrite: bool = True,
@@ -201,9 +202,11 @@ def ec_correlation_report(
 
     # Primary statistic + CI.
     lo, hi, point, degenerate, diverged = correlation_vertex_bca_ci(
-        dist_matrix, ec_matrix, statistic=statistic, n_boot=n_boot, alpha=ci_alpha, seed=seed)
+        dist_matrix, ec_matrix, statistic=statistic, n_boot=n_boot, alpha=ci_alpha,
+        seed=seed, accelerate=accelerate)
     rho_lo, rho_hi, rho_point, rho_degen, _ = correlation_vertex_bca_ci(
-        dist_matrix, ec_matrix, statistic="spearman", n_boot=n_boot, alpha=ci_alpha, seed=seed)
+        dist_matrix, ec_matrix, statistic="spearman", n_boot=n_boot, alpha=ci_alpha,
+        seed=seed, accelerate=accelerate)
     null_vals, perm_p = correlation_permutation_null(
         dist_matrix, ec_matrix, statistic=statistic, n_perm=n_perm, seed=seed)
 
@@ -248,6 +251,7 @@ def ec_correlation_report(
         "n_ec_proteins": len(ids),
         "n_pairs": int(len(pairs)),
         "population_n": len(ids),
+        "ci_method": "BCa" if accelerate else "bias-corrected percentile (a=0, M-16)",
         "seed": seed, "n_boot": n_boot, "n_perm": n_perm, "ci_alpha": ci_alpha,
         "per_pair_columns": list(EC_PER_PAIR_COLUMNS),
         "path": str(written_pq),
@@ -283,6 +287,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--representation", default="raw")
     ap.add_argument("--allow-capped", action="store_true")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument(
+        "--no-accelerate", action="store_true",
+        help=(
+            "Skip the leave-one-protein-out jackknife; report a bias-corrected percentile "
+            "interval (a=0) instead of full BCa. The jackknife dominates the cell -- O(n) "
+            "calls, each copying an (n-1)x(n-1) matrix via np.ix_ -- and moves the "
+            "endpoints by <=5e-5. The resampling unit stays the PROTEIN, so this does not "
+            "reintroduce the M-10 pair-bootstrap defect. See M-16."
+        ),
+    )
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--n-perm", type=int, default=1000)
     ap.add_argument("--ci-alpha", type=float, default=0.05)
@@ -304,6 +318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ec_set_agg=args.ec_set_agg, wildcard_policy=args.wildcard_policy,
             representation=args.representation, expected_ec_ids=expected_ids,
             seed=args.seed, n_boot=args.n_boot, n_perm=args.n_perm,
+            accelerate=not args.no_accelerate,
             ci_alpha=args.ci_alpha, allow_capped=args.allow_capped,
             superfamily=superfamily, overwrite=True,
         )

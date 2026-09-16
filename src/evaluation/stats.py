@@ -712,7 +712,7 @@ def vertex_bca_ci(
     *,
     point: float,
     boot_statistic: Callable[[np.ndarray], float],
-    jackknife_statistic: Callable[[int], float],
+    jackknife_statistic: Callable[[int], float] | None = None,
     n_boot: int = 2000,
     alpha: float = 0.05,
     seed: int | np.random.Generator | None = 42,
@@ -836,15 +836,38 @@ def vertex_bca_ci(
     prop = min(max(prop, 1e-6), 1 - 1e-6)
     z0 = _norm.ppf(prop)
 
-    # Leave-one-vertex-out jackknife acceleration.
-    jack = np.empty(n, dtype=float)
-    for k in range(n):
-        jack[k] = jackknife_statistic(k)
-    jack = jack[np.isfinite(jack)]
-    jbar = jack.mean()
-    num = np.sum((jbar - jack) ** 3)
-    den = 6.0 * (np.sum((jbar - jack) ** 2) ** 1.5)
-    a = num / den if den != 0 else 0.0
+    # Leave-one-vertex-out jackknife acceleration -- OPTIONAL (M-16).
+    #
+    # ``jackknife_statistic=None`` sets a = 0, which turns the BCa interval into the
+    # BIAS-CORRECTED PERCENTILE interval: z0 is retained (it is free -- it comes from the
+    # bootstrap distribution already computed) and only the second-order skewness
+    # correction is given up.
+    #
+    # Why that is worth offering. The jackknife is O(n) calls each over C(n-1,2) pairs,
+    # and for the matrix callers each call also COPIES an (n-1)x(n-1) matrix pair via
+    # np.ix_ -- at n=3,503 that is 3,503 copies of ~98 MB, and it dominates the cell.
+    # Measured on the real EC cohort: |a| <= 1e-3 at n=500/1,000/2,000, moving the 95%
+    # endpoints by <= 5e-5 against a half-width of 0.0094-0.0205 -- three orders of
+    # magnitude below the decimal place anyone prints, while z0 moves them by
+    # 1.4e-4 to 6.7e-4. And a shrinks as n^-1/2, so the argument strengthens with n.
+    #
+    # This does NOT weaken the M-10 defence: the resampling unit is still the VERTEX
+    # (protein). A pair-level bootstrap -- the actual M-10 defect -- gives intervals
+    # 4.6-6.1x too narrow. Only the skewness correction is dropped, not the unit.
+    #
+    # Callers that drop it should publish |a| from one full-jackknife reference cell so
+    # the shortcut is a measured claim rather than an assertion.
+    if jackknife_statistic is None:
+        a = 0.0
+    else:
+        jack = np.empty(n, dtype=float)
+        for k in range(n):
+            jack[k] = jackknife_statistic(k)
+        jack = jack[np.isfinite(jack)]
+        jbar = jack.mean()
+        num = np.sum((jbar - jack) ** 3)
+        den = 6.0 * (np.sum((jbar - jack) ** 2) ** 1.5)
+        a = num / den if den != 0 else 0.0
 
     denom_collapsed = False
 
@@ -886,6 +909,7 @@ def correlation_vertex_bca_ci(
     n_boot: int = 2000,
     alpha: float = 0.05,
     seed: int | np.random.Generator | None = 42,
+    accelerate: bool = True,
 ):
     """Vertex-bootstrap BCa CI for a rank correlation of two NxN distance matrices.
 
@@ -917,7 +941,9 @@ def correlation_vertex_bca_ci(
         n,
         point=point,
         boot_statistic=_boot,
-        jackknife_statistic=_jack,
+        # accelerate=False -> a=0 -> bias-corrected percentile interval (M-16). The
+        # jackknife is the dominant cost of this cell and buys <= 5e-5 of endpoint.
+        jackknife_statistic=_jack if accelerate else None,
         n_boot=n_boot,
         alpha=alpha,
         seed=seed,
