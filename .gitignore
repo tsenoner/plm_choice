@@ -21,7 +21,7 @@ wheels/
 # Bulk data, model artifacts and generated outputs (archived on Zenodo, not in git)
 /data/
 /out/
-/models/
+/models
 /notebooks/
 /logs/
 /zenodo/*
