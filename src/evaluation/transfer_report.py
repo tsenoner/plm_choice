@@ -45,7 +45,11 @@ Outputs in ``--out-dir``: ``summary.csv``, ``paired_differences.csv``,
 ``per_query.parquet``, ``per_query_baseline.parquet``, ``tau_b.csv`` (GO) and
 ``manifest.json``. In ``per_query.parquet`` the ``neighbour_distance`` column always holds
 the quantity that was minimised to pick that neighbour: the embedding distance for a pLM
-arm, the E-value for ``hbi_evalue``, ``1 - fident`` for ``hbi_fident``.
+arm, the E-value for ``hbi_evalue``, ``1 - fident`` for ``hbi_fident`` (so an ``hbi_evalue``
+0.0 is an E-value underflow, not a zero distance — the units are recorded in the
+manifest). For the same reason ``summary.csv`` carries ``baseline_scope``: chance and
+oracle on an HBI row are taken over that query's MMseqs2 hits, the only neighbours a
+sequence search could have transferred from.
 
 Usage::
 
@@ -59,7 +63,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -355,15 +361,21 @@ class IdentityHits:
 
 def hbi_neighbours(
     hits: IdentityHits, variant: EligibilityVariant, criterion: str
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(nn, value, tied)`` — the best *eligible* MMseqs2 hit of every cohort protein.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(nn, value, tied, primary_tied)`` — the best *eligible* MMseqs2 hit of every protein.
 
     ``nn[i] = -1`` and ``value[i] = inf`` mean the search leaves ``i`` unanswerable under
     this variant. ``value`` is the quantity minimised (the E-value, or ``1 - fident``), so
     it reads like the embedding arms' ``neighbour_distance``. Ties on the primary criterion
     are broken by the secondary one and then by lowest cohort index — the same
-    deterministic rule as the embedding ``argmin`` — and counted, because a tie means the
-    reported neighbour depends on the id order.
+    deterministic rule as the embedding ``argmin``.
+
+    Two tie counts, because they are not the same question and the embedding arms only
+    have one. ``tied`` is the comparable one: the pick is still ambiguous after the full
+    tie-break chain, i.e. it depends on the id order, exactly as an embedding ``argmin``
+    tie does. ``primary_tied`` is the criterion alone being ambiguous, which is common and
+    mostly harmless — MMseqs2 rounds ``fident``, so thousands of queries have several
+    candidates at the same reported identity that the E-value then separates.
     """
     if criterion not in ("evalue", "fident"):
         raise TransferInputError(f"unknown HBI criterion {criterion!r}")
@@ -375,22 +387,28 @@ def hbi_neighbours(
     nn = np.full(hits.n, -1, dtype=np.int64)
     value = np.full(hits.n, np.inf)
     tied = np.zeros(hits.n, dtype=bool)
+    primary_tied = np.zeros(hits.n, dtype=bool)
     if rows.size == 0:
-        return nn, value, tied
+        return nn, value, tied, primary_tied
 
     # lexsort's LAST key is the primary one: group by query, then best criterion, then the
     # tie-break chain. The first row of each group is that query's neighbour.
     order = np.lexsort((cols, secondary, primary, rows))
-    rows, cols, primary = rows[order], cols[order], primary[order]
+    rows, cols, primary, secondary = rows[order], cols[order], primary[order], secondary[order]
     starts = np.ones(rows.size, dtype=bool)
     starts[1:] = rows[1:] != rows[:-1]
     first = np.flatnonzero(starts)
     group = np.cumsum(starts) - 1
     nn[rows[first]] = cols[first]
     value[rows[first]] = primary[first]
-    n_tied = np.bincount(group, weights=(primary == primary[first][group]).astype(np.float64))
-    tied[rows[first]] = n_tied > 1
-    return nn, value, tied
+    at_best_primary = primary == primary[first][group]
+    n_primary_tied = np.bincount(group, weights=at_best_primary.astype(np.float64))
+    primary_tied[rows[first]] = n_primary_tied > 1
+    # Ambiguous only if the SECONDARY criterion does not separate the co-leaders either;
+    # what is left is then decided by the id order, like an embedding argmin tie.
+    ambiguous = at_best_primary & (secondary == secondary[first][group])
+    tied[rows[first]] = np.bincount(group, weights=ambiguous.astype(np.float64)) > 1
+    return nn, value, tied, primary_tied
 
 
 def build_variants(
@@ -422,7 +440,15 @@ def build_variants(
         separator="\t",
         has_header=False,
         new_columns=list(M8_COLUMNS),
-        schema_overrides={"query": pl.Utf8, "target": pl.Utf8},
+        schema_overrides={
+            "query": pl.Utf8,
+            "target": pl.Utf8,
+            # Pinned, not inferred: polars types a column from its first rows, and an m8
+            # whose first hits happen to print an integral E-value ("0") would then abort
+            # the run on the first "1e-30" further down.
+            "fident": pl.Float64,
+            "evalue": pl.Float64,
+        },
     )
     stats["n_hits_total"] = int(table.height)
     # A join, not a Python id->index loop: the union search can run to tens of millions of
@@ -436,8 +462,8 @@ def build_variants(
     stats["n_hits_in_cohort"] = int(table.height)
     rows = table["qi"].to_numpy()
     cols = table["ti"].to_numpy()
-    fident = table["fident"].cast(pl.Float64).to_numpy()
-    evalue = table["evalue"].cast(pl.Float64).to_numpy()
+    fident = table["fident"].to_numpy()
+    evalue = table["evalue"].to_numpy()
     hits = IdentityHits(rows, cols, fident, evalue, n)
     stats["n_proteins_with_a_hit"] = int(hits.has_hit.sum())
     stats["n_proteins_without_a_hit"] = int(n - hits.has_hit.sum())
@@ -526,11 +552,25 @@ class GOScorer:
       best match in i, so the two halves of the BMA are ``G`` and its transpose.
 
     ``best`` is the only dense array (n x |vocab| float64); everything else is sparse.
+
+    ``drop_from_propagated`` is the protein-binding sensitivity: the terms are removed
+    from the ancestor closure, not only from the annotations, because that is the only
+    place the removal can change ``f1`` (see ``go_similarity_matrix.propagate_mf``). It
+    deliberately does NOT touch ``wang_bma``, which is defined on the unpropagated
+    annotated sets and whose Wang S-values sum over all shared ancestors by definition.
+    ``propagated_drop`` records how many propagated sets actually lost the term, so a
+    sensitivity that changed nothing can never be reported as one that did.
     """
 
     names = GO_SCORES
 
-    def __init__(self, term_sets: Sequence[frozenset[str]], go_terms: Mapping[str, GOTerm]):
+    def __init__(
+        self,
+        term_sets: Sequence[frozenset[str]],
+        go_terms: Mapping[str, GOTerm],
+        *,
+        drop_from_propagated: Sequence[str] = (),
+    ):
         if any(not s for s in term_sets):
             raise TransferInputError("every protein needs >=1 MF term")
         self._b, vocab = set_indicator(term_sets)
@@ -541,7 +581,13 @@ class GOScorer:
         for i, terms in enumerate(term_sets):
             np.max(sim[[col[t] for t in terms]], axis=0, out=self._best[i])
         del sim
-        self._p, _ = set_indicator(propagate_mf(term_sets, go_terms))
+        propagated = propagate_mf(term_sets, go_terms)
+        self.propagated_drop: dict[str, int] = {
+            term: sum(1 for s in propagated if term in s) for term in drop_from_propagated
+        }
+        if drop_from_propagated:
+            propagated = propagate_mf(term_sets, go_terms, drop_terms=drop_from_propagated)
+        self._p, _ = set_indicator(propagated)
         self._psizes = np.asarray(self._p.sum(axis=1)).ravel()
         if (self._psizes == 0).any():
             raise TransferInputError("a protein's propagated MF set is empty")
@@ -697,6 +743,49 @@ def variant_baselines(
     return out
 
 
+def hbi_baselines(
+    scorer: ECScorer | GOScorer,
+    hits: IdentityHits,
+    variant: EligibilityVariant,
+    n: int,
+) -> dict[str, np.ndarray]:
+    """Per-query chance and oracle over the MMseqs2 HIT LIST — the homology arm's own ceiling.
+
+    The cohort oracle is not a ceiling homology search could ever reach: it may only
+    transfer from a protein its own search returned. Printing the cohort oracle on an HBI
+    row would therefore overstate how far the search is from *its* best possible answer, so
+    the HBI rows carry these baselines instead (``baseline_scope = mmseqs_hits``) and the
+    embedding rows keep the cohort ones (``baseline_scope = cohort``). ``chance`` is the mean
+    over the query's eligible hits — what picking a random hit instead of the best one would
+    score — and ``oracle`` the best label match anywhere in that hit list.
+
+    The hit table is symmetrised, so a pair reported in both directions appears twice; it is
+    deduplicated here, otherwise a bidirectional hit would count twice in the mean.
+    """
+    eligible = variant.pair_mask(hits.rows, hits.cols)
+    rows, cols = hits.rows[eligible], hits.cols[eligible]
+    out: dict[str, np.ndarray] = {
+        **{f"chance_{s}": np.full(n, np.nan) for s in scorer.names},
+        **{f"oracle_{s}": np.full(n, np.nan) for s in scorer.names},
+        "n_eligible": np.zeros(n, dtype=np.int64),
+    }
+    if rows.size == 0:
+        return out
+    # np.unique sorts, and rows * n + cols is monotonic in (row, col), so the survivors come
+    # back grouped by query — which is what lets the group statistics be reduceat, not a loop.
+    keep = np.unique(rows.astype(np.int64) * n + cols.astype(np.int64), return_index=True)[1]
+    rows, cols = rows[keep], cols[keep]
+    counts = np.bincount(rows, minlength=n)
+    out["n_eligible"] = counts.astype(np.int64)
+    present = np.flatnonzero(counts)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])[present]
+    scores = scorer.pairs(rows, cols)
+    for name, values in scores.items():
+        out[f"chance_{name}"][present] = np.add.reduceat(values, offsets) / counts[present]
+        out[f"oracle_{name}"][present] = np.maximum.reduceat(values, offsets)
+    return out
+
+
 def bootstrap_weights(n_queries: int, n_boot: int, seed: int) -> np.ndarray:
     """``(n_boot, n_queries)`` resample multiplicities for the query bootstrap.
 
@@ -833,7 +922,11 @@ def run_transfer_report(
             labels, frozen_ids, go_terms, parse_alt_ids(go_obo),
             drop_protein_binding=drop_protein_binding,
         )
-        scorer = GOScorer(term_sets, go_terms)
+        scorer = GOScorer(
+            term_sets,
+            go_terms,
+            drop_from_propagated=(PROTEIN_BINDING,) if drop_protein_binding else (),
+        )
     else:
         raise TransferInputError(f"unknown labels_kind {labels_kind!r}")
     n = len(ids)
@@ -884,7 +977,8 @@ def run_transfer_report(
     # can answer depends on the variant but not on the criterion. The embedding arms are
     # then reported on those same subsets, which is the only way the two readouts can be
     # differenced per query.
-    hbi_picks: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    hbi_picks: dict[tuple[str, str], tuple[np.ndarray, ...]] = {}
+    hbi_baseline: dict[str, dict[str, np.ndarray]] = {}
     subset_masks: dict[str, list[tuple[str, np.ndarray]]] = {}
     query_sets: dict[tuple[str, str], np.ndarray] = {}
     for variant in variants:
@@ -903,8 +997,13 @@ def run_transfer_report(
                         f"{variant.name}: the two HBI criteria disagree on which queries "
                         "are answerable, which they cannot — same candidate set"
                     )
+            hbi_baseline[variant.name] = hbi_baselines(scorer, hits, variant, n)
             masks.append((SUBSET_HBI, answerable[rows]))
-            masks.append((SUBSET_NO_HIT, ~hits.has_hit[rows]))
+            # The no-hit queries have nothing to exclude, so this subset is numerically
+            # identical under all three variants; publishing it once stops the same cell
+            # being read as three measurements (and triple-counted in any group-by).
+            if variant.name == VARIANT_ALL:
+                masks.append((SUBSET_NO_HIT, ~hits.has_hit[rows]))
         subset_masks[variant.name] = [(name, mask) for name, mask in masks if mask.any()]
         for name, mask in subset_masks[variant.name]:
             query_sets[(variant.name, name)] = rows[mask]
@@ -940,14 +1039,20 @@ def run_transfer_report(
         neighbour_distance: np.ndarray,
         tied: np.ndarray,
         subsets: Sequence[tuple[str, np.ndarray]],
+        primary_tied: np.ndarray | None = None,
     ) -> None:
         """Score one arm's chosen neighbours and file them under each query subset.
 
         ``rows`` are cohort positions in increasing order and ``subsets`` selects from them,
         so an embedding arm's slice and the HBI arm's own rows line up query for query —
         which is what makes the later bootstrap of their difference paired.
+
+        ``tied`` means the same thing for every arm — the pick depends on the id order —
+        so the column is comparable across arms. ``primary_tied`` is the wider HBI-only
+        count (the criterion alone was ambiguous); for an embedding arm the two coincide.
         """
         scores = scorer.pairs(rows, cols)
+        primary_tied = tied if primary_tied is None else primary_tied
         frame = pd.DataFrame(
             {
                 "arm": pd.Categorical([arm] * rows.size, categories=report_arms),
@@ -959,6 +1064,7 @@ def run_transfer_report(
                 "neighbour_id": pd.Categorical.from_codes(cols, categories=ids),
                 "neighbour_distance": neighbour_distance,
                 "tied": tied,
+                "primary_tied": primary_tied,
             }
         )
         for name, values in scores.items():
@@ -972,8 +1078,14 @@ def run_transfer_report(
                     "variant": variant_name,
                     "subset": subset,
                     "n_queries": int(np.count_nonzero(mask)),
-                    "n_dropped": int(n - np.count_nonzero(mask)),
+                    # The design's quantity: queries the VARIANT left without any eligible
+                    # neighbour. It is a property of the variant, not of the subset — the
+                    # queries a subset leaves out are counted separately, because a methods
+                    # section that confused the two would state a false number.
+                    "n_dropped": int(n - kept[variant_name].size),
+                    "n_not_in_subset": int(kept[variant_name].size - np.count_nonzero(mask)),
                     "n_ties": int(np.count_nonzero(tied[mask])),
+                    "n_primary_ties": int(np.count_nonzero(primary_tied[mask])),
                 }
             )
             for name, values in scores.items():
@@ -1042,7 +1154,7 @@ def run_transfer_report(
         if rows is None:
             continue
         for hbi_arm in hbi_labels:
-            nn, value, tied_hbi = hbi_picks[(variant.name, hbi_arm)]
+            nn, value, tied_hbi, primary_tied_hbi = hbi_picks[(variant.name, hbi_arm)]
             for distance in distances:
                 emit(
                     hbi_arm,
@@ -1053,6 +1165,7 @@ def run_transfer_report(
                     value[rows],
                     tied_hbi[rows],
                     [(SUBSET_HBI, np.ones(rows.size, dtype=bool))],
+                    primary_tied=primary_tied_hbi[rows],
                 )
         _log(f"variant {variant.name}: HBI scored on {rows.size} answerable queries")
 
@@ -1062,7 +1175,16 @@ def run_transfer_report(
         n_boot=n_boot,
         seed=seed,
     )
-    summary = _finish_summary(summary_rows, collected, boot, baselines, query_sets, scorer.names)
+    summary = _finish_summary(
+        summary_rows,
+        collected,
+        boot,
+        baselines,
+        query_sets,
+        scorer.names,
+        hbi_baseline=hbi_baseline,
+        hbi_arms=set(hbi_labels),
+    )
     paired = _paired_differences(collected, boot, report_arms)
 
     per_query = pd.concat(per_query_frames, ignore_index=True)
@@ -1070,13 +1192,26 @@ def run_transfer_report(
         baselines, kept, ids, scorer.names, subset_masks=subset_masks
     )
 
-    summary.to_csv(out_dir / "summary.csv", index=False)
-    paired.to_csv(out_dir / "paired_differences.csv", index=False)
-    per_query.to_parquet(out_dir / "per_query.parquet", index=False)
-    baseline_frame.to_parquet(out_dir / "per_query_baseline.parquet", index=False)
-    tau_frame = pd.DataFrame(tau_rows, columns=["arm", "distance", "tau_b", "n_pairs", "subsampled"])
-    if labels_kind == "go":
-        tau_frame.to_csv(out_dir / "tau_b.csv", index=False)
+    # Staged, then moved into place at the very end: the report is either all there or
+    # untouched. The out-dir is reused across runs, so a crash after the first write would
+    # otherwise leave fresh CSVs beside a stale manifest — complete-looking and wrong.
+    staging = out_dir / f".staging-{os.getpid()}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        summary.to_csv(staging / "summary.csv", index=False)
+        paired.to_csv(staging / "paired_differences.csv", index=False)
+        per_query.to_parquet(staging / "per_query.parquet", index=False)
+        baseline_frame.to_parquet(staging / "per_query_baseline.parquet", index=False)
+        tau_frame = pd.DataFrame(
+            tau_rows, columns=["arm", "distance", "tau_b", "n_pairs", "subsampled"]
+        )
+        if labels_kind == "go":
+            tau_frame.to_csv(staging / "tau_b.csv", index=False)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
     inputs = {"freeze": str(freeze), "labels": str(labels)}
     hashed = {str(freeze): sha256_file(freeze), str(labels): sha256_file(labels)}
@@ -1119,10 +1254,22 @@ def run_transfer_report(
             for name in subset_names
             if any((v.name, name) in query_sets for v in variants)
         },
+        "subset_note": f"{SUBSET_NO_HIT} is published under variant {VARIANT_ALL!r} only: "
+        "a query with no MMseqs2 hit has nothing for an identity variant to exclude, so the "
+        "cell would be identical under all three",
         "hbi": {
             "criteria": dict(HBI_ARMS),
             "note": "an HBI row is identical under every distance; it is repeated so that "
             "each paired difference against an embedding arm sits in one cell",
+            "neighbour_distance_units": {
+                "<embedding arm>": "the named distance (euclidean, or 1 - cosine)",
+                "hbi_evalue": "the MMseqs2 E-value of the chosen hit (0.0 means underflow, "
+                "not a zero distance)",
+                "hbi_fident": "1 - fident of the chosen hit",
+            },
+            "baseline_scope": "summary.csv chance/oracle on an hbi_* row are computed over "
+            "that query's eligible MMseqs2 hits, not over the whole cohort: the cohort "
+            "oracle is not a ceiling a sequence search could reach",
             "n_queries_without_any_cohort_hit": (
                 0 if hits is None else int((~hits.has_hit).sum())
             ),
@@ -1133,6 +1280,12 @@ def run_transfer_report(
         "n_cohort": n,
         "label_cleaning": label_counts,
         "drop_protein_binding": drop_protein_binding,
+        "propagated_cleaning": {
+            "dropped_from_propagated_sets": getattr(scorer, "propagated_drop", {}),
+            "note": "f1 is computed on the propagated sets, so a term is only really "
+            "dropped if it is dropped from the closure; wang_bma is defined on the "
+            "unpropagated annotated sets and is unaffected by this sensitivity",
+        },
         "wang_bma_check": wang_check,
         "parameters": {
             "fident_max": fident_max,
@@ -1152,7 +1305,14 @@ def run_transfer_report(
         },
         "versions": _versions(),
     }
-    (out_dir / "manifest.json").write_text(json.dumps(json_safe(manifest), indent=2) + "\n")
+    try:
+        (staging / "manifest.json").write_text(json.dumps(json_safe(manifest), indent=2) + "\n")
+        for path in sorted(staging.iterdir()):
+            os.replace(path, out_dir / path.name)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    staging.rmdir()
     return manifest
 
 
@@ -1163,17 +1323,29 @@ def _finish_summary(
     baselines: Mapping[str, Mapping[str, np.ndarray]],
     query_sets: Mapping[tuple[str, str], np.ndarray],
     score_names: Sequence[str],
+    *,
+    hbi_baseline: Mapping[str, Mapping[str, np.ndarray]] | None = None,
+    hbi_arms: set[str] | None = None,
 ) -> pd.DataFrame:
     """One summary row per (arm, distance, variant, subset, score) with its bootstrap CI.
 
     chance and oracle are averaged over the SUBSET's queries, not the variant's, so a cell
     is always compared against the baseline of the queries it was actually scored on — the
     ``no_hit`` queries are not a random sample of the cohort and their chance level differs.
+
+    They are also scoped to the arm's own candidate set (``baseline_scope``): an embedding
+    arm chooses among every eligible cohort protein, the homology arms only among their
+    MMseqs2 hits, and the cohort oracle printed on an HBI row would be a ceiling that arm
+    could not reach even in principle.
     """
+    hbi_baseline = hbi_baseline or {}
+    hbi_arms = hbi_arms or set()
     out: list[dict] = []
     for row in rows:
         variant, subset = row["variant"], row["subset"]
         queries = query_sets[(variant, subset)]
+        is_hbi = row["arm"] in hbi_arms and variant in hbi_baseline
+        source = hbi_baseline[variant] if is_hbi else baselines[variant]
         for score in score_names:
             key = (row["distance"], variant, subset, score)
             samples = boot[key][row["arm"]]
@@ -1186,13 +1358,15 @@ def _finish_summary(
                     "mean": float(values.mean()),
                     "ci_lo": float(lo),
                     "ci_hi": float(hi),
-                    "chance": float(np.mean(baselines[variant][f"chance_{score}"][queries])),
-                    "oracle": float(np.mean(baselines[variant][f"oracle_{score}"][queries])),
+                    "chance": float(np.mean(source[f"chance_{score}"][queries])),
+                    "oracle": float(np.mean(source[f"oracle_{score}"][queries])),
+                    "baseline_scope": "mmseqs_hits" if is_hbi else "cohort",
                 }
             )
     columns = [
         "arm", "distance", "variant", "subset", "score", "n_queries", "n_dropped",
-        "mean", "ci_lo", "ci_hi", "chance", "oracle", "n_ties",
+        "n_not_in_subset", "mean", "ci_lo", "ci_hi", "chance", "oracle", "baseline_scope",
+        "n_ties", "n_primary_ties",
     ]
     return pd.DataFrame(out)[columns].sort_values(["distance", "variant", "subset", "score", "arm"])
 
@@ -1337,8 +1511,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evalue-max", type=float, default=1e-3)
     parser.add_argument(
         "--drop-protein-binding", action="store_true",
-        help="GO sensitivity: drop GO:0005515 from every annotation and remove the "
-        "proteins that are left with no term (counted in the manifest).",
+        help="GO sensitivity: drop GO:0005515 from every annotation AND from every "
+        "propagated set, and remove the proteins left with no term (all counted in the "
+        "manifest). The propagated half is the half that bites: UniProt exports the "
+        "specific descendants (GO:0042802, GO:0042803), never the generic term, so "
+        "dropping it from the annotations alone provably changes no score. wang_bma is "
+        "defined on the unpropagated sets and does not move under this flag.",
     )
     parser.add_argument("--n-boot", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)

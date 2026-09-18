@@ -42,6 +42,7 @@ from evaluation.transfer_report import (
     bootstrap_weights,
     build_parser,
     build_variants,
+    hbi_baselines,
     hbi_neighbours,
     load_arm_matrix,
     main,
@@ -368,6 +369,12 @@ namespace: molecular_function
 is_a: GO:0005488
 
 [Term]
+id: GO:0042802
+name: identical protein binding
+namespace: molecular_function
+is_a: GO:0005515
+
+[Term]
 id: GO:0008150
 name: biological_process
 namespace: biological_process
@@ -383,6 +390,9 @@ GO_LABELS: dict[str, list[str]] = {
     "Q00": ["GO:0004175"], "Q01": ["GO:0004175"], "Q02": ["GO:0016787"],
     "Q03": ["GO:0016301"], "Q04": ["GO:0016301", PROTEIN_BINDING], "Q05": ["GO:0005488"],
     "Q06": [PROTEIN_BINDING], "Q07": [PROTEIN_BINDING], "Q08": ["GO:0003824", "GO:0005488"],
+    # Q09 is the real-data case: UniProt exports the SPECIFIC descendant, never the
+    # generic term, so Q09 carries protein binding only through the propagation.
+    "Q09": ["GO:0042802"],
 }
 GO_IDS: list[str] = sorted(GO_LABELS)
 
@@ -598,8 +608,8 @@ def _hbi_report(tmp_path, **overrides):
 
 def test_hbi_picks_the_best_hit_by_each_criterion(tmp_path):
     by_name, table = _hbi_variants(tmp_path)
-    nn_e, value_e, tied_e = hbi_neighbours(table, by_name["all"], "evalue")
-    nn_f, value_f, _ = hbi_neighbours(table, by_name["all"], "fident")
+    nn_e, value_e, tied_e, _ = hbi_neighbours(table, by_name["all"], "evalue")
+    nn_f, value_f, *_ = hbi_neighbours(table, by_name["all"], "fident")
     p00 = EC_IDS.index("P00")
     assert nn_e[p00] == EC_IDS.index("P01") and value_e[p00] == 1e-50
     assert nn_f[p00] == EC_IDS.index("P03")  # a weaker E-value but 0.95 identity
@@ -628,13 +638,35 @@ def test_hbi_transfers_only_from_neighbours_the_variant_allows(tmp_path):
 
 
 def test_hbi_ties_break_by_the_secondary_criterion_and_are_counted(tmp_path):
+    """A tie the secondary criterion resolves is NOT an id-order tie, and the two counts
+    must not be confused: MMseqs2 rounds fident, so the primary criterion alone is
+    ambiguous for thousands of real queries that the E-value then separates cleanly."""
     by_name, table = _hbi_variants(
         tmp_path, hits=[("P00", "P01", 0.50, 1e-20), ("P00", "P02", 0.90, 1e-20)]
     )
-    nn, _, tied = hbi_neighbours(table, by_name["all"], "evalue")
+    nn, _, tied, primary_tied = hbi_neighbours(table, by_name["all"], "evalue")
     p00 = EC_IDS.index("P00")
     assert nn[p00] == EC_IDS.index("P02")  # equal E-value, higher identity wins
-    assert tied[p00]  # and the tie is reported, because the answer depends on the order
+    assert primary_tied[p00]  # the E-value alone did not decide it...
+    assert not tied[p00]  # ...but the identity did, so the answer is not order-dependent
+
+    # Identical on BOTH criteria: now only the id order decides, and that is a real tie.
+    by_name, table = _hbi_variants(
+        tmp_path, hits=[("P00", "P01", 0.50, 1e-20), ("P00", "P02", 0.50, 1e-20)]
+    )
+    nn, _, tied, primary_tied = hbi_neighbours(table, by_name["all"], "evalue")
+    assert nn[p00] == EC_IDS.index("P01")  # lowest cohort index, as documented
+    assert tied[p00] and primary_tied[p00]
+
+
+def test_the_summary_tie_column_means_the_same_thing_for_every_arm(tmp_path):
+    """Finding: hbi_fident's n_ties was counting rounded-identity co-leaders, which is a
+    different question from the embedding argmin's "the pick depends on the id order"."""
+    _, out_dir = _hbi_report(tmp_path)
+    summary = pd.read_csv(out_dir / "summary.csv")
+    assert (summary["n_ties"] <= summary["n_primary_ties"]).all()
+    embedding = summary[~summary["arm"].isin(HBI_ARMS)]
+    assert (embedding["n_ties"] == embedding["n_primary_ties"]).all()
 
 
 def test_hbi_is_scored_on_the_queries_it_can_answer(tmp_path):
@@ -653,7 +685,11 @@ def test_hbi_is_scored_on_the_queries_it_can_answer(tmp_path):
     assert set(hbi["subset"]) == {SUBSET_HBI}  # never averaged over queries it cannot answer
     under_all = hbi[hbi["variant"] == "all"]
     assert set(under_all["n_queries"]) == {len(EC_IDS) - len(HBI_NO_HIT)}
-    assert set(under_all["n_dropped"]) == {len(HBI_NO_HIT)}
+    # n_dropped is the design's quantity (no eligible neighbour at all), NOT subset
+    # membership: no query loses every neighbour here, and the ones HBI cannot answer are
+    # counted in their own column.
+    assert set(under_all["n_dropped"]) == {0}
+    assert set(under_all["n_not_in_subset"]) == {len(HBI_NO_HIT)}
     # hbi_evalue transfers P00 -> P01 (same EC) and P09 -> P00 (different class), so its
     # exact score is neither 0 nor 1: the baseline is a real competitor, not a straw man.
     exact = under_all[(under_all["arm"] == "hbi_evalue") & (under_all["score"] == "exact")]
@@ -715,6 +751,100 @@ def test_the_no_hit_subset_is_where_only_an_embedding_can_answer(tmp_path):
     no_hit = summary[summary["subset"] == SUBSET_NO_HIT]
     assert set(no_hit["arm"]) == {"perfect", "noise"}  # HBI has no answer here by construction
     assert set(no_hit[no_hit["variant"] == "all"]["n_queries"]) == {len(HBI_NO_HIT)}
+
+
+def test_the_no_hit_subset_is_published_once_not_once_per_identity_variant(tmp_path):
+    """A query with no hit has nothing for an identity variant to exclude, so the same
+    numbers under three variant labels would read as three measurements."""
+    _, out_dir = _hbi_report(tmp_path)
+    summary = pd.read_csv(out_dir / "summary.csv")
+    no_hit = summary[summary["subset"] == SUBSET_NO_HIT]
+    assert set(no_hit["variant"]) == {"all"}
+    assert not no_hit.empty
+
+
+def test_hbi_baselines_are_scoped_to_the_hit_list_not_the_cohort(tmp_path):
+    """The cohort oracle is not a ceiling a sequence search could reach: it can only
+    transfer from a protein its own search returned."""
+    m8 = write_m8(tmp_path / "hbi.m8", HBI_HITS)
+    variants, hits, _ = build_variants(m8, EC_IDS)
+    scorer = ECScorer(EC_SETS)
+    variant = {v.name: v for v in variants}["all"]
+    scoped = hbi_baselines(scorer, hits, variant, len(EC_IDS))
+
+    # Brute force from the hit list itself, deduplicated and symmetrised by hand.
+    candidates: dict[int, set[int]] = {}
+    for q, t, _f, _e in HBI_HITS:
+        qi, ti = EC_IDS.index(q), EC_IDS.index(t)
+        candidates.setdefault(qi, set()).add(ti)
+        candidates.setdefault(ti, set()).add(qi)
+    full = scorer.block(0, len(EC_IDS))["exact"]
+    for i in range(len(EC_IDS)):
+        if i not in candidates:
+            assert np.isnan(scoped["oracle_exact"][i]) and scoped["n_eligible"][i] == 0
+            continue
+        others = sorted(candidates[i])
+        assert scoped["n_eligible"][i] == len(others)
+        assert scoped["oracle_exact"][i] == pytest.approx(max(full[i, j] for j in others))
+        assert scoped["chance_exact"][i] == pytest.approx(
+            sum(full[i, j] for j in others) / len(others)
+        )
+
+    _, out_dir = _hbi_report(tmp_path)
+    summary = pd.read_csv(out_dir / "summary.csv")
+    assert set(summary[summary["arm"].isin(HBI_ARMS)]["baseline_scope"]) == {"mmseqs_hits"}
+    assert set(summary[~summary["arm"].isin(HBI_ARMS)]["baseline_scope"]) == {"cohort"}
+    cell = summary[
+        (summary["variant"] == "all")
+        & (summary["subset"] == SUBSET_HBI)
+        & (summary["score"] == "exact")
+        & (summary["distance"] == "euclidean")
+    ].set_index("arm")
+    # Same queries, a strictly smaller candidate set: the search's ceiling cannot be higher.
+    assert cell.loc["hbi_evalue", "oracle"] <= cell.loc["perfect", "oracle"]
+    assert cell.loc["hbi_evalue", "mean"] <= cell.loc["hbi_evalue", "oracle"] + 1e-12
+
+
+def test_n_dropped_counts_queries_left_without_any_eligible_neighbour(tmp_path):
+    """The design's quantity. P00 hits every other protein above the identity threshold,
+    so under that variant it has nowhere to transfer from and leaves the readout."""
+    hits = [("P00", other, 0.9, 1e-50) for other in EC_IDS if other != "P00"]
+    manifest, out_dir = _ec_report(tmp_path, identity_m8=write_m8(tmp_path / "hub.m8", hits))
+    by_name = {v["name"]: v for v in manifest["variants"]}
+    assert by_name["all"]["n_dropped"] == 0
+    assert by_name["fident_lt_0.3"]["n_dropped"] == 1
+    summary = pd.read_csv(out_dir / "summary.csv")
+    restricted = summary[
+        (summary["variant"] == "fident_lt_0.3") & (summary["subset"] == SUBSET_ALL)
+    ]
+    assert set(restricted["n_dropped"]) == {1}
+    assert set(restricted["n_queries"]) == {len(EC_IDS) - 1}
+    assert set(restricted["n_not_in_subset"]) == {0}
+    per_query = pd.read_parquet(out_dir / "per_query.parquet")
+    scored = per_query[per_query["variant"] == "fident_lt_0.3"]["query_id"].astype(str)
+    assert "P00" not in set(scored)
+
+
+def test_a_failed_write_leaves_no_half_written_report(tmp_path, monkeypatch):
+    """The out-dir is reused between runs, so a partial report is a stale-manifest trap."""
+    _, out_dir = _ec_report(tmp_path)  # a complete report to overwrite
+    before = {p.name: p.read_bytes() for p in out_dir.iterdir()}
+
+    def boom(self, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", boom)
+    emb = tmp_path / "emb"
+    argv = [
+        "--labels-kind", "ec",
+        "--freeze", str(tmp_path / "freeze.json"),
+        "--labels", str(tmp_path / "labels.tsv"),
+        "--emb-dir", str(emb),
+        "--out-dir", str(out_dir),
+        "--n-boot", "16",
+    ]
+    assert main(argv) == 2
+    assert {p.name: p.read_bytes() for p in out_dir.iterdir()} == before
 
 
 def test_without_an_m8_there_is_no_homology_baseline(tmp_path):
@@ -790,6 +920,54 @@ def test_drop_protein_binding_removes_proteins_left_termless(tmp_path, mini_obo)
     per_query = pd.read_parquet(out_dir / "per_query.parquet")
     assert not {"Q06", "Q07"} & set(per_query["query_id"].astype(str))
     assert not {"Q06", "Q07"} & set(per_query["neighbour_id"].astype(str))
+
+
+def test_drop_protein_binding_leaves_the_propagated_sets_not_only_the_annotations(
+    tmp_path, mini_obo
+):
+    """The sensitivity is only a sensitivity if it can move the score it is attached to.
+
+    ``f1`` is computed on the PROPAGATED sets, and GO:0005515 enters them through its
+    descendants (Q09 carries GO:0042802 and is never annotated with GO:0005515 at all —
+    the real cohort's situation for 6,210 of 20,073 proteins). Dropping the term from the
+    annotations alone therefore cannot change a single query's F1; dropping it from the
+    closure can, and this pins that it does.
+    """
+    go_terms = parse_obo(mini_obo)
+    sets = [frozenset(GO_LABELS[p]) for p in GO_IDS]
+    plain, dropped = GOScorer(sets, go_terms), GOScorer(
+        sets, go_terms, drop_from_propagated=(PROTEIN_BINDING,)
+    )
+    assert plain.propagated_drop == {}
+    # Q04, Q06, Q07 carry it directly; Q09 inherits it from GO:0042802.
+    assert dropped.propagated_drop == {PROTEIN_BINDING: 4}
+    assert PROTEIN_BINDING in propagate_mf([frozenset({"GO:0042802"})], go_terms)[0]
+    assert PROTEIN_BINDING not in propagate_mf(
+        [frozenset({"GO:0042802"})], go_terms, drop_terms=(PROTEIN_BINDING,)
+    )[0]
+    q09, q05 = GO_IDS.index("Q09"), GO_IDS.index("Q05")
+    # Q09 {42802, 5515, 5488} vs Q05 {5488}: 2*1/(3+1) -> 2*1/(2+1) once 5515 is gone.
+    assert plain.f1_block(0, len(sets))[q09, q05] == pytest.approx(0.5)
+    assert dropped.f1_block(0, len(sets))[q09, q05] == pytest.approx(2 / 3)
+    # wang_bma is defined on the UNpropagated sets, so the sensitivity must not touch it.
+    assert dropped.bma_block(0, len(sets)) == pytest.approx(plain.bma_block(0, len(sets)))
+
+
+def test_drop_protein_binding_is_recorded_as_a_propagated_drop(tmp_path, mini_obo):
+    """A run that changed nothing must not be reportable as a robustness check."""
+    plain, plain_dir = _go_report(tmp_path / "plain", mini_obo)
+    manifest, out_dir = _go_report(tmp_path / "sens", mini_obo, drop_protein_binding=True)
+    assert plain["propagated_cleaning"]["dropped_from_propagated_sets"] == {}
+    # Q06/Q07 leave with the annotation drop; Q09 keeps its term and loses the ancestor.
+    assert manifest["propagated_cleaning"]["dropped_from_propagated_sets"] == {
+        PROTEIN_BINDING: 1
+    }
+    def perfect_f1(frame):
+        return frame[(frame["score"] == "f1") & (frame["arm"] == "perfect")]["mean"].to_numpy()
+
+    before = perfect_f1(pd.read_csv(plain_dir / "summary.csv"))
+    after = perfect_f1(pd.read_csv(out_dir / "summary.csv"))
+    assert not np.allclose(before, after)
 
 
 def test_tau_b_subsampling_is_recorded(tmp_path, mini_obo):
