@@ -122,8 +122,34 @@ def test_bma_matrix_is_symmetric_with_unit_diagonal():
     assert bma[0, len(proteins) - 1] == pytest.approx(1.0, abs=1e-15)
 
 
+def _main_checkout() -> Path | None:
+    """This repo's primary checkout, when the tests are running from a git worktree.
+
+    ``data/`` is gitignored and lives only in the main checkout, so in a worktree the
+    real-ontology check below would find no OBO and skip — quietly deleting the only test
+    that validates the vectorised Wang BMA against the scalar reference on the real 38k-term
+    ontology. A worktree's ``.git`` is a file pointing at ``<main>/.git/worktrees/<name>``.
+    """
+    dotgit = REPO_ROOT / ".git"
+    if not dotgit.is_file():
+        return None
+    text = dotgit.read_text().strip()
+    if not text.startswith("gitdir:"):
+        return None
+    for parent in Path(text.split(":", 1)[1].strip()).parents:
+        if parent.name == ".git":
+            return parent.parent
+    return None
+
+
 def _real_obo() -> Path | None:
-    for cand in (os.environ.get("PLM_CHOICE_GO_OBO"), REPO_ROOT / "data/reference/go/go-basic.obo"):
+    main = _main_checkout()
+    candidates = [
+        os.environ.get("PLM_CHOICE_GO_OBO"),
+        REPO_ROOT / "data/reference/go/go-basic.obo",
+        None if main is None else main / "data/reference/go/go-basic.obo",
+    ]
+    for cand in candidates:
         if cand and Path(cand).is_file():
             return Path(cand)
     return None
@@ -169,6 +195,18 @@ def test_propagation_follows_is_a_and_part_of_and_excludes_root():
     assert p1 == {"GO:B", "GO:A"}
     assert p2 == {"GO:D", "GO:C", "GO:A"}  # A only via part_of
     assert p3 == {"GO:A", "GO:C"}
+
+
+def test_propagation_can_drop_an_inherited_ancestor():
+    """The protein-binding sensitivity. GO:A is never annotated on p1 — it is inherited
+    from GO:B — so dropping it from the ANNOTATIONS cannot remove it from the propagated
+    set, which is where the F1 lives. ``drop_terms`` removes it after the closure."""
+    terms = _small_ontology()
+    sets = [frozenset({"GO:B"}), frozenset({"GO:D"})]
+    assert all("GO:A" in s for s in propagate_mf(sets, terms))
+    dropped = propagate_mf(sets, terms, drop_terms=("GO:A",))
+    assert dropped == [frozenset({"GO:B"}), frozenset({"GO:D", "GO:C"})]
+    assert MF_ROOT not in set().union(*dropped)  # the root stays excluded either way
 
 
 def test_propagated_f1_hand_computed():

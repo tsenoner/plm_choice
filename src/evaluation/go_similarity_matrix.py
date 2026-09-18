@@ -165,13 +165,27 @@ def wang_s_values(
 
 
 def propagate_mf(
-    protein_terms: Sequence[frozenset[str]], go_terms: Mapping[str, GOTerm]
+    protein_terms: Sequence[frozenset[str]],
+    go_terms: Mapping[str, GOTerm],
+    *,
+    drop_terms: Iterable[str] = (),
 ) -> list[frozenset[str]]:
-    """Close each annotated set upward over ``is_a`` + ``part_of`` within MF, root excluded."""
+    """Close each annotated set upward over ``is_a`` + ``part_of`` within MF, root excluded.
+
+    ``drop_terms`` are removed AFTER the closure, and that is the only place removing an
+    uninformative term can bite. UniProt does not export the generic ``GO:0005515`` at
+    all — it exports specific descendants such as ``GO:0042802`` — so dropping the term
+    from the *annotations* leaves it in every propagated set it was inherited into, and
+    the F1 (which is computed on the propagated sets) does not move by a single query.
+    Dropping it here is what the protein-binding sensitivity is actually asking.
+    """
     vocab = sorted(set().union(*protein_terms))
+    drop = frozenset(drop_terms) | {MF_ROOT}
     ancestors = {
         t: frozenset(
-            a for a in s if a != MF_ROOT and a in go_terms and go_terms[a].namespace == MF_NAMESPACE
+            a
+            for a in s
+            if a not in drop and a in go_terms and go_terms[a].namespace == MF_NAMESPACE
         )
         for t, s in wang_s_values(go_terms, vocab).items()
     }
