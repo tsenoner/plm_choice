@@ -1204,11 +1204,13 @@ def run_transfer_report(
         paired.to_csv(staging / "paired_differences.csv", index=False)
         per_query.to_parquet(staging / "per_query.parquet", index=False)
         baseline_frame.to_parquet(staging / "per_query_baseline.parquet", index=False)
-        tau_frame = pd.DataFrame(
-            tau_rows, columns=["arm", "distance", "tau_b", "n_pairs", "subsampled"]
-        )
-        if labels_kind == "go":
-            tau_frame.to_csv(staging / "tau_b.csv", index=False)
+        # Only when it was actually computed: a header-only tau_b.csv next to a manifest
+        # that lists it reads as "tau-b ran and found nothing", which is a different claim
+        # from "this run skipped tau-b".
+        if labels_kind == "go" and tau:
+            pd.DataFrame(
+                tau_rows, columns=["arm", "distance", "tau_b", "n_pairs", "subsampled"]
+            ).to_csv(staging / "tau_b.csv", index=False)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -1301,7 +1303,7 @@ def run_transfer_report(
             "paired_differences": str(out_dir / "paired_differences.csv"),
             "per_query": str(out_dir / "per_query.parquet"),
             "per_query_baseline": str(out_dir / "per_query_baseline.parquet"),
-            **({"tau_b": str(out_dir / "tau_b.csv")} if labels_kind == "go" else {}),
+            **({"tau_b": str(out_dir / "tau_b.csv")} if labels_kind == "go" and tau else {}),
         },
         "versions": _versions(),
     }

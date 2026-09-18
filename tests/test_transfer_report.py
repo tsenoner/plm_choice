@@ -977,6 +977,13 @@ def test_tau_b_subsampling_is_recorded(tmp_path, mini_obo):
     assert (tau["n_pairs"] < len(GO_IDS) * (len(GO_IDS) - 1) // 2).all()
 
 
+def test_no_tau_writes_no_tau_file(tmp_path, mini_obo):
+    """A header-only tau_b.csv would read as "tau-b ran and found nothing"."""
+    manifest, out_dir = _go_report(tmp_path, mini_obo, tau=False)
+    assert not (out_dir / "tau_b.csv").exists()
+    assert "tau_b" not in manifest["outputs"]
+
+
 def test_alt_ids_are_mapped_not_dropped(tmp_path, mini_obo):
     labels = {**GO_LABELS, "Q03": ["GO:0099999"]}  # secondary id of GO:0016301
     manifest, _ = _go_report(
