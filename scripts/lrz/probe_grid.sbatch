@@ -109,6 +109,27 @@ run_cell () {
             --max_epochs 100 --early_stopping_patience 5 --val_check_interval 1.0 \
             --seed 42 --wandb_project which-plm ${extra[@]+"${extra[@]}"}
     fi
+    # evaluate.py reads hparams back from wandb/*/files/config.yaml, which records the
+    # staging path of whichever job trained the cell. That path is gone on any later node,
+    # so a re-run of evaluation alone (training_complete.txt present, no new wandb run)
+    # would resolve data_dir/embedding_file to a dangling symlink and fail -- which is how
+    # 5795274_16 died after a completed 1:54 h training run. Repoint the config at this
+    # job's paths before evaluating; idempotent, and it keeps the rest of the config.
+    $PY - "$exp" "$DATA" "$ARM" <<'PYEOF'
+import sys, pathlib, yaml
+exp, data, arm = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+for cfg in exp.glob("wandb/*/files/config.yaml"):
+    try:
+        c = yaml.safe_load(cfg.read_text()) or {}
+    except yaml.YAMLError as e:
+        print(f"skip {cfg}: {e}"); continue
+    changed = False
+    for key, value in (("data_dir", f"{data}/sets"), ("embedding_file", f"{data}/embeddings/{arm}.h5")):
+        if isinstance(c.get(key), dict) and c[key].get("value") != value:
+            c[key]["value"] = value; changed = True
+    if changed:
+        cfg.write_text(yaml.safe_dump(c)); print(f"repointed {cfg}")
+PYEOF
     cat > "$exp/hparams.yaml" <<EOF
 model_type: $model
 param_name: $PARAM
