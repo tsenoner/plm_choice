@@ -112,6 +112,15 @@ EXPERIMENTAL_EVIDENCE: frozenset[str] = frozenset({
     "HTP", "HDA", "HMP", "HGI", "HEP",
 })
 
+#: The CAFA "core" experimental codes, and the CLI default. Narrower than
+#: EXPERIMENTAL_EVIDENCE on purpose: the high-throughput variants (HTP, HDA,
+#: HMP, HGI, HEP) are experimental too, but they come from screens that assign
+#: broad terms to many proteins at once. Restricting to the six codes the CAFA
+#: assessments score against makes the GO arm's ground truth the one the
+#: function-prediction field already uses, rather than a set we picked.
+#: EXPERIMENTAL_EVIDENCE is kept unchanged for callers that pinned it.
+CAFA_CORE6: frozenset[str] = frozenset({"EXP", "IDA", "IPI", "IMP", "IGI", "IEP"})
+
 #: Curator/author statements. Not experimental, but not homology transfer
 #: either. Opt in with --evidence_codes if the cohort needs the coverage.
 AUTHOR_EVIDENCE: frozenset[str] = frozenset({"TAS", "IC"})
@@ -377,6 +386,12 @@ def load_annotations_tsv(
             else:
                 continue
 
+            # A header row (export_go_annotations writes one) is not an
+            # annotation. Without this it passed format detection and was
+            # counted as an evidence code "EVIDENCE" the filter had dropped.
+            if not go_id.startswith("GO:"):
+                continue
+
             if evidence_codes is not None and evidence is not None:
                 if evidence not in evidence_codes:
                     skipped_evidence[evidence] += 1
@@ -506,7 +521,13 @@ def compute_pair_similarities(
 # --------------------------------------------------------------------------- #
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, separate from ``main`` so tests can pin its defaults.
+
+    The evidence default is the scientific filter of the GO arm. It changed once
+    already (11-code set -> CAFA core-6) and a silent revert would change every
+    GO number without failing anything, so it is asserted in a test.
+    """
     parser = argparse.ArgumentParser(
         description="Compute GO-term semantic similarity (Wang method) between protein pairs.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -524,12 +545,15 @@ def main():
     parser.add_argument(
         "--evidence_codes",
         nargs="+",
-        default=sorted(EXPERIMENTAL_EVIDENCE),
+        default=sorted(CAFA_CORE6),
         help=(
-            "GO evidence codes to KEEP. Defaults to the CAFA experimental set, "
-            "which excludes IEA — that exclusion is what makes this axis answer "
-            "R2.1 rather than restating sequence similarity. Pass "
-            "'--evidence_codes ALL' to disable filtering (and say so in Methods)."
+            "GO evidence codes to KEEP. Defaults to the CAFA core-6 experimental "
+            "set (EXP, IDA, IPI, IMP, IGI, IEP), which excludes IEA — that "
+            "exclusion is what makes this axis answer R2.1 rather than restating "
+            "sequence similarity. The broader 11-code set including the "
+            "high-throughput variants is data_preparation.go_semantic_similarity."
+            "EXPERIMENTAL_EVIDENCE. Pass '--evidence_codes ALL' to disable "
+            "filtering (and say so in Methods)."
         ),
     )
     parser.add_argument(
@@ -563,8 +587,11 @@ def main():
         default=None,
         help="Limit number of pairs to process (for testing)",
     )
+    return parser
 
-    args = parser.parse_args()
+
+def main(argv: list[str] | None = None):
+    args = build_parser().parse_args(argv)
 
     # --- Validate inputs ---
     if not args.annotations.exists():
