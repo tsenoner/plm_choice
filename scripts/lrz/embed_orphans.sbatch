@@ -67,11 +67,19 @@ if [ -f "$DEST" ]; then echo "$ARM already embedded"; exit 0; fi
 echo "model=$MODEL arm=$ARM host=$(hostname)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
+# Weights go to DSS, never to HOME. The first run of this array died with
+# "Disk quota exceeded" while pulling esmc_600m: HOME is quota-limited and a single
+# checkpoint (esm2_3b) is ~11 GB, so the HuggingFace cache cannot live there. This
+# also means the twelve tasks share one download instead of twelve.
+export HF_HOME="$DSS/hf_cache"
+mkdir -p "$HF_HOME"
+
 srun ./.venv/bin/python -m data_preparation.embeddings.embedding_generation \
     "$FASTA" "$MODEL" \
     --output_hdf5_file "$DEST.part" \
     --embedding_type per_protein \
     --max_seq_len 2000 \
+    --weights_dir "$HF_HOME" \
     --expect_sequences 11444
 
 ./.venv/bin/python - "$DEST.part" "$ARM" <<'PYEOF'
