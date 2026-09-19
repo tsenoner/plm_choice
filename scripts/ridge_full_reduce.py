@@ -149,17 +149,38 @@ def main() -> int:
     # not depend on the quantity being plotted.
     identical = None
     if args.identical_root is not None:
-        masks = []
-        for split in (args.splits if args.dist_root is not None else [None]):
-            name = f"{split}_identical.parquet" if split else "identical.parquet"
-            masks.append(
-                pl.read_parquet(args.identical_root / name).to_series().to_numpy()
+        if args.dist_root is not None:
+            # Positional mask: the distance parquets were written row-for-row from the
+            # same pair tables, in the same split order.
+            identical = np.concatenate([
+                pl.read_parquet(args.identical_root / f"{split}_identical.parquet")
+                .to_series()
+                .to_numpy()
+                for split in args.splits
+            ])
+            if identical.size != n_rows:
+                raise ValueError(
+                    f"identical mask has {identical.size:,} rows, distances have {n_rows:,}"
+                )
+        else:
+            # The 10% subset is a row subset of train, so a positional mask does not
+            # apply; mark its rows by accession pair instead.
+            keyed = pl.concat([
+                pl.read_parquet(p)
+                for p in sorted(args.identical_root.glob("*_identical_keyed.parquet"))
+            ]).with_columns(pl.lit(True).alias("_identical"))
+            sub = pl.read_parquet(args.pairs_parquet, columns=["query", "target"])
+            identical = (
+                sub.join(keyed, on=["query", "target"], how="left")
+                .select(pl.col("_identical").fill_null(False))
+                .to_series()
+                .to_numpy()
             )
-        identical = np.concatenate(masks)
-        if identical.size != n_rows:
-            raise ValueError(
-                f"identical mask has {identical.size:,} rows, distances have {n_rows:,}"
-            )
+            if identical.size != n_rows:
+                raise ValueError(
+                    f"keyed identical join produced {identical.size:,} rows, "
+                    f"distances have {n_rows:,} -- the join duplicated rows"
+                )
 
     finite = np.isfinite(x)
     n_nan = int((~finite).sum())

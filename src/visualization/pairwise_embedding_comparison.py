@@ -23,12 +23,15 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import polars as pl
 import seaborn as sns
 from diptest import diptest
 from scipy import stats
+from scipy.ndimage import gaussian_filter1d
 from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
@@ -56,6 +59,59 @@ from visualization.plm_constants import (
     EMBEDDING_FAMILY_MAP,
     PLM_SIZES,
 )
+
+def _nice_tick_step(span: float) -> float:
+    """A round tick interval giving roughly 5-10 ticks across ``span``."""
+    if span <= 0:
+        return 1.0
+    raw = span / 7.0
+    magnitude = 10.0 ** np.floor(np.log10(raw))
+    for mult in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if raw <= mult * magnitude:
+            return mult * magnitude
+    return 10.0 * magnitude
+
+
+def distance_column_sort_key(col: str) -> tuple:
+    """Row order for every pairwise figure: family, then size within family.
+
+    Shared with ``create_performance_summary_plots.py`` so a model sits in the same
+    place in every panel of the paper.  Note what this is *not*: it is not a
+    performance ranking.  The published Figure 2 caption claimed the rows were
+    "ordered by performance ranking" and they never were -- ``ranking_csv`` is the
+    opt-in that does that, and it was not passed.
+    """
+    embedding_name = col.replace("dist_", "").lower()
+    return (
+        EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown"),
+        PLM_SIZES.get(embedding_name, 0),
+        embedding_name,
+    )
+
+
+#: Per-row rescalings the ridge figure can draw under.  Each returns (scaled, divisor,
+#: label); the divisor is carried so the caption can state what the axis is divided by.
+#:
+#: Why this is a choice at all: raw medians span four orders of magnitude across arms
+#: (ankh_large 0.071 ... esm3_open 1160.6), so an unscaled shared axis shows fourteen
+#: spikes at zero and one curve.  Something has to rescale each row -- the only question
+#: is what it anchors on.
+RIDGE_NORMALISATIONS: Dict[str, Dict[str, object]] = {
+    # The published choice.  Anchors on the single most distant pair out of ~76 million,
+    # so one outlier fixes the scale for the whole row; an arm whose tail reaches further
+    # gets its entire bulk squeezed toward zero, which is how the rebuilt medians fell to
+    # 0.06-0.31 without any embedding changing.
+    "minmax": {"stat": "max", "label": "Min-Max Normalized Distances", "xlim": (0.0, 1.0)},
+    # Anchors on the 99th percentile: 760,000 pairs decide the scale instead of one, and
+    # the bulk keeps its shape.  Values above 1 are the top percent and are drawn.
+    "p99": {"stat": "p99", "label": "Distance / 99th percentile", "xlim": (0.0, 1.2)},
+    # Anchors on the row's own median, so every row is centred on 1 and the picture is
+    # purely about spread -- the scale-free view that matches the QCD numbers.
+    "median": {"stat": "p50", "label": "Distance / median", "xlim": (0.0, 2.2)},
+    # No per-row rescaling at all: the raw euclidean distance on a log axis.  Honest about
+    # the four orders of magnitude, at the cost of a log axis in a main figure.
+    "log10": {"stat": None, "label": "Euclidean distance (log scale)", "xlim": None},
+}
 
 DEFAULT_STYLE = {
     "figure_size": (15, 12),
@@ -103,6 +159,71 @@ class EmbeddingComparisonVisualizer:
 
         # Set up matplotlib styling
         self._setup_plotting_style()
+
+    # --- Alternative construction: reduced summaries instead of a pair table ---
+
+    @classmethod
+    def from_distribution_summaries(
+        cls,
+        summary_dir: Union[str, Path],
+        output_dir: Union[str, Path],
+        arms: Optional[List[str]] = None,
+        font_scale: float = 1.0,
+    ) -> "EmbeddingComparisonVisualizer":
+        """Build a visualizer from ``scripts/ridge_full_reduce.py`` output.
+
+        The ordinary constructor reads a pair table into memory.  The full corrected
+        cohort is 75,849,972 pairs over 15 arms -- 11.6 GB of parquet -- which is why
+        the reduction runs on the cluster and only per-arm histograms and exact
+        quantiles come home.  This constructor takes that directory instead, and the
+        resulting object supports the ridge plot only: ``self.df`` is None, so any
+        method that touches the pair table will fail loudly rather than quietly
+        plotting something else.
+        """
+        summary_dir = Path(summary_dir)
+        summaries: Dict[str, Dict] = {}
+        for path in sorted(summary_dir.glob("*.json")):
+            arm = path.stem
+            if arms is not None and arm not in arms:
+                continue
+            payload = json.loads(path.read_text())
+            npz_path = path.with_suffix(".npz")
+            if not npz_path.exists():
+                raise FileNotFoundError(f"{npz_path} missing next to {path}")
+            payload["_npz"] = npz_path
+            summaries[arm] = payload
+        if not summaries:
+            raise ValueError(f"no per-arm summaries found in {summary_dir}")
+
+        self = cls.__new__(cls)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.sample_size = None
+        self.font_scale = font_scale
+        self.df = None
+        self.summaries = summaries
+        # Same exclusions and the same row order as every other pairwise figure.
+        cols = [
+            f"dist_{arm}"
+            for arm in summaries
+            if not is_iid_random_baseline(arm) and arm.lower() != "prostt5"
+        ]
+        self.dist_cols = sorted(cols, key=distance_column_sort_key)
+        dropped = sorted(set(summaries) - {c.replace("dist_", "") for c in self.dist_cols})
+        if dropped:
+            logger.warning(
+                "EXCLUDED %d arm(s) from the ridge figure: %s (i.i.d. random baselines "
+                "are excluded by design; prostt5 is a TEMPORARY exclusion)",
+                len(dropped),
+                ", ".join(dropped),
+            )
+        logger.info(
+            "Loaded %d arm summaries, drawing %d rows in family-then-size order",
+            len(summaries),
+            len(self.dist_cols),
+        )
+        self._setup_plotting_style()
+        return self
 
     def _load_data(self, data_path: Union[str, Path]) -> pl.DataFrame:
         """Load data from various sources, returning polars DataFrame."""
@@ -161,18 +282,7 @@ class EmbeddingComparisonVisualizer:
                 ", ".join(c.replace("dist_", "") for c in dropped),
             )
 
-        # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
-        def get_sort_key(col: str) -> tuple:
-            embedding_name = col.replace("dist_", "").lower()
-            family = EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown")
-            plm_size = PLM_SIZES.get(embedding_name, 0)
-            return (
-                family,
-                plm_size,
-                embedding_name,
-            )  # Sort by family, then size, then name
-
-        dist_cols = sorted(dist_cols, key=get_sort_key)
+        dist_cols = sorted(dist_cols, key=distance_column_sort_key)
 
         if not dist_cols:
             raise ValueError(
@@ -833,10 +943,51 @@ class EmbeddingComparisonVisualizer:
         alpha: float = 0.8,
         save_path: Optional[Path] = None,
         ranking_csv: Optional[Path] = None,
+        overlap: float = 0.25,
+        row_height: float = 1.0,
+        xlim: Optional[Tuple[float, float]] = None,
+        x_label: Optional[str] = None,
+        title: Optional[str] = None,
+        iqr_band: bool = False,
+        quartile_labels: bool = False,
+        quartile_legend: bool = False,
     ) -> Tuple[plt.Figure, plt.Axes]:
-        """Create a ridge plot using pre-computed distribution data for much faster rendering."""
+        """Create a ridge plot using pre-computed distribution data.
+
+        The defaults reproduce the published Figure 2 exactly; every new argument is
+        opt-in.  What each of them controls, and why the figure lives or dies on them:
+
+        ``overlap``
+            Rows are laid out with ``hspace=-overlap``, i.e. a *negative* gridspec gap,
+            and the axes are transparent.  That negative gap is the entire joyplot
+            effect -- each row's curve is allowed to rise into the row above it.  Set it
+            to 0 and you get fifteen separate panels, which is what a plain
+            ``plt.subplots`` grid gives you and why such a grid reads as a stack of
+            strips rather than a landscape.
+        ``row_height``
+            Inches per row.  Each row is autoscaled to its own peak, so this is what
+            decides how tall a distribution is drawn; at 0.6 in the curves flatten into
+            smears.  The published figure uses 1.0.
+        ``xlim``
+            The published figure hardcodes (0, 1) because min-max scaling guarantees it.
+            Any other normalisation needs its own limits, and hardcoding (0, 1) under a
+            percentile scale silently clips the top percent of every row.
+        ``iqr_band``
+            Shades q25..q75 in a darker tint of the row colour.  The quartile *lines*
+            alone are easy to lose against a saturated fill; the band makes the middle
+            half of the distribution readable at a glance, which is the one thing the
+            figure is supposed to show.
+        """
         if distribution_data is None:
             distribution_data = self.compute_distribution_data(normalize=True)
+
+        meta = distribution_data.get("metadata", {})
+        if xlim is None:
+            xlim = tuple(meta.get("xlim", (0.0, 1.0)))
+        if x_label is None:
+            x_label = meta.get("label", "Min-Max Normalized Distances")
+        if title is None:
+            title = "Normalized Pairwise All-vs-All Distance Distributions"
 
         logger.info(
             "Creating optimized ridge plot using pre-computed distribution data..."
@@ -880,6 +1031,19 @@ class EmbeddingComparisonVisualizer:
                 plm_name = col.replace("dist_", "")
                 if col in distribution_data["distributions"]:
                     dist_data = distribution_data["distributions"][col]
+
+                    # Exact quantiles when the producer computed them on the values
+                    # (the summary path does).  Estimating a quartile off the cumulative
+                    # sum of a smoothed 500-point grid is accurate to about one cell,
+                    # which is fine for drawing a line and not fine for a number quoted
+                    # in a caption -- and these are the same numbers the caption quotes.
+                    if all(k in dist_data for k in ("q25", "median", "q75")):
+                        percentile_data[plm_name] = {
+                            "q25": float(dist_data["q25"]),
+                            "median": float(dist_data["median"]),
+                            "q75": float(dist_data["q75"]),
+                        }
+                        continue
 
                     # First try to get precomputed median
                     median_val = dist_data.get("median")
@@ -938,11 +1102,13 @@ class EmbeddingComparisonVisualizer:
 
         # Set up the figure - use a single large figure and manually position subplots
         fig = plt.figure(
-            figsize=(20 * self.font_scale, len(plm_names) * self.font_scale)
+            figsize=(20 * self.font_scale, len(plm_names) * row_height * self.font_scale)
         )
 
-        # Create subplots with controlled spacing
-        gs = fig.add_gridspec(len(plm_names), 1, hspace=-0.25)  # Small positive spacing
+        # Negative hspace is the ridgeline: it lets each row's curve rise into the row
+        # above it.  With the transparent axes facecolor set just above, that overlap is
+        # what turns fifteen strips into one landscape.
+        gs = fig.add_gridspec(len(plm_names), 1, hspace=-abs(overlap))
 
         axes = []
         for i, plm_name in enumerate(plm_names):
@@ -964,6 +1130,33 @@ class EmbeddingComparisonVisualizer:
 
             # Plot the distribution - key insight: plot normally, let overlap create ridge effect
             ax.fill_between(x_range, density, alpha=alpha, color=color)
+
+            # Darker tint over the middle half.  The quartile lines alone disappear into
+            # a saturated fill; the band is what makes "where does the middle 50% sit"
+            # legible without reading three thin lines off a coloured background.
+            if iqr_band and show_median and plm_name in percentile_data:
+                pc = percentile_data[plm_name]
+                inside = (x_range >= pc["q25"]) & (x_range <= pc["q75"])
+                if inside.any():
+                    ax.fill_between(
+                        x_range,
+                        density,
+                        where=inside,
+                        color=mcolors.to_rgb(color),
+                        alpha=min(1.0, alpha + 0.18),
+                        linewidth=0,
+                        zorder=1.2,
+                    )
+                    ax.fill_between(
+                        x_range,
+                        density,
+                        where=inside,
+                        color="black",
+                        alpha=0.16,
+                        linewidth=0,
+                        zorder=1.3,
+                    )
+
             ax.plot(x_range, density, color="white", linewidth=2, zorder=2)
 
             # Draw baseline at y=0
@@ -973,44 +1166,83 @@ class EmbeddingComparisonVisualizer:
             if show_median and plm_name in percentile_data:
                 percentiles = percentile_data[plm_name]
 
-                # Define line styles for each percentile
+                # Line styles.  Darker and fully opaque compared with the published
+                # figure's "0.3" at alpha 0.7: drawn over a saturated fill and then
+                # partly covered by the row in front, a 70%-opaque mid-grey dotted line
+                # is the first thing to disappear, and these three lines are the figure's
+                # quantitative content.  Each also gets a white halo (path_effects below).
                 percentile_styles = {
                     "q25": {
-                        "color": "0.3",
-                        "linestyle": ":",
-                        "linewidth": 3,
-                        "alpha": 0.7,
+                        "color": "0.12",
+                        "linestyle": (0, (1.6, 1.4)),
+                        "linewidth": 2.6,
+                        "alpha": 1.0,
                     },
                     "median": {
                         "color": "black",
-                        "linestyle": "--",
-                        "linewidth": 3,
-                        "alpha": 0.8,
+                        "linestyle": "-",
+                        "linewidth": 3.4,
+                        "alpha": 1.0,
                     },
                     "q75": {
-                        "color": "0.3",
-                        "linestyle": ":",
-                        "linewidth": 3,
-                        "alpha": 0.7,
+                        "color": "0.12",
+                        "linestyle": (0, (1.6, 1.4)),
+                        "linewidth": 2.6,
+                        "alpha": 1.0,
                     },
                 }
 
                 for p_name, p_val in percentiles.items():
-                    if p_val is not None and not np.isnan(p_val) and 0 <= p_val <= 1:
-                        # Interpolate to find the height at this percentile
-                        p_y = np.interp(p_val, x_range, density)
-                        # Only draw if interpolated y is valid
-                        if not np.isnan(p_y) and p_y >= 0:
-                            style = percentile_styles[p_name]
-                            ax.plot(
-                                [p_val, p_val],
-                                [0, p_y],
-                                color=style["color"],
-                                linestyle=style["linestyle"],
-                                linewidth=style["linewidth"],
-                                alpha=style["alpha"],
-                                clip_on=False,
-                                zorder=1,
+                    # The guard used to be a hardcoded ``0 <= p_val <= 1``, which is only
+                    # correct because min-max scaling happens to produce that range.
+                    # Under any other normalisation it silently drops the lines this
+                    # figure exists to show.
+                    if p_val is None or np.isnan(p_val):
+                        continue
+                    if not (xlim[0] <= p_val <= xlim[1]):
+                        logger.warning(
+                            "%s %s = %.4g falls outside the drawn range %s; not drawn",
+                            plm_name,
+                            p_name,
+                            p_val,
+                            xlim,
+                        )
+                        continue
+                    # Interpolate to find the height at this percentile
+                    p_y = np.interp(p_val, x_range, density)
+                    # Only draw if interpolated y is valid
+                    if not np.isnan(p_y) and p_y >= 0:
+                        style = percentile_styles[p_name]
+                        ax.plot(
+                            [p_val, p_val],
+                            [0, p_y],
+                            color=style["color"],
+                            linestyle=style["linestyle"],
+                            linewidth=style["linewidth"],
+                            alpha=style["alpha"],
+                            clip_on=False,
+                            zorder=3,
+                            solid_capstyle="butt",
+                            path_effects=[
+                                pe.withStroke(linewidth=style["linewidth"] + 2.2,
+                                              foreground="white", alpha=0.85)
+                            ],
+                        )
+                        if quartile_labels and p_name == "median":
+                            ax.annotate(
+                                f"{p_val:.2f}",
+                                xy=(p_val, p_y),
+                                xytext=(3, 2),
+                                textcoords="offset points",
+                                fontsize=int(13 * self.font_scale),
+                                fontweight="bold",
+                                color="black",
+                                ha="left",
+                                va="bottom",
+                                zorder=4,
+                                path_effects=[
+                                    pe.withStroke(linewidth=3, foreground="white")
+                                ],
                             )
 
             # Add PLM label on the left (remove \n for ridge plot)
@@ -1030,7 +1262,7 @@ class EmbeddingComparisonVisualizer:
             )
 
             # Style the subplot
-            ax.set_xlim(0, 1)
+            ax.set_xlim(*xlim)
             ax.set_ylim(bottom=0)  # Start y-axis at 0
 
             # Remove y-axis elements
@@ -1046,9 +1278,23 @@ class EmbeddingComparisonVisualizer:
             if i == len(plm_names) - 1:
                 # Bottom subplot: full x-axis
                 ax.spines["bottom"].set_visible(True)
-                ax.set_xticks(np.arange(0, 1.1, 0.2))
+                # Ticks follow the actual limits.  ``np.arange(0, 1.1, 0.2)`` is only
+                # right for a [0, 1] axis; on a wider or a log axis it labels part of it
+                # and leaves the rest bare.
+                step = _nice_tick_step(xlim[1] - xlim[0])
+                ax.set_xticks(
+                    np.arange(
+                        np.ceil(xlim[0] / step) * step,
+                        xlim[1] + 0.5 * step,
+                        step,
+                    )
+                )
+                if meta.get("normalisation") == "log10":
+                    ax.xaxis.set_major_formatter(
+                        mticker.FuncFormatter(lambda v, _: f"$10^{{{v:g}}}$")
+                    )
                 ax.set_xlabel(
-                    "Min-Max Normalized Distances",
+                    x_label,
                     fontsize=int(28 * self.font_scale),
                     labelpad=15,
                 )
@@ -1060,6 +1306,26 @@ class EmbeddingComparisonVisualizer:
                 ax.spines["bottom"].set_visible(False)
                 ax.set_xticks([])
                 ax.tick_params(axis="x", which="both", length=0, labelbottom=False)
+
+        # A key for the three lines.  The published figure drew q25/median/q75 with no
+        # legend at all, so a reader had no way to know what the dotted lines were --
+        # they are the figure's only quantitative content and they were unlabelled.
+        if quartile_legend and show_median and axes:
+            handles = [
+                plt.Line2D([], [], color="0.12", linestyle=(0, (1.6, 1.4)),
+                           linewidth=2.6, label="25th / 75th percentile"),
+                plt.Line2D([], [], color="black", linestyle="-", linewidth=3.4,
+                           label="median"),
+            ]
+            axes[0].legend(
+                handles=handles,
+                loc="upper right",
+                bbox_to_anchor=(1.0, 1.55),
+                frameon=False,
+                fontsize=int(20 * self.font_scale),
+                handlelength=2.6,
+                labelspacing=0.35,
+            )
 
         # Add y-axis label on the left side (figure-level)
         fig.text(
@@ -1074,8 +1340,8 @@ class EmbeddingComparisonVisualizer:
 
         # Add overall title
         fig.suptitle(
-            "Normalized Pairwise All-vs-All Distance Distributions",
-            fontsize=int(32 * self.font_scale),
+            title,
+            fontsize=int(27 * self.font_scale),
             fontweight="bold",
             y=0.92,
         )
@@ -1095,17 +1361,41 @@ class EmbeddingComparisonVisualizer:
                 # carried.
                 rows = []
                 for plm_name, percentiles in percentile_data.items():
-                    rows.append(
-                        {
-                            "plm_name": plm_name,
-                            "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
-                                plm_name, plm_name
-                            ).replace("\n", " "),
-                            "q25": percentiles["q25"],
-                            "median": percentiles["median"],
-                            "q75": percentiles["q75"],
-                        }
+                    dist_data = distribution_data["distributions"].get(
+                        f"dist_{plm_name}", {}
                     )
+                    row = {
+                        "plm_name": plm_name,
+                        "plm_display_name": EMBEDDING_DISPLAY_NAMES.get(
+                            plm_name, plm_name
+                        ).replace("\n", " "),
+                        "q25": percentiles["q25"],
+                        "median": percentiles["median"],
+                        "q75": percentiles["q75"],
+                        "iqr": percentiles["q75"] - percentiles["q25"],
+                        "normalisation": meta.get("normalisation", "minmax"),
+                    }
+                    # The scale-free columns, when the producer knows them.  QCD =
+                    # (q75-q25)/(q75+q25) is invariant under any positive rescaling, so
+                    # it is the only honest way to say one arm is "broader" than another
+                    # -- the normalised IQR is not, and the published claim that
+                    # task-specific training broadens the distribution came from reading
+                    # the normalised axis.
+                    for key in (
+                        "n_used",
+                        "n_zero_identical",
+                        "divisor",
+                        "qcd",
+                        "raw_q25",
+                        "raw_median",
+                        "raw_q75",
+                        "raw_p99",
+                        "raw_max",
+                        "frac_beyond_xlim",
+                    ):
+                        if key in dist_data:
+                            row[key] = dist_data[key]
+                    rows.append(row)
 
                 # Create DataFrame and save to CSV
                 stats_df = pl.DataFrame(rows)
@@ -1113,6 +1403,146 @@ class EmbeddingComparisonVisualizer:
                 logger.info(f"Ridge plot percentile statistics saved to {stats_path}")
 
         return fig, axes
+
+    def compute_distribution_data_from_summaries(
+        self,
+        normalisation: str = "p99",
+        grid: int = 500,
+        xlim: Optional[Tuple[float, float]] = None,
+        save_path: Optional[Path] = None,
+    ) -> Dict:
+        """Build ridge-plot densities from the cluster-reduced histograms.
+
+        Why a histogram and not a KDE over the values.  ``compute_distribution_data``
+        calls ``gaussian_kde`` on every distance in the column; at 75.8M points per arm
+        that is neither affordable nor necessary, because a 50,000-bin histogram of 75.8M
+        points already *is* the population density to far better precision than any
+        bandwidth choice.  Re-binning that histogram onto the display grid and applying
+        Scott's bandwidth as a Gaussian blur reproduces what the KDE would have drawn,
+        from every pair rather than from a sample of them.
+
+        Why the raw histogram can serve every normalisation.  min-max, ``/p99`` and
+        ``/median`` are all positive affine maps, so rescaling the bin edges is exactly
+        equivalent to rescaling the values.  ``log10`` uses the second, log-spaced
+        histogram the reduction wrote for it.
+
+        Quartiles are the exact ones from ``np.percentile`` over the full cohort, carried
+        through the same rescaling -- not read off the smoothed curve.
+        """
+        if self.df is not None and not hasattr(self, "summaries"):
+            raise RuntimeError(
+                "compute_distribution_data_from_summaries needs the summary-backed "
+                "constructor: EmbeddingComparisonVisualizer.from_distribution_summaries"
+            )
+        if normalisation not in RIDGE_NORMALISATIONS:
+            raise ValueError(
+                f"unknown normalisation {normalisation!r}; "
+                f"choose from {sorted(RIDGE_NORMALISATIONS)}"
+            )
+        spec = RIDGE_NORMALISATIONS[normalisation]
+        logger.info("Building ridge densities under normalisation=%s", normalisation)
+
+        # A log axis has no per-row divisor, so its limits come from the data.
+        if xlim is None:
+            xlim = spec["xlim"]
+        if xlim is None:
+            lo = min(s["hist_log10"]["lo"] for s in self._ridge_summaries().values())
+            hi = max(s["quantiles"]["p99.9"] for s in self._ridge_summaries().values())
+            xlim = (float(np.floor(lo)), float(np.ceil(np.log10(hi))))
+
+        x_edges = np.linspace(xlim[0], xlim[1], grid + 1)
+        x_range = 0.5 * (x_edges[:-1] + x_edges[1:])
+        dx = float(x_edges[1] - x_edges[0])
+
+        distributions: Dict[str, Dict] = {}
+        for col in self.dist_cols:
+            arm = col.replace("dist_", "")
+            summary = self.summaries[arm]
+            with np.load(summary["_npz"]) as npz:
+                if normalisation == "log10":
+                    counts = npz["hist_log10"].astype(np.float64)
+                    edges = npz["edges_log10"]
+                    divisor = 1.0
+                else:
+                    counts = npz["hist"].astype(np.float64)
+                    edges = npz["edges"]
+                    stat = spec["stat"]
+                    divisor = float(
+                        summary["max"] if stat == "max" else summary["quantiles"][stat]
+                    )
+            centres = 0.5 * (edges[:-1] + edges[1:])
+            if normalisation != "log10":
+                centres = centres / divisor
+
+            n_used = float(summary["n_used"])
+            binned, _ = np.histogram(centres, bins=x_edges, weights=counts)
+            density = binned / (n_used * dx)
+
+            # Scott's bandwidth, the rule gaussian_kde uses by default, expressed in
+            # display cells.  Moments are taken from the histogram so this works for the
+            # log axis too, where the summary's mean/std are on the linear scale.
+            total = counts.sum()
+            mu = float((counts * centres).sum() / total)
+            var = float((counts * (centres - mu) ** 2).sum() / total)
+            sigma_cells = max((n_used ** (-1 / 5)) * np.sqrt(var) / dx, 0.8)
+            density = gaussian_filter1d(density, sigma_cells, mode="nearest")
+
+            def _scale(value: float) -> float:
+                if normalisation == "log10":
+                    return float(np.log10(value)) if value > 0 else float("nan")
+                return float(value) / divisor
+
+            q = summary["quantiles"]
+            tail = float(counts[centres > xlim[1]].sum() / total)
+            peak_idx = int(np.argmax(density))
+            distributions[col] = {
+                "x_range": x_range.tolist(),
+                "density": density.tolist(),
+                "peak_x": float(x_range[peak_idx]),
+                "peak_y": float(density[peak_idx]),
+                "min": _scale(summary["min"]),
+                "max": _scale(summary["max"]),
+                "median": _scale(summary["median"]),
+                "q25": _scale(summary["q25"]),
+                "q75": _scale(summary["q75"]),
+                "divisor": divisor,
+                "n_used": int(summary["n_used"]),
+                "n_zero_identical": int(summary["n_zero_identical"]),
+                "qcd": float(summary["qcd"]),
+                "frac_beyond_xlim": tail,
+                "raw_q25": float(summary["q25"]),
+                "raw_median": float(summary["median"]),
+                "raw_q75": float(summary["q75"]),
+                "raw_p99": float(q["p99"]),
+                "raw_max": float(summary["max"]),
+                "bandwidth_cells": float(sigma_cells),
+            }
+            if tail > 0.005:
+                logger.info(
+                    "%s: %.2f%% of pairs sit beyond the drawn x-limit %.2f",
+                    arm,
+                    100 * tail,
+                    xlim[1],
+                )
+
+        data = {
+            "metadata": {
+                "normalized": normalisation != "log10",
+                "normalisation": normalisation,
+                "label": spec["label"],
+                "xlim": [float(xlim[0]), float(xlim[1])],
+                "grid": grid,
+                "source": "ridge_full_reduce summaries",
+                "identical_sequence_pairs_excluded": True,
+            },
+            "distributions": distributions,
+        }
+        if save_path:
+            self._save_json_data(data, save_path, "Distribution data (from summaries)")
+        return data
+
+    def _ridge_summaries(self) -> Dict[str, Dict]:
+        return {c.replace("dist_", ""): self.summaries[c.replace("dist_", "")] for c in self.dist_cols}
 
     def compute_distribution_data(
         self, normalize: bool = False, save_path: Optional[Path] = None

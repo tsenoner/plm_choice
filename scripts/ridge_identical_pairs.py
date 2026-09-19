@@ -92,6 +92,12 @@ def main() -> int:
         n_same = int(same.sum())
         out = args.out_dir / f"{split}_identical.parquet"
         pl.DataFrame({"identical": same}).write_parquet(out, compression="zstd")
+        # The same exclusion, keyed by accession rather than by row position, so it can
+        # be applied to any other table built from these pairs -- notably the 10% subset,
+        # which is a row subset of train and cannot use a positional mask.
+        pairs.filter(pl.Series(same)).write_parquet(
+            args.out_dir / f"{split}_identical_keyed.parquet", compression="zstd"
+        )
         stats["splits"][split] = {
             "n_pairs": len(pairs),
             "n_identical_sequence": n_same,
