@@ -146,8 +146,20 @@ class ProteinAnalysisPipeline:
             "low_plddt_ids": low_plddt_ids,
         }
 
-    def run(self, test_mode: bool = False, test_size: int = 100_000) -> pl.DataFrame:
-        """Run the complete analysis pipeline."""
+    def run(
+        self,
+        test_mode: bool = False,
+        test_size: int = 100_000,
+        plots_only: bool = False,
+        force_plots: bool = False,
+    ) -> pl.DataFrame | None:
+        """Run the complete analysis pipeline.
+
+        ``plots_only`` stops after the distribution figure, which is what a figure
+        rebuild needs: the merged table is unchanged by redrawing it, and rewriting a
+        1.5 GB parquet to get a PNG is both slow and a chance to corrupt the canonical
+        table. It returns ``None`` in that mode, because no merged frame was built.
+        """
         self._test_mode = test_mode
         print("🧬 PROTEIN SIMILARITY ANALYSIS PIPELINE")
         print("=" * 70)
@@ -171,8 +183,15 @@ class ProteinAnalysisPipeline:
         )
 
         self._create_distribution_plots(
-            mmseqs_df, foldcomp_df, foldseek_df, file_paths["plots_dir"]
+            mmseqs_df,
+            foldcomp_df,
+            foldseek_df,
+            file_paths["plots_dir"],
+            force=force_plots,
         )
+        if plots_only:
+            print("\n✅ Plots only: stopping before the merge step.")
+            return None
         final_df = self._merge_datasets(
             mmseqs_df, foldseek_df, file_paths["final_merged"]
         )
@@ -545,12 +564,21 @@ class ProteinAnalysisPipeline:
         foldcomp_df: pl.DataFrame,
         foldseek_df: pl.DataFrame,
         plots_dir: Path,
+        force: bool = False,
     ) -> None:
-        """Create all distribution visualization plots."""
+        """Create all distribution visualization plots.
+
+        ``force`` re-draws panels that already exist on disk. Without it a stale PNG
+        from an earlier (e.g. pre-HFSP-correction, pre-deduplication) run survives a
+        rerun of the corrected pipeline silently -- which is exactly how the published
+        supplementary filtering figure came to predate both corrections.
+        """
         print("\n📊 Creating distribution plots...")
         plots_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create individual plots
+        # Create individual plots. The panel letter is the one used in the
+        # supplementary caption: A = sequence metrics, B = structure confidence,
+        # C = structure similarity.
         plot_configs = [
             # MMSeqs2 plots
             (
@@ -561,6 +589,9 @@ class ProteinAnalysisPipeline:
                 "MMSeqs2 Coverage",
                 (0, 1),
                 "mmseqs_coverage.png",
+                "A",
+                "min(qcov, tcov)",
+                "pairs",
             ),
             (
                 mmseqs_df.get_column("fident").to_numpy(),
@@ -568,6 +599,9 @@ class ProteinAnalysisPipeline:
                 "MMSeqs2 PIDE",
                 (0, 1),
                 "mmseqs_pide.png",
+                "A",
+                "fident",
+                "pairs",
             ),
             (
                 mmseqs_df.get_column("hfsp").to_numpy(),
@@ -575,6 +609,9 @@ class ProteinAnalysisPipeline:
                 "MMSeqs2 HFSP",
                 (-60, 100),
                 "mmseqs_hfsp.png",
+                "A",
+                "hfsp",
+                "pairs",
             ),
             # FoldComp plot
             (
@@ -583,6 +620,9 @@ class ProteinAnalysisPipeline:
                 "FoldComp Average pLDDT",
                 (0, 100),
                 "foldcomp_plddt.png",
+                "B",
+                "avg_plddt",
+                "structures",
             ),
             # FoldSeek plots
             (
@@ -591,6 +631,9 @@ class ProteinAnalysisPipeline:
                 "FoldSeek Coverage",
                 (0, 1),
                 "foldseek_coverage.png",
+                "C",
+                "min(qcov, tcov)",
+                "pairs",
             ),
             (
                 foldseek_df.get_column("alntmscore").to_numpy(),
@@ -598,23 +641,36 @@ class ProteinAnalysisPipeline:
                 "FoldSeek TM-Score",
                 (0, 1),
                 "foldseek_tmscore.png",
+                "C",
+                "alntmscore",
+                "pairs",
             ),
         ]
 
         created_plots = 0
-        for data, threshold, title, ylim, filename in plot_configs:
+        stats_rows: list[dict[str, object]] = []
+        for data, threshold, title, ylim, filename, panel, column, unit in plot_configs:
             plot_path = plots_dir / filename
-            if not plot_path.exists():
+            if force or not plot_path.exists():
                 self._create_violin_plot(data, threshold, title, ylim, plot_path)
                 created_plots += 1
             else:
                 print(f"📊 Skipping existing plot: {filename}")
+            stats_rows.append(
+                self._threshold_stats(data, threshold, title, panel, column, unit)
+            )
+
+        # The numbers the figure annotates, written out so the caption can be checked
+        # against the run that produced the PNG rather than against memory.
+        stats_path = plots_dir / "filtering_thresholds.csv"
+        pl.DataFrame(stats_rows).write_csv(stats_path)
+        print(f"💾 Threshold statistics → {stats_path}")
 
         # Create combined subplot figure
         combined_plot_path = plots_dir / "combined_distributions.png"
-        if not combined_plot_path.exists():
+        if force or not combined_plot_path.exists():
             # Extract plot paths from plot_configs
-            plot_paths = [plots_dir / filename for _, _, _, _, filename in plot_configs]
+            plot_paths = [plots_dir / cfg[4] for cfg in plot_configs]
             self._create_combined_plot(plot_paths, combined_plot_path)
             created_plots += 1
         else:
@@ -623,6 +679,43 @@ class ProteinAnalysisPipeline:
         print(
             f"📊 Created {created_plots} new plots, {len(plot_configs) + 1 - created_plots} already existed in {plots_dir}"
         )
+
+    @staticmethod
+    def _threshold_stats(
+        data: np.ndarray,
+        threshold: float,
+        title: str,
+        panel: str,
+        column: str,
+        unit: str,
+    ) -> dict[str, object]:
+        """The annotation of one violin panel, as numbers.
+
+        ``count_below`` is computed with the same strict ``<`` the panel annotates, so
+        the CSV and the red text on the PNG can never drift apart.
+        """
+        finite = data[np.isfinite(data)]
+        n_below = int((finite < threshold).sum())
+        q = np.percentile(finite, [1, 25, 50, 75, 99])
+        return {
+            "panel": panel,
+            "metric": title,
+            "source_column": column,
+            "unit": unit,
+            "threshold": float(threshold),
+            "n": int(finite.size),
+            "n_non_finite": int(data.size - finite.size),
+            "n_below_threshold": n_below,
+            "pct_below_threshold": 100.0 * n_below / finite.size,
+            "mean": float(finite.mean()),
+            "min": float(finite.min()),
+            "p1": float(q[0]),
+            "q1": float(q[1]),
+            "median": float(q[2]),
+            "q3": float(q[3]),
+            "p99": float(q[4]),
+            "max": float(finite.max()),
+        }
 
     def _create_combined_plot(
         self,
@@ -922,6 +1015,26 @@ Examples:
     )
     parser.set_defaults(dedupe=True)
 
+    parser.add_argument(
+        "--plots-only",
+        action="store_true",
+        help=(
+            "Stop after the distribution figure; do not rebuild or overwrite the "
+            "merged pair table. Use this to redraw the supplementary filtering "
+            "figure from an already-corrected pipeline."
+        ),
+    )
+
+    parser.add_argument(
+        "--force-plots",
+        action="store_true",
+        help=(
+            "Redraw panels even when a PNG of that name already exists. Without it "
+            "a stale figure from an earlier run is kept and the rerun reports "
+            "success having changed nothing."
+        ),
+    )
+
     args = parser.parse_args()
 
     # run() prints its own mode banner and defaults test_size; only the dedupe state
@@ -934,10 +1047,15 @@ Examples:
     pipeline = ProteinAnalysisPipeline(
         args.data_dir, args.output_dir, args.dataset, dedupe=args.dedupe
     )
-    result_df = pipeline.run(test_mode=args.test)
+    result_df = pipeline.run(
+        test_mode=args.test,
+        plots_only=args.plots_only,
+        force_plots=args.force_plots,
+    )
 
     print("✅ Pipeline completed successfully!")
-    print(f"📊 Final dataset shape: {result_df.shape}")
+    if result_df is not None:
+        print(f"📊 Final dataset shape: {result_df.shape}")
 
 
 if __name__ == "__main__":

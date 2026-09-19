@@ -87,7 +87,12 @@ class EmbeddingComparisonVisualizer:
         Initialize the visualizer.
 
         Args:
-            data_path: Path to CSV file or pandas DataFrame containing the data
+            data_path: Path to CSV/Parquet file containing the data, or ``None`` to
+                build a plot-only visualizer. Every ``compute_*`` method needs the
+                frame, but the ``plot_*`` methods take their data as an argument and
+                so can be driven from a cache computed elsewhere -- which is how the
+                full 75.8-million-pair cohort, reduced on the cluster, gets drawn
+                here rather than being resampled down to whatever fits in memory.
             output_dir: Directory where output files will be saved
             sample_size: Optional limit on number of rows to process
             font_scale: Scaling factor for all font sizes
@@ -98,8 +103,12 @@ class EmbeddingComparisonVisualizer:
         self.font_scale = font_scale
 
         # Load and process data
-        self.df = self._load_data(data_path)
-        self.dist_cols = self._identify_distance_columns()
+        if data_path is None:
+            self.df = None
+            self.dist_cols = []
+        else:
+            self.df = self._load_data(data_path)
+            self.dist_cols = self._identify_distance_columns()
 
         # Set up matplotlib styling
         self._setup_plotting_style()
@@ -395,8 +404,15 @@ class EmbeddingComparisonVisualizer:
                         # Upper triangle: turn off (show only lower triangle)
                         ax.axis("off")
                     else:
-                        # Lower triangle: show hexbin plots
-                        key = f"{col1}_vs_{col2}"
+                        # Lower triangle: show hexbin plots.
+                        #
+                        # The key is (x-axis arm, y-axis arm), and
+                        # ``_plot_hexbin_pair`` puts the FIRST-named arm on the
+                        # horizontal axis. The tick labels below are written from
+                        # ``col2`` on x and ``col1`` on y, so the lookup has to be
+                        # ``col2_vs_col1``. It used to be ``col1_vs_col2``, which drew
+                        # every panel transposed with respect to its own axis labels.
+                        key = f"{col2}_vs_{col1}"
                         if key in hexbin_data:
                             self._plot_hexbin_pair(ax, hexbin_data[key], vmax)
                         else:
@@ -2316,8 +2332,18 @@ def main():
     parser.add_argument(
         "--data_path",
         type=Path,
-        required=True,
-        help="Path to CSV file containing the embedding distance data.",
+        default=None,
+        help="Path to CSV/Parquet file containing the embedding distance data.",
+    )
+    parser.add_argument(
+        "--hexbin_json",
+        type=Path,
+        default=None,
+        help=(
+            "Draw the hexagonal comparison from a precomputed cache instead of from "
+            "--data_path. Use this for the full-cohort figure, whose counts are "
+            "reduced on the cluster by scripts/fingerprint_hexbin_reduce.py."
+        ),
     )
     parser.add_argument(
         "--output_dir",
@@ -2369,6 +2395,9 @@ def main():
 
     args = parser.parse_args()
 
+    if args.data_path is None and args.hexbin_json is None:
+        parser.error("one of --data_path or --hexbin_json is required")
+
     # Create visualizer and generate visualizations
     visualizer = EmbeddingComparisonVisualizer(
         data_path=args.data_path,
@@ -2376,6 +2405,18 @@ def main():
         sample_size=args.sample_size,
         font_scale=args.font_scale,
     )
+
+    if args.hexbin_json is not None:
+        # Plot-only path: the counts were reduced elsewhere, so nothing is recomputed
+        # and the figure covers whatever cohort that reduction covered.
+        with open(args.hexbin_json) as fh:
+            hexbin_data = json.load(fh)
+        output_path = args.output_dir / "hexagonal_distance_comparison.png"
+        visualizer.plot_hexagonal_distance_comparison(
+            hexbin_data=hexbin_data, save_path=output_path
+        )
+        logger.info("Hexagonal comparison written to %s", output_path)
+        return
 
     if "all" in args.visualizations:
         output_paths = visualizer.generate_all_visualizations(
