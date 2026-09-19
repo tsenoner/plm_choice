@@ -57,6 +57,10 @@ DATASET="${DATASET:?set DATASET, e.g. sprot_pre2024_e1_sub10}"
 EXPECT_ARMS="${EXPECT_ARMS:?set EXPECT_ARMS (the embedding count the dataset must hold)}"
 SRC="$DSS/plm_choice_data/data/processed/$DATASET"
 PARAMS=(fident alntmscore hfsp)
+# Early stopping: 5 is the published protocol. Raise it to re-test a cell that stopped
+# suspiciously early -- three alntmscore cells peaked at epochs 2-4 while their neighbours
+# trained for 20-47, which is the signature of an early plateau rather than a converged fit.
+PATIENCE="${PATIENCE:-5}"
 
 cd "$HOME/plm_choice"
 PY=./.venv/bin/python
@@ -106,7 +110,7 @@ run_cell () {
             --embedding_file "$DATA/embeddings/$ARM.h5" \
             --data_dir "$DATA/sets" --output_base_dir "$exp" \
             --num_workers 10 --batch_size 1024 --learning_rate 0.0001 \
-            --max_epochs 100 --early_stopping_patience 5 --val_check_interval 1.0 \
+            --max_epochs 100 --early_stopping_patience "$PATIENCE" --val_check_interval 1.0 \
             --seed 42 --wandb_project which-plm ${extra[@]+"${extra[@]}"}
     fi
     # evaluate.py reads hparams back from wandb/*/files/config.yaml, which records the
