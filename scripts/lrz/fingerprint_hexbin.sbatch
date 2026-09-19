@@ -25,5 +25,5 @@ srun "$HOME/plm_choice/.venv/bin/python" scripts/fingerprint_hexbin_reduce.py \
   --identical-dir "$DSS/ridge_identical" \
   --splits train val test \
   --gridsize 50 \
-  --verify-pairs 3 \
+  --verify-pairs 6 \
   --out "$DSS/supp_figures/fingerprint_hexbin"

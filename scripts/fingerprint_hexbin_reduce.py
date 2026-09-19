@@ -25,9 +25,10 @@ Three things this does that a naive rerun of the in-repo path would not:
    ``np.histogram2d(x, y, bins=50)`` run per panel.
 
 3. **Binning is done once per arm, not once per panel.** Each arm's values are
-   digitised to a bin index; a panel is then a ``bincount`` over the paired indices.
-   ``--verify-pairs`` re-derives a sample of panels with ``np.histogram2d`` and fails
-   the run on any disagreement.
+   digitised to a bin index by ``searchsorted``, exactly as ``histogramdd`` does it;
+   a panel is then a ``bincount`` over the paired indices. ``--verify-pairs``
+   re-derives a sample of panels with ``np.histogram2d`` itself -- in both its
+   explicit-edge and its ``bins=50`` form -- and fails the run on any disagreement.
 
     python scripts/fingerprint_hexbin_reduce.py \
         --dist-dir $DSS/ridge_full --identical-dir $DSS/ridge_identical \
@@ -94,7 +95,7 @@ def check_alignment(dist_dir: Path, arms: list[str], n_rows: int) -> int:
 
 
 def load_split(dist_dir: Path, arms: list[str], identical_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
-    """One split's per-arm distances (float32) plus its identical-sequence mask."""
+    """One split's per-arm distances plus its identical-sequence mask."""
     n = check_alignment(dist_dir, arms, ALIGNMENT_PROBE_ROWS)
 
     identical = pl.read_parquet(identical_path)["identical"].to_numpy()
@@ -106,21 +107,30 @@ def load_split(dist_dir: Path, arms: list[str], identical_path: Path) -> tuple[d
     out: dict[str, np.ndarray] = {}
     for arm in arms:
         col = f"dist_{arm}"
-        out[arm] = pl.read_parquet(dist_dir / f"dist_{arm}.parquet", columns=[col])[col].to_numpy().astype(np.float32)
+        # float64, i.e. exactly what the in-repo path reads out of polars. float32
+        # would halve the memory but it also moves values that sit on a bin edge,
+        # and it makes numpy build float32 bin edges in the auto-bin path -- so the
+        # reduction would no longer be the same histogram the repo would compute.
+        out[arm] = pl.read_parquet(dist_dir / f"dist_{arm}.parquet", columns=[col])[col].to_numpy().astype(np.float64)
         print(f"    {arm}: {out[arm].size:,} values", flush=True)
     return out, identical
 
 
-def digitise(values: np.ndarray, lo: float, hi: float, gridsize: int) -> np.ndarray:
-    """Bin index per value on ``linspace(lo, hi, gridsize + 1)``.
+def digitise(values: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Bin index per value, binned exactly as ``np.histogram2d`` bins.
 
-    ``np.histogram`` puts the maximum in the last bin rather than opening a new one,
-    which is what the clip reproduces.
+    ``histogramdd`` -- which ``histogram2d`` is -- always assigns bins by
+    ``searchsorted`` against the edge array, then pulls values sitting exactly on the
+    rightmost edge back into the last bin. Reproducing that literally is not
+    pedantry: the obvious ``(v - lo) / (hi - lo) * nbins`` shortcut disagrees with it
+    on values that land near an edge in floating point, and ``--verify-pairs`` caught
+    exactly that on the esm2_35m x esmc_300m panel.
     """
-    if hi <= lo:
-        raise SystemExit(f"degenerate range [{lo}, {hi}] -- every value identical?")
-    idx = ((values - lo) * (gridsize / (hi - lo))).astype(np.int32)
-    return np.clip(idx, 0, gridsize - 1)
+    if edges[-1] <= edges[0]:
+        raise SystemExit(f"degenerate range [{edges[0]}, {edges[-1]}] -- every value identical?")
+    idx = np.searchsorted(edges, values, side="right") - 1
+    idx[values == edges[-1]] -= 1
+    return idx.astype(np.int32)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,14 +187,17 @@ def main(argv: list[str] | None = None) -> int:
 
     G = args.gridsize
     ranges: dict[str, tuple[float, float]] = {}
+    edges: dict[str, np.ndarray] = {}
     index: dict[str, np.ndarray] = {}
     for arm in arms:
         lo, hi = float(values[arm].min()), float(values[arm].max())
         ranges[arm] = (lo, hi)
-        index[arm] = digitise(values[arm], lo, hi, G)
+        # linspace over the arm's own extremes is what histogram2d builds for bins=G,
+        # and because every panel is drawn over one common pair set these extremes are
+        # each panel's extremes too.
+        edges[arm] = np.linspace(lo, hi, G + 1)
+        index[arm] = digitise(values[arm], edges[arm])
         print(f"  {arm}: [{lo:.4f}, {hi:.4f}]", flush=True)
-
-    edges = {arm: np.linspace(ranges[arm][0], ranges[arm][1], G + 1) for arm in arms}
     hexbin: dict[str, object] = {"metadata": {"dist_cols": [f"dist_{a}" for a in arms], "gridsize": G, "max_count": 0}}
     csv_rows: list[dict[str, object]] = []
     max_count = 0
@@ -227,10 +240,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_pairs:
         rng = np.random.default_rng(args.seed)
         for a, b in [pairs[i] for i in rng.choice(len(pairs), min(args.verify_pairs, len(pairs)), replace=False)]:
-            ref, _, _ = np.histogram2d(values[a], values[b], bins=[edges[a], edges[b]])
             got = np.array(hexbin[f"dist_{a}_vs_dist_{b}"]["counts"])
-            if not np.array_equal(ref.astype(np.int64), got):
-                raise SystemExit(f"verification failed for {a} vs {b}: bincount != np.histogram2d")
+            # Both forms: explicit edges pins the binning, bins=G pins the edges
+            # themselves as the ones histogram2d would have chosen unaided.
+            for label, ref in (
+                ("explicit edges", np.histogram2d(values[a], values[b], bins=[edges[a], edges[b]])[0]),
+                ("bins=G", np.histogram2d(values[a], values[b], bins=G)[0]),
+            ):
+                if not np.array_equal(ref.astype(np.int64), got):
+                    raise SystemExit(
+                        f"verification failed for {a} vs {b} ({label}): "
+                        f"{int(np.abs(ref - got).sum()):,} counts misplaced"
+                    )
             print(f"  verified {a} vs {b} against np.histogram2d", flush=True)
 
     (args.out / "hexbin_data.json").write_text(json.dumps(hexbin))
