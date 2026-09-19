@@ -207,7 +207,7 @@ def main() -> int:
     log(f"  used={n_used:,}")
 
     q = np.percentile(x, QUANTILES)
-    qd = {f"p{p:g}": float(v) for p, v in zip(QUANTILES, q)}
+    qd = {f"p{p:g}": float(v) for p, v in zip(QUANTILES, q, strict=True)}
     q25, med, q75 = qd["p25"], qd["p50"], qd["p75"]
     iqr = q75 - q25
     qcd = iqr / (q75 + q25) if (q75 + q25) > 0 else float("nan")

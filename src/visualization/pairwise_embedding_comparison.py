@@ -31,7 +31,7 @@ import polars as pl
 import seaborn as sns
 from diptest import diptest
 from scipy import stats
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
@@ -112,6 +112,11 @@ RIDGE_NORMALISATIONS: Dict[str, Dict[str, object]] = {
     # the four orders of magnitude, at the cost of a log axis in a main figure.
     "log10": {"stat": None, "label": "Euclidean distance (log scale)", "xlim": None},
 }
+
+#: The lattice the stored distances sit on: ``ridge_pair_distances.py`` writes
+#: ``np.round(d, decimals=4)``.  Needed when rebinning, see
+#: ``compute_distribution_data_from_summaries``.
+DISTANCE_QUANTUM = 1e-4
 
 DEFAULT_STYLE = {
     "figure_size": (15, 12),
@@ -1317,11 +1322,16 @@ class EmbeddingComparisonVisualizer:
                 plt.Line2D([], [], color="black", linestyle="-", linewidth=3.4,
                            label="median"),
             ]
-            axes[0].legend(
+            # Bottom row, upper right: under every normalisation the far right of the
+            # last row is empty, and the top right collides with the suptitle.
+            axes[-1].legend(
                 handles=handles,
                 loc="upper right",
-                bbox_to_anchor=(1.0, 1.55),
-                frameon=False,
+                bbox_to_anchor=(1.0, 1.15),
+                frameon=True,
+                facecolor="white",
+                edgecolor="none",
+                framealpha=0.85,
                 fontsize=int(20 * self.font_scale),
                 handlelength=2.6,
                 labelspacing=0.35,
@@ -1446,9 +1456,13 @@ class EmbeddingComparisonVisualizer:
         if xlim is None:
             xlim = spec["xlim"]
         if xlim is None:
-            lo = min(s["hist_log10"]["lo"] for s in self._ridge_summaries().values())
-            hi = max(s["quantiles"]["p99.9"] for s in self._ridge_summaries().values())
-            xlim = (float(np.floor(lo)), float(np.ceil(np.log10(hi))))
+            # Bound by percentiles, not by min and max.  The minimum of a rounded
+            # distance column can be one quantum (1e-4), which would open the axis by
+            # four empty decades to accommodate a handful of pairs.
+            summaries = self._ridge_summaries().values()
+            lo = min(s["quantiles"]["p0.1"] for s in summaries)
+            hi = max(s["quantiles"]["p99.9"] for s in summaries)
+            xlim = (float(np.floor(np.log10(lo))), float(np.ceil(np.log10(hi))))
 
         x_edges = np.linspace(xlim[0], xlim[1], grid + 1)
         x_range = 0.5 * (x_edges[:-1] + x_edges[1:])
@@ -1471,7 +1485,25 @@ class EmbeddingComparisonVisualizer:
                         summary["max"] if stat == "max" else summary["quantiles"][stat]
                     )
             centres = 0.5 * (edges[:-1] + edges[1:])
+
+            # Undo the storage quantisation before re-binning.  The distances were
+            # written with ``np.round(d, decimals=4)``, so every value sits on a 1e-4
+            # lattice.  For an arm with a compressed range that lattice is coarse
+            # relative to a display cell -- ankh_large spans 0.379, so a display cell
+            # holds four or five lattice points depending on where its edges fall, and
+            # the beat between the two draws a visible ripple along the curve.
+            # Convolving the fine histogram with a boxcar one quantum wide spreads each
+            # lattice point back over the interval it was rounded from, which is exactly
+            # the information the rounding destroyed.  Where a raw bin is already wider
+            # than the quantum (esm3_open spans 9958) the kernel is one bin and this is
+            # a no-op.
+            raw_bin_width = float(edges[1] - edges[0])
             if normalisation != "log10":
+                quantum_bins = int(round(DISTANCE_QUANTUM / raw_bin_width))
+                if quantum_bins > 1:
+                    counts = uniform_filter1d(
+                        counts, size=quantum_bins, mode="nearest"
+                    )
                 centres = centres / divisor
 
             n_used = float(summary["n_used"])
@@ -1487,7 +1519,11 @@ class EmbeddingComparisonVisualizer:
             sigma_cells = max((n_used ** (-1 / 5)) * np.sqrt(var) / dx, 0.8)
             density = gaussian_filter1d(density, sigma_cells, mode="nearest")
 
-            def _scale(value: float) -> float:
+            # ``divisor`` is bound as a default rather than captured: the closure is
+            # rebuilt per arm inside this loop, and a late-binding capture would silently
+            # rescale every row by the last arm's divisor if this ever stopped being
+            # called in the same iteration.
+            def _scale(value: float, divisor: float = divisor) -> float:
                 if normalisation == "log10":
                     return float(np.log10(value)) if value > 0 else float("nan")
                 return float(value) / divisor
