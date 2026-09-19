@@ -195,6 +195,98 @@ def load_results_data(base_dir: Path) -> pd.DataFrame:
     return results_df
 
 
+#: probe_metrics.csv column -> the name this module plots under.
+_CSV_METRIC_COLUMNS = {
+    "Pearson_r2": "Pearson R2",
+    "Pearson_r2_SE": "Pearson R2 SE",
+    "Spearman": "Spearman",
+    "Spearman_SE": "Spearman SE",
+    "MAE": "MAE",
+    "R2": "R2",
+}
+
+
+def load_metrics_csv(csv_path: Path, dataset: Optional[str] = None) -> pd.DataFrame:
+    """Load the probe grid from one long-format ``probe_metrics.csv``.
+
+    ``load_results_data`` walks a tree of ``*_metrics.txt`` produced by a local
+    training run. The rebuilt grid does not exist in that form: it is collected on the
+    cluster into a single table with one row per
+    (dataset, model_type, target, arm). Re-exporting that table into a directory tree
+    just so the parser can walk it would add a lossy step between the numbers and the
+    figure, so this reads it directly.
+
+    Rows whose metric is missing are NOT dropped here: a model whose cell has not been
+    computed must reach the plotter so it can be drawn as absent rather than vanish.
+
+    Args:
+        csv_path: Path to probe_metrics.csv
+        dataset: Keep only this ``dataset`` value (e.g. ``sprot_pre2024_e1_sub10``).
+            Required in practice — the file also holds the post-cutoff and
+            random-init grids, which are different populations and must not be mixed
+            into one panel.
+
+    Returns:
+        DataFrame in the same shape ``load_results_data`` returns.
+    """
+    raw = pd.read_csv(csv_path)
+    log.info(f"Loaded {len(raw)} rows from {csv_path}")
+
+    required = {"dataset", "model_type", "target", "arm"}
+    missing = required - set(raw.columns)
+    if missing:
+        raise ValueError(f"{csv_path} is missing column(s): {sorted(missing)}")
+
+    if dataset is not None:
+        available = sorted(raw["dataset"].unique())
+        if dataset not in available:
+            raise ValueError(
+                f"dataset '{dataset}' not in {csv_path}; available: {available}"
+            )
+        raw = raw[raw["dataset"] == dataset].copy()
+        log.info(f"Filtered to dataset '{dataset}': {len(raw)} rows")
+    else:
+        log.warning(
+            "No --dataset given: rows from %s will be pooled into one grid.",
+            sorted(raw["dataset"].unique()),
+        )
+
+    out = pd.DataFrame(
+        {
+            "Model Type": raw["model_type"].astype(str),
+            "Parameter": raw["target"].astype(str),
+            "Embedding": raw["arm"].astype(str),
+            "Embedding Key": raw["arm"].astype(str).str.lower(),
+        }
+    )
+    out["Embedding Family"] = out["Embedding Key"].map(
+        lambda k: EMBEDDING_FAMILY_MAP.get(k, "Unknown")
+    )
+    out["PLM Size"] = out["Embedding Key"].map(PLM_SIZES)
+
+    unknown = sorted(out.loc[out["Embedding Family"] == "Unknown", "Embedding"].unique())
+    if unknown:
+        log.warning(
+            "No family/size is known for %s — they will be grey and cannot enter a "
+            "size trendline. Add them to visualization/plm_constants.py.",
+            unknown,
+        )
+
+    for src_col, dest_col in _CSV_METRIC_COLUMNS.items():
+        if src_col in raw.columns:
+            out[dest_col] = pd.to_numeric(raw[src_col].values, errors="coerce")
+        else:
+            log.warning(f"'{src_col}' absent from {csv_path}; '{dest_col}' not plotted")
+
+    # Say out loud which cells exist, because "the figure has fewer points than the
+    # last one" is otherwise indistinguishable from "the run lost some models".
+    grid = out.pivot_table(
+        index="Parameter", columns="Model Type", values="Pearson R2", aggfunc="count"
+    )
+    log.info("Cells present per target x probe:\n%s", grid.to_string())
+    return out
+
+
 # --- Plotting Helpers ---
 def _add_error_bars(
     ax: plt.Axes, data: pd.DataFrame, y_metric: str, se_metric: Optional[str]
@@ -216,7 +308,7 @@ def _add_error_bars(
         if pd.notna(se_value) and se_value > 0:
             color = EMBEDDING_COLOR_MAP.get(row["Embedding Key"], "grey")
             ax.errorbar(
-                x=row["Embedding"],  # Use categorical x
+                x=row["X Pos"],  # Numeric tick position — see generate_metric_plot
                 y=row[y_metric],  # Use specified y metric
                 yerr=se_value,  # Use specified SE value
                 fmt="none",
@@ -251,7 +343,7 @@ def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
                 ),
             )
             ax.plot(
-                group["Embedding"],
+                group["X Pos"],
                 group[y_metric],
                 marker="",
                 linestyle=":",
@@ -269,6 +361,19 @@ def _add_trendlines(
     parameter: str,
 ):
     """Adds straight trendlines for each model type based on PLM size vs metric.
+
+    Two fits are recorded for every series, because the panel's x-axis is neither:
+    the models sit at evenly spaced tick positions ordered by parameter count, so a
+    slope is only meaningful once you say what it is a slope *in*.
+
+      * ``slope_per_1b`` — OLS of the metric on the raw parameter count. This is the
+        published convention and it is what the drawn line shows.
+      * ``slope_per_decade`` — OLS of the metric on log10(parameter count), i.e. the
+        change per tenfold increase in size. On a grid spanning 8M to 3B the linear
+        fit is dominated by the two largest models; the log fit is not, and it is the
+        one that matches how the axis is laid out.
+
+    Both go in the CSV so a caption can quote either and say which.
 
     Args:
         ax: The matplotlib axes to plot on
@@ -292,101 +397,117 @@ def _add_trendlines(
 
     # Group by model type and fit trendlines
     for model_type, group in data.groupby("Model Type"):
-        # Filter out rows with NaN values in PLM Size or y_metric
-        valid_group = group.dropna(subset=["PLM Size", y_metric])
+        # Filter out rows with NaN values in PLM Size or y_metric. A model whose cell
+        # has not been computed simply does not enter the fit — it is not imputed, and
+        # the n that did enter is recorded next to the slope.
+        valid_group = group.dropna(subset=["PLM Size", "X Pos", y_metric])
 
-        # Exclude esm2_3b from FNN trendline
-        if model_type == "fnn":
-            n_excluded = int((valid_group["Embedding Key"] == "esm2_3b").sum())
-            valid_group = valid_group[valid_group["Embedding Key"] != "esm2_3b"]
-            # Loud on purpose: the ESM2-3B embeddings were ~80% complete, so it
-            # is dropped from the trendline. This must be either removed once
-            # they finish or disclosed in the manuscript (plan item E3) — a
-            # debug-level message let it go unnoticed for months.
-            #
-            # Only warn when something was actually dropped: an unconditional
-            # warning fires on runs that never contained esm2_3b, which teaches
-            # the reader to scroll past exactly the line they must not miss.
-            if n_excluded:
-                log.warning(
-                    "EXCLUDED esm2_3b from the %s trendline (incomplete embeddings) "
-                    "— disclose this or finish the embeddings before publishing",
-                    model_type,
-                )
+        # The i.i.d. Gaussian control has no parameter count, so it cannot sit on a
+        # size trend (and log10(0) is undefined).
+        valid_group = valid_group[valid_group["PLM Size"] > 0]
 
         if len(valid_group) < 2:
             log.debug(f"Skipping trendline for {model_type}: insufficient data points")
             continue
 
-        # Get numeric x (PLM sizes) and y (metric) values
-        x_numeric = valid_group["PLM Size"].values
-        y_values = valid_group[y_metric].values
+        x_numeric = valid_group["PLM Size"].to_numpy(dtype=float)
+        y_values = valid_group[y_metric].to_numpy(dtype=float)
+        positions = valid_group["X Pos"].to_numpy(dtype=float)
 
-        # Skip if we have zero or negative PLM sizes (like random_1024)
-        if np.any(x_numeric <= 0):
-            log.debug(
-                f"Skipping trendline for {model_type}: contains zero or negative PLM sizes"
-            )
-            continue
-
-        # Fit linear regression
         try:
-            slope, intercept, r_value, p_value, std_err = stats.linregress(
-                x_numeric, y_values
+            lin = stats.linregress(x_numeric, y_values)
+            logfit = stats.linregress(np.log10(x_numeric), y_values)
+
+            # Draw between the smallest and largest model actually present in this
+            # facet, using their own tick positions rather than a size->position
+            # lookup: two models share 650M parameters, so that lookup silently
+            # resolved to whichever of them was written last.
+            i_min = int(np.argmin(x_numeric))
+            i_max = int(np.argmax(x_numeric))
+            y_min = lin.slope * x_numeric[i_min] + lin.intercept
+            y_max = lin.slope * x_numeric[i_max] + lin.intercept
+
+            linestyle = model_type_linestyles.get(model_type, "-")
+            ax.plot(
+                [positions[i_min], positions[i_max]],
+                [y_min, y_max],
+                linestyle=linestyle,
+                color="black",
+                linewidth=2.5,
+                alpha=0.7,
+                zorder=3,
             )
 
-            # Calculate y values at the min and max PLM sizes
-            x_min = x_numeric.min()
-            x_max = x_numeric.max()
-            y_min = slope * x_min + intercept
-            y_max = slope * x_max + intercept
+            trend_stats.append(
+                {
+                    "parameter": parameter,
+                    "model_type": model_type,
+                    "n_models": int(len(valid_group)),
+                    "models": " ".join(sorted(valid_group["Embedding Key"])),
+                    "slope_per_1b": lin.slope * 1e9,
+                    "intercept": lin.intercept,
+                    "r2": lin.rvalue**2,
+                    "p_value": lin.pvalue,
+                    "slope_per_decade": logfit.slope,
+                    "intercept_log": logfit.intercept,
+                    "r2_log": logfit.rvalue**2,
+                    "p_value_log": logfit.pvalue,
+                }
+            )
 
-            # Map these to categorical positions
-            # Find positions of min and max PLM sizes in the category order
-            size_to_pos = {}
-            for i, emb_name in enumerate(category_order):
-                emb_key = emb_name.lower()
-                if emb_key in PLM_SIZES:
-                    size_to_pos[PLM_SIZES[emb_key]] = i
-
-            # Get the positions for min and max sizes
-            if x_min in size_to_pos and x_max in size_to_pos:
-                pos_min = size_to_pos[x_min]
-                pos_max = size_to_pos[x_max]
-
-                # Draw straight line from leftmost to rightmost point
-                linestyle = model_type_linestyles.get(model_type, "-")
-                ax.plot(
-                    [pos_min, pos_max],
-                    [y_min, y_max],
-                    linestyle=linestyle,
-                    color="black",
-                    linewidth=2.5,
-                    alpha=0.7,
-                    zorder=3,
-                )
-
-                # Store statistics for CSV export
-                # Scale slope to "per 1B" with 2 significant figures
-                slope_per_1b = slope * 1e9
-                trend_stats.append(
-                    {
-                        "parameter": parameter,
-                        "model_type": model_type,
-                        "slope_per_1b": slope_per_1b,
-                        "r2": r_value**2,
-                        "p_value": p_value,
-                    }
-                )
-
-                log.debug(
-                    f"Added trendline for {model_type}: slope={slope_per_1b:.2g} per 1B, R²={r_value**2:.3f}, p={p_value:.3e}"
-                )
+            log.info(
+                "%s / %s trendline (n=%d): %.3g per 1B params (R2=%.3f, p=%.2e); "
+                "%.3g per decade (R2=%.3f, p=%.2e)",
+                parameter,
+                model_type,
+                len(valid_group),
+                lin.slope * 1e9,
+                lin.rvalue**2,
+                lin.pvalue,
+                logfit.slope,
+                logfit.rvalue**2,
+                logfit.pvalue,
+            )
 
         except Exception as e:
             log.warning(f"Failed to fit trendline for {model_type}: {e}")
 
     return trend_stats
+
+
+def _mark_missing_cells(
+    ax: plt.Axes, data: pd.DataFrame, y_metric: str, category_order: List[str]
+):
+    """Shade the tick of every model whose cell does not exist in this panel.
+
+    A model with no value must not be silently skipped: an absent marker over an
+    otherwise normal axis reads as "the point is hidden", and on a panel where half
+    the grid is still running it reads as a much smaller study. A grey column plus an
+    "n/a" tells the reader the cell is missing rather than small.
+    """
+    present = set(
+        data.dropna(subset=[y_metric])["Embedding"].astype(str)
+    )
+    missing = [
+        (i, name) for i, name in enumerate(category_order) if str(name) not in present
+    ]
+    for i, _name in missing:
+        ax.axvspan(i - 0.5, i + 0.5, color="0.93", zorder=0, linewidth=0)
+        ax.text(
+            i,
+            0.02,
+            "n/a",
+            ha="center",
+            va="bottom",
+            fontsize=PLOT_CONFIG["tick_fontsize"] * 0.75,
+            color="0.45",
+            style="italic",
+            zorder=4,
+            # x in data coordinates, y as a fraction of the axes: the label stays just
+            # above the axis whatever the y-limits are (delta mode centres them on 0).
+            transform=ax.get_xaxis_transform(),
+        )
+    return [name for _i, name in missing]
 
 
 def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
@@ -510,12 +631,31 @@ def generate_metric_plot(
         df["Parameter"], categories=param_order, ordered=True
     )
     df_sorted = df.sort_values(by=["Parameter", "PLM Size", "Model Type"])
-    category_order = df_sorted["Embedding"].unique().tolist()
+
+    # Tick order is a property of the GRID, not of whichever panel happens to be
+    # complete: derive it from every model present anywhere in the data, ordered by
+    # parameter count. Taking it from ``df_sorted["Embedding"].unique()`` read the
+    # order off the first panel, so a target missing a model would have shortened the
+    # axis of all three.
+    category_order = (
+        df[["Embedding", "PLM Size"]]
+        .drop_duplicates()
+        .sort_values(["PLM Size", "Embedding"])["Embedding"]
+        .tolist()
+    )
+
+    # Plot against the numeric tick index rather than the embedding name. With a
+    # categorical x and ``sharex=False`` seaborn assigns positions per facet, so a
+    # panel missing k models packed its remaining points into positions 0..n-k-1 and
+    # the tick labels written afterwards described different models than the markers
+    # above them. That was invisible while every panel was complete; HFSP is not.
+    pos_of = {name: i for i, name in enumerate(category_order)}
+    df_sorted = df_sorted.assign(**{"X Pos": df_sorted["Embedding"].map(pos_of)})
 
     # Create the base FacetGrid using relplot (scatter plot)
     g = sns.relplot(
         data=df_sorted,
-        x="Embedding",
+        x="X Pos",
         y=y_metric,
         col="Parameter",
         hue="Embedding Family",
@@ -541,6 +681,18 @@ def generate_metric_plot(
         _add_error_bars(ax, param_df, y_metric, se_metric)
         _add_connecting_lines(ax, param_df, y_metric)
         trend_stats = _add_trendlines(ax, param_df, y_metric, category_order, param)
+        missing = _mark_missing_cells(ax, param_df, y_metric, category_order)
+        if missing:
+            log.warning(
+                "%s / %s: %d of %d models have no cell and are drawn as 'n/a': %s",
+                param,
+                y_metric,
+                len(missing),
+                len(category_order),
+                ", ".join(map(str, missing)),
+            )
+        for stat in trend_stats:
+            stat["n_models_missing_in_panel"] = len(missing)
         all_trend_stats.extend(trend_stats)
 
         ax.set_xlabel("pLM Parameter Count", fontsize=PLOT_CONFIG["label_fontsize"])
@@ -587,6 +739,7 @@ def generate_metric_plot(
             else emb
             for emb in category_order
         ]
+        ax.set_xlim(-0.5, len(category_order) - 0.5)
         ax.set_xticks(range(len(category_order)))
         ax.set_xticklabels(size_labels)
 
@@ -622,11 +775,27 @@ def main():
         description="Parse model evaluation results and generate a summary plot.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--results_dir",
         type=Path,
-        required=True,
-        help="Base directory containing the model results (e.g., 'models/train_sub').",
+        help="Base directory containing the model results (e.g., 'models/train_sub'). "
+        "Parsed by walking it for '*_metrics.txt'.",
+    )
+    source.add_argument(
+        "--metrics_csv",
+        type=Path,
+        help="One long-format probe_metrics.csv holding the whole grid "
+        "(dataset, model_type, target, arm, Pearson_r2, ...). This is how the "
+        "cluster-trained grid arrives; pair it with --dataset.",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="With --metrics_csv: keep only this dataset (e.g. sprot_pre2024_e1_sub10). "
+        "The file also carries the post-cutoff and random-init grids, which are "
+        "different populations and must not be pooled into one panel.",
     )
     parser.add_argument(
         "--output",
@@ -686,7 +855,12 @@ def main():
     matplotlib_general_logger.setLevel(logging.INFO)
 
     # --- Load Data ---
-    results_df = load_results_data(args.results_dir)
+    if args.metrics_csv is not None:
+        results_df = load_metrics_csv(args.metrics_csv, dataset=args.dataset)
+    else:
+        if args.dataset:
+            log.warning("--dataset is only meaningful with --metrics_csv; ignoring it.")
+        results_df = load_results_data(args.results_dir)
     if results_df.empty:
         log.error("No data loaded, exiting.")
         return
@@ -851,6 +1025,39 @@ def main():
         {"y": "R2", "se": None, "suffix": "r2"},
     ]
 
+    # --- Save exactly what the panels draw ------------------------------------
+    # parsed_metrics_all.csv is written before --ignore-random / --exclude_plms /
+    # --model_types are applied, so it is the INPUT, not the figure. A caption has to
+    # be writable from the figure's own numbers, so dump the filtered table too,
+    # sorted the way the panels read: target, then parameter count.
+    plotted_path = output_dir / "plotted_values.csv"
+    plotted_cols = [
+        c
+        for c in [
+            "Parameter",
+            "Embedding",
+            "Embedding Key",
+            "Embedding Family",
+            "PLM Size",
+            "Model Type",
+            "Pearson R2",
+            "Pearson R2 SE",
+            "Spearman",
+            "Spearman SE",
+            "Absolute Spearman",
+            "MAE",
+            "R2",
+        ]
+        if c in results_df.columns
+    ]
+    try:
+        results_df[plotted_cols].sort_values(
+            ["Parameter", "PLM Size", "Model Type"]
+        ).to_csv(plotted_path, index=False)
+        log.info(f"Plotted values saved to {plotted_path}")
+    except Exception as e:
+        log.error(f"Failed to save plotted values to {plotted_path}: {e}")
+
     # --- Generate Plots ---
     all_trendline_stats = []  # Collect all trendline stats across all plots
 
@@ -889,21 +1096,31 @@ def main():
         trendline_csv_path = output_dir / "trendline_statistics.csv"
         trendline_df = pd.DataFrame(all_trendline_stats)
 
-        # Reorder columns for better readability
+        # Reorder columns for better readability. Anything the fitter reports but
+        # this list does not name is appended rather than dropped: the previous
+        # fixed list silently deleted every new column.
         column_order = [
             "metric",
             "parameter",
             "model_type",
+            "n_models",
+            "n_models_missing_in_panel",
             "slope_per_1b",
             "r2",
             "p_value",
+            "slope_per_decade",
+            "r2_log",
+            "p_value_log",
         ]
-        trendline_df = trendline_df[column_order]
+        ordered = [c for c in column_order if c in trendline_df.columns]
+        ordered += [c for c in trendline_df.columns if c not in ordered]
+        trendline_df = trendline_df[ordered]
 
-        # Format slope_per_1b to 2 significant figures
-        trendline_df["slope_per_1b"] = trendline_df["slope_per_1b"].apply(
-            lambda x: f"{x:.2g}"
-        )
+        # Four significant figures, not two: this CSV is what a caption quotes, and
+        # two figures cannot distinguish 0.021 from 0.024.
+        for col in ("slope_per_1b", "slope_per_decade"):
+            if col in trendline_df.columns:
+                trendline_df[col] = trendline_df[col].apply(lambda x: f"{x:.4g}")
 
         try:
             trendline_df.to_csv(trendline_csv_path, index=False)
