@@ -140,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     ap.add_argument("--gridsize", type=int, default=50)
     ap.add_argument("--verify-pairs", type=int, default=3, help="panels to re-derive with np.histogram2d (0 to skip)")
+    ap.add_argument(
+        "--p99-limit",
+        type=float,
+        default=0.0,
+        help=(
+            "Cap each arm's axis at this multiple of its 99th percentile, accumulating the "
+            "tail in the edge bin. 0 (the default) reproduces the published min-max binning. "
+            "1.2 is the limit the ridge figure uses for the same distances."
+        ),
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args(argv)
@@ -189,15 +199,31 @@ def main(argv: list[str] | None = None) -> int:
     ranges: dict[str, tuple[float, float]] = {}
     edges: dict[str, np.ndarray] = {}
     index: dict[str, np.ndarray] = {}
+    clipped: dict[str, int] = {}
     for arm in arms:
         lo, hi = float(values[arm].min()), float(values[arm].max())
+        n_clipped = 0
+        if args.p99_limit:
+            # Min-max binning is not robust to a heavy right tail, and the corrected
+            # cohort has one: ESM-1b runs to 31.36 with a 99th percentile of 5.22, so
+            # 99% of its pairs land in 8 of 50 bins and its whole row and column of the
+            # grid collapse into a strip. 1.2 x p99 is the same axis limit the ridge
+            # figure already uses for these distances. Values past it are accumulated in
+            # the edge bin rather than dropped, so every panel keeps the identical pair
+            # set and the exclusion stays a statable count instead of a hidden one.
+            limit = float(np.percentile(values[arm], 99.0)) * args.p99_limit
+            if limit < hi:
+                n_clipped = int((values[arm] > limit).sum())
+                hi = limit
         ranges[arm] = (lo, hi)
+        clipped[arm] = n_clipped
         # linspace over the arm's own extremes is what histogram2d builds for bins=G,
         # and because every panel is drawn over one common pair set these extremes are
         # each panel's extremes too.
         edges[arm] = np.linspace(lo, hi, G + 1)
-        index[arm] = digitise(values[arm], edges[arm])
-        print(f"  {arm}: [{lo:.4f}, {hi:.4f}]", flush=True)
+        index[arm] = digitise(np.minimum(values[arm], hi) if n_clipped else values[arm], edges[arm])
+        note = f"  ({n_clipped:,} above, {100 * n_clipped / n_keep:.3f}%, binned at the edge)" if n_clipped else ""
+        print(f"  {arm}: [{lo:.4f}, {hi:.4f}]{note}", flush=True)
     hexbin: dict[str, object] = {"metadata": {"dist_cols": [f"dist_{a}" for a in arms], "gridsize": G, "max_count": 0}}
     csv_rows: list[dict[str, object]] = []
     max_count = 0
@@ -220,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         ia, ib = np.nonzero(counts)
         ca = 0.5 * (edges[a][:-1] + edges[a][1:])
         cb = 0.5 * (edges[b][:-1] + edges[b][1:])
-        for x, y in zip(ia, ib):
+        for x, y in zip(ia, ib, strict=True):
             csv_rows.append(
                 {
                     "arm_x": a,
@@ -237,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
 
     hexbin["metadata"]["max_count"] = max_count
 
-    if args.verify_pairs:
+    if args.verify_pairs and not any(clipped.values()):
         rng = np.random.default_rng(args.seed)
         for a, b in [pairs[i] for i in rng.choice(len(pairs), min(args.verify_pairs, len(pairs)), replace=False)]:
             got = np.array(hexbin[f"dist_{a}_vs_dist_{b}"]["counts"])
@@ -257,7 +283,17 @@ def main(argv: list[str] | None = None) -> int:
     (args.out / "hexbin_data.json").write_text(json.dumps(hexbin))
     pl.DataFrame(csv_rows).write_csv(args.out / "fingerprint_hexbin_values.csv")
     pl.DataFrame(
-        [{"arm": a, "min": ranges[a][0], "max": ranges[a][1], "n": n_keep} for a in arms]
+        [
+            {
+                "arm": a,
+                "axis_min": ranges[a][0],
+                "axis_max": ranges[a][1],
+                "n_pairs": n_keep,
+                "n_above_axis_max": clipped[a],
+                "pct_above_axis_max": 100.0 * clipped[a] / n_keep,
+            }
+            for a in arms
+        ]
     ).write_csv(args.out / "fingerprint_hexbin_ranges.csv")
     summary = {
         "arms": arms,
@@ -268,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
         "n_pairs_used": n_keep,
         "n_panels": len(pairs),
         "max_count": max_count,
+        "p99_limit": args.p99_limit,
+        "n_clipped_per_arm": clipped,
         "identical_source": str(args.identical_dir),
         "dist_source": str(args.dist_dir),
         "seconds": round(time.time() - t0, 1),

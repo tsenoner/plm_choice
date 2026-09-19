@@ -5,7 +5,9 @@
 # reads with --hexbin_json, so the figure itself is drawn locally from a few MB of
 # counts rather than from ~30 GB of per-arm distance files.
 #
-#   sbatch scripts/lrz/fingerprint_hexbin.sbatch
+#   sbatch scripts/lrz/fingerprint_hexbin.sbatch                       # published min-max axes
+#   P99_LIMIT=1.2 OUT_NAME=fingerprint_hexbin_p99 \
+#       sbatch scripts/lrz/fingerprint_hexbin.sbatch                   # ridge-figure axes
 #SBATCH -J fp-hexbin
 #SBATCH -p lrz-cpu
 #SBATCH --qos=cpu
@@ -26,4 +28,5 @@ srun "$HOME/plm_choice/.venv/bin/python" scripts/fingerprint_hexbin_reduce.py \
   --splits train val test \
   --gridsize 50 \
   --verify-pairs 6 \
-  --out "$DSS/supp_figures/fingerprint_hexbin"
+  --p99-limit "${P99_LIMIT:-0}" \
+  --out "$DSS/supp_figures/${OUT_NAME:-fingerprint_hexbin}"
