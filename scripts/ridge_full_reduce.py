@@ -22,9 +22,12 @@ sup-distance between the ECDF and the closest unimodal CDF, so it is invariant
 under any increasing affine map of x -- the same number for raw, min-max and
 percentile-scaled data.  That invariance is checked here rather than assumed.
 
-Identical-sequence pairs (distance exactly 0 -- the same protein under two
-accessions) are reported separately and excluded from every statistic, because
-they are a property of Swiss-Prot's redundancy, not of any embedding space.
+Identical-sequence pairs -- the same protein deposited under two accessions -- are
+excluded from every statistic, because they are a property of Swiss-Prot's redundancy
+and not of any embedding space.  With ``--identical-root`` they are identified from the
+sequences (see ``ridge_identical_pairs.py``), so every arm drops the same rows; the
+fallback rule ``distance == 0`` is circular and, in the float16-stored arms, misses
+about 9% of them because they land at ~0.001 rather than 0.0.
 
     python scripts/ridge_full_reduce.py \
         --dist-root $DSS/ridge_full --out-dir $DSS/ridge_full_summary --arm esm1b
@@ -90,9 +93,29 @@ def dip_of(x: np.ndarray) -> tuple[float, float]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dist-root", required=True, type=Path)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument(
+        "--dist-root",
+        type=Path,
+        help="Cluster layout: <root>/<split>/dist_<arm>.parquet, concatenated over --splits.",
+    )
+    src.add_argument(
+        "--pairs-parquet",
+        type=Path,
+        help="One flat table carrying dist_<arm> columns -- the 10%% subset. Same estimator, "
+        "so subset and full cohort are compared without a second implementation.",
+    )
     ap.add_argument("--out-dir", required=True, type=Path)
     ap.add_argument("--arm", required=True)
+    ap.add_argument(
+        "--identical-root",
+        type=Path,
+        default=None,
+        help="Directory of <split>_identical.parquet from ridge_identical_pairs.py. "
+        "With it, identical-sequence pairs are excluded by SEQUENCE, the same rows for "
+        "every arm; without it, the fallback is distance == 0, which is circular and "
+        "misses the float16 arms' identical pairs (they land at ~0.001, not 0.0).",
+    )
     ap.add_argument("--splits", nargs="+", default=list(SPLITS))
     ap.add_argument("--bins", type=int, default=N_BINS)
     ap.add_argument("--subsample", type=int, default=SUBSAMPLE)
@@ -106,22 +129,61 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     t_start = time.time()
-    log(f"arm={args.arm} splits={args.splits}")
-    x, per_split = load_arm(args.dist_root, args.arm, tuple(args.splits))
+    if args.dist_root is not None:
+        log(f"arm={args.arm} splits={args.splits}")
+        x, per_split = load_arm(args.dist_root, args.arm, tuple(args.splits))
+    else:
+        log(f"arm={args.arm} source={args.pairs_parquet}")
+        x = (
+            pl.read_parquet(args.pairs_parquet, columns=[f"dist_{args.arm}"])
+            .to_series()
+            .to_numpy()
+            .astype(np.float64, copy=False)
+        )
+        per_split = {args.pairs_parquet.stem: int(x.size)}
     n_rows = int(x.size)
+
+    # Identical-sequence pairs: the same protein under two accessions.  They are the
+    # spike at zero and they pin the min-max minimum.  Defined from the SEQUENCES when
+    # the mask is available, so every arm drops the same rows and the definition does
+    # not depend on the quantity being plotted.
+    identical = None
+    if args.identical_root is not None:
+        masks = []
+        for split in (args.splits if args.dist_root is not None else [None]):
+            name = f"{split}_identical.parquet" if split else "identical.parquet"
+            masks.append(
+                pl.read_parquet(args.identical_root / name).to_series().to_numpy()
+            )
+        identical = np.concatenate(masks)
+        if identical.size != n_rows:
+            raise ValueError(
+                f"identical mask has {identical.size:,} rows, distances have {n_rows:,}"
+            )
 
     finite = np.isfinite(x)
     n_nan = int((~finite).sum())
-    x = x[finite]
-    n_valid = int(x.size)
 
-    # The exact-zero pairs.  Verified on the 10% subset to be the same sequence
-    # under two accessions; they pin the min-max minimum and make the spike at 0.
-    zero = x == 0.0
-    n_zero = int(zero.sum())
-    x = x[~zero]
+    if identical is not None:
+        n_identical = int((identical & finite).sum())
+        keep = finite & ~identical
+        # How many of those the naive distance==0 rule would have missed, per arm.
+        n_zero_after = int((x[keep] == 0.0).sum())
+        x = x[keep]
+        n_zero = n_identical
+        log(f"  rows={n_rows:,} nan={n_nan:,} identical_sequence={n_identical:,} "
+            f"(exact-zero survivors after the mask: {n_zero_after:,})")
+        x = x[x > 0.0] if n_zero_after else x
+    else:
+        x = x[finite]
+        zero = x == 0.0
+        n_zero = int(zero.sum())
+        n_zero_after = 0
+        x = x[~zero]
+        log(f"  rows={n_rows:,} nan={n_nan:,} zero={n_zero:,}")
+    n_valid = n_rows - n_nan
     n_used = int(x.size)
-    log(f"  rows={n_rows:,} nan={n_nan:,} zero={n_zero:,} used={n_used:,}")
+    log(f"  used={n_used:,}")
 
     q = np.percentile(x, QUANTILES)
     qd = {f"p{p:g}": float(v) for p, v in zip(QUANTILES, q)}
@@ -188,11 +250,15 @@ def main() -> int:
 
     summary = {
         "arm": args.arm,
-        "splits": list(args.splits),
+        "source": str(args.dist_root or args.pairs_parquet),
+        "splits": list(args.splits) if args.dist_root is not None else [],
         "n_rows": n_rows,
         "n_per_split": per_split,
         "n_nan": n_nan,
+        "n_valid": n_valid,
         "n_zero_identical": n_zero,
+        "n_zero_after_mask": n_zero_after,
+        "identical_excluded_by": "sequence" if args.identical_root else "distance==0",
         "n_used": n_used,
         "min": x_min,
         "max": x_max,

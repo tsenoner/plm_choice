@@ -43,6 +43,7 @@ cd "$HOME/plm_choice_ridge"
 export PYTHONPATH="$HOME/plm_choice_ridge/src"
 
 srun "$PY" scripts/ridge_full_reduce.py \
+    --identical-root "$DSS/ridge_identical" \
     --dist-root "$IN" \
     --out-dir "$OUT" \
     --arm "$ARM"
