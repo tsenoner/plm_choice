@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""M-8: reduce the full-cohort pair distances to something a laptop can draw.
+
+``ridge_distances_full.sbatch`` wrote one parquet per arm per split -- 9.7 GB for
+train alone, 75,849,972 pairs over 15 arms.  Pulling that home to make a figure is
+absurd, and sampling it to make a figure throws away the reason we computed all of
+it.  This script streams each arm on the cluster and writes two small things:
+
+  * a **fine histogram on the raw distance scale** (50,000 bins).  Every
+    normalisation we are choosing between -- min-max, division by a percentile,
+    division by the median -- is a positive affine map, so the same histogram
+    re-plots under any of them by rescaling the bin edges.  The density the figure
+    draws therefore comes from *all* 75.8M pairs, not from a subsample.
+  * **exact quantiles**, computed on the values rather than read off a KDE.  The
+    shipped plotter estimates q25/q75 by ``np.searchsorted`` on the cumulative sum
+    of a 500-point KDE grid (``plot_ridge_distributions``), which is accurate to
+    about one grid cell.  Quoting a quartile in a manuscript off a smoothed curve
+    when the exact value costs one ``np.percentile`` is indefensible.
+
+It also computes Hartigan's dip on the full cohort.  The dip is a vertical
+sup-distance between the ECDF and the closest unimodal CDF, so it is invariant
+under any increasing affine map of x -- the same number for raw, min-max and
+percentile-scaled data.  That invariance is checked here rather than assumed.
+
+Identical-sequence pairs (distance exactly 0 -- the same protein under two
+accessions) are reported separately and excluded from every statistic, because
+they are a property of Swiss-Prot's redundancy, not of any embedding space.
+
+    python scripts/ridge_full_reduce.py \
+        --dist-root $DSS/ridge_full --out-dir $DSS/ridge_full_summary --arm esm1b
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import resource
+import time
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+
+SPLITS = ("train", "val", "test")
+
+#: Quantile grid.  Dense in both tails: the tails are what min-max normalisation
+#: anchors on, so the caption has to be able to say how far out the anchor sits.
+QUANTILES = (
+    0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 25.0, 30.0,
+    40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 90.0, 95.0, 97.5, 99.0, 99.5, 99.9,
+    99.99, 100.0,
+)
+
+N_BINS = 50_000
+SUBSAMPLE = 500_000
+SEED = 42
+
+
+def log(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def rss_gb() -> float:
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
+
+
+def load_arm(dist_root: Path, arm: str, splits: tuple[str, ...]) -> tuple[np.ndarray, dict]:
+    """Concatenate one arm's distance column across splits, in split order."""
+    col = f"dist_{arm}"
+    parts: list[np.ndarray] = []
+    per_split: dict[str, int] = {}
+    for split in splits:
+        path = dist_root / split / f"dist_{arm}.parquet"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        t0 = time.time()
+        v = pl.read_parquet(path, columns=[col]).to_series().to_numpy()
+        per_split[split] = int(v.size)
+        parts.append(v.astype(np.float64, copy=False))
+        log(f"  {split}: {v.size:,} rows in {time.time() - t0:.1f}s rss={rss_gb():.2f} GiB")
+    return np.concatenate(parts), per_split
+
+
+def dip_of(x: np.ndarray) -> tuple[float, float]:
+    from diptest import diptest as _diptest
+
+    d, p = _diptest(x)
+    return float(d), float(p)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--dist-root", required=True, type=Path)
+    ap.add_argument("--out-dir", required=True, type=Path)
+    ap.add_argument("--arm", required=True)
+    ap.add_argument("--splits", nargs="+", default=list(SPLITS))
+    ap.add_argument("--bins", type=int, default=N_BINS)
+    ap.add_argument("--subsample", type=int, default=SUBSAMPLE)
+    ap.add_argument(
+        "--dip-max-n",
+        type=int,
+        default=200_000_000,
+        help="Skip the full-cohort dip above this n (the C routine sorts a float64 copy).",
+    )
+    args = ap.parse_args()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    t_start = time.time()
+    log(f"arm={args.arm} splits={args.splits}")
+    x, per_split = load_arm(args.dist_root, args.arm, tuple(args.splits))
+    n_rows = int(x.size)
+
+    finite = np.isfinite(x)
+    n_nan = int((~finite).sum())
+    x = x[finite]
+    n_valid = int(x.size)
+
+    # The exact-zero pairs.  Verified on the 10% subset to be the same sequence
+    # under two accessions; they pin the min-max minimum and make the spike at 0.
+    zero = x == 0.0
+    n_zero = int(zero.sum())
+    x = x[~zero]
+    n_used = int(x.size)
+    log(f"  rows={n_rows:,} nan={n_nan:,} zero={n_zero:,} used={n_used:,}")
+
+    q = np.percentile(x, QUANTILES)
+    qd = {f"p{p:g}": float(v) for p, v in zip(QUANTILES, q)}
+    q25, med, q75 = qd["p25"], qd["p50"], qd["p75"]
+    iqr = q75 - q25
+    qcd = iqr / (q75 + q25) if (q75 + q25) > 0 else float("nan")
+
+    x_min, x_max = float(x.min()), float(x.max())
+    mean, std = float(x.mean()), float(x.std())
+    log(f"  q25={q25:.6g} med={med:.6g} q75={q75:.6g} IQR={iqr:.6g} QCD={qcd:.4f}")
+    log(f"  min={x_min:.6g} max={x_max:.6g} p99={qd['p99']:.6g} max/p99={x_max / qd['p99']:.2f}")
+
+    # Fine histogram on the RAW scale.  Re-plottable under any affine rescaling.
+    hist, edges = np.histogram(x, bins=args.bins, range=(0.0, x_max))
+    # A second histogram in log10, for the log-axis candidate.  x is already > 0.
+    lo = np.log10(max(x_min, np.nextafter(0.0, 1.0)))
+    hist_log, edges_log = np.histogram(np.log10(x), bins=args.bins // 10,
+                                       range=(lo, np.log10(x_max)))
+
+    rng = np.random.default_rng(SEED)
+    sub = x if n_used <= args.subsample else rng.choice(x, args.subsample, replace=False)
+
+    # --- Hartigan's dip ------------------------------------------------------
+    dip: dict[str, object] = {}
+    if n_used <= args.dip_max_n:
+        t0 = time.time()
+        d_full, p_full = dip_of(x)
+        dip["full"] = {"n": n_used, "dip": d_full, "p_value": p_full,
+                       "seconds": round(time.time() - t0, 1)}
+        log(f"  dip(full n={n_used:,}) = {d_full:.6f} p={p_full:.4g} "
+            f"({time.time() - t0:.1f}s)")
+        # Affine invariance check: min-max and /p99 must give the same dip.
+        d_mm, _ = dip_of((x - x_min) / (x_max - x_min))
+        d_p99, _ = dip_of(x / qd["p99"])
+        dip["affine_invariance_check"] = {
+            "dip_raw": d_full, "dip_minmax": d_mm, "dip_over_p99": d_p99,
+            "max_abs_diff": max(abs(d_full - d_mm), abs(d_full - d_p99)),
+        }
+    else:
+        dip["full"] = None
+
+    # Replicates at fixed n, because the dip statistic shrinks like n^-1/2 for a
+    # unimodal sample: a dip computed on 75.8M pairs is not comparable with the
+    # published one computed on ~6M, and neither is comparable with diptest's
+    # p-value table, which stops at n = 72,000.
+    for n_rep, reps in ((100_000, 25), (1_000_000, 5)):
+        if n_rep > n_used:
+            log(f"  dip(n={n_rep:,}): skipped, only {n_used:,} pairs available")
+            continue
+        ds, ps = [], []
+        for _ in range(reps):
+            s = rng.choice(x, n_rep, replace=False)
+            d, p = dip_of(s)
+            ds.append(d)
+            ps.append(p)
+        dip[f"n{n_rep}"] = {
+            "n": n_rep, "reps": reps,
+            "dip_mean": float(np.mean(ds)), "dip_sd": float(np.std(ds, ddof=1)),
+            "p_mean": float(np.mean(ps)), "p_min": float(np.min(ps)),
+            "p_max": float(np.max(ps)),
+        }
+        log(f"  dip(n={n_rep:,} x{reps}) = {np.mean(ds):.6f} +/- {np.std(ds, ddof=1):.6f} "
+            f"p in [{np.min(ps):.3g}, {np.max(ps):.3g}]")
+
+    summary = {
+        "arm": args.arm,
+        "splits": list(args.splits),
+        "n_rows": n_rows,
+        "n_per_split": per_split,
+        "n_nan": n_nan,
+        "n_zero_identical": n_zero,
+        "n_used": n_used,
+        "min": x_min,
+        "max": x_max,
+        "mean": mean,
+        "std": std,
+        "q25": q25,
+        "median": med,
+        "q75": q75,
+        "iqr": iqr,
+        "qcd": qcd,
+        "quantiles": qd,
+        "hist": {"bins": int(args.bins), "lo": 0.0, "hi": x_max},
+        "hist_log10": {"bins": int(args.bins // 10), "lo": float(lo),
+                       "hi": float(np.log10(x_max))},
+        "subsample_n": int(sub.size),
+        "subsample_seed": SEED,
+        "dip": dip,
+        "seconds": round(time.time() - t_start, 1),
+        "peak_rss_gb": round(rss_gb(), 2),
+    }
+    (args.out_dir / f"{args.arm}.json").write_text(json.dumps(summary, indent=2))
+    np.savez_compressed(
+        args.out_dir / f"{args.arm}.npz",
+        hist=hist.astype(np.int64),
+        edges=edges.astype(np.float64),
+        hist_log10=hist_log.astype(np.int64),
+        edges_log10=edges_log.astype(np.float64),
+        subsample=sub.astype(np.float32),
+        quantile_levels=np.asarray(QUANTILES, dtype=np.float64),
+        quantile_values=q.astype(np.float64),
+    )
+    log(f"wrote {args.out_dir / (args.arm + '.json')} and .npz "
+        f"in {time.time() - t_start:.1f}s peak_rss={rss_gb():.2f} GiB")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
