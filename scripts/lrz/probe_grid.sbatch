@@ -75,10 +75,14 @@ if [ "$IDX" -ge $((N * ${#PARAMS[@]})) ]; then echo "index $IDX out of range"; e
 PARAM=${PARAMS[$((IDX / N))]}
 ARM=${ARMS[$((IDX % N))]}
 
-# Stage the arm to node-local disk when it fits with 2x headroom.
+# Stage the arm to node-local disk. Headroom is 1.15x, not 2x: nothing else is written
+# there, and 2x cost us the esm2_3b cell twice. That arm is 5.6 GB, a dgx-a100 node had
+# 7.4 GB free, so staging was skipped and the run fell back to GPFS -- 0.20 it/s against
+# 23 it/s staged, i.e. ~100x slower, which is what burned two 12 h walltimes. 57 of 59
+# cells staged fine; only that arm on that node did not.
 STAGE_ROOT="${TMPDIR:-/tmp}/probe_${SLURM_JOB_ID}_${IDX}"
 H5="$SRC/embeddings/$ARM.h5"
-NEED_KB=$(( $(du -Lk "$H5" | cut -f1) * 2 ))
+NEED_KB=$(( $(du -Lk "$H5" | cut -f1) * 115 / 100 ))
 FREE_KB=$(df -Pk "${TMPDIR:-/tmp}" | awk 'NR==2 {print $4}')
 if [ "$FREE_KB" -gt "$NEED_KB" ]; then
     DATA="$STAGE_ROOT/$DATASET"
