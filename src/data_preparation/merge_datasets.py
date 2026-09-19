@@ -151,7 +151,7 @@ class ProteinAnalysisPipeline:
         test_mode: bool = False,
         test_size: int = 100_000,
         plots_only: bool = False,
-        force_plots: bool = False,
+        reuse_plots: bool = False,
     ) -> pl.DataFrame | None:
         """Run the complete analysis pipeline.
 
@@ -187,7 +187,7 @@ class ProteinAnalysisPipeline:
             foldcomp_df,
             foldseek_df,
             file_paths["plots_dir"],
-            force=force_plots,
+            reuse=reuse_plots,
         )
         if plots_only:
             print("\n✅ Plots only: stopping before the merge step.")
@@ -564,14 +564,15 @@ class ProteinAnalysisPipeline:
         foldcomp_df: pl.DataFrame,
         foldseek_df: pl.DataFrame,
         plots_dir: Path,
-        force: bool = False,
+        reuse: bool = False,
     ) -> None:
         """Create all distribution visualization plots.
 
-        ``force`` re-draws panels that already exist on disk. Without it a stale PNG
-        from an earlier (e.g. pre-HFSP-correction, pre-deduplication) run survives a
-        rerun of the corrected pipeline silently -- which is exactly how the published
-        supplementary filtering figure came to predate both corrections.
+        ``reuse`` keeps panels that already exist on disk. The default is to redraw:
+        a stale PNG left in place while the pipeline reports success is how a
+        July-2025 filtering figure survived both the 2026 HFSP correction and the
+        deduplication, and was still in the manuscript a year later. Skipping work
+        is opt-in; correctness is not.
         """
         print("\n📊 Creating distribution plots...")
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -651,11 +652,11 @@ class ProteinAnalysisPipeline:
         stats_rows: list[dict[str, object]] = []
         for data, threshold, title, ylim, filename, panel, column, unit in plot_configs:
             plot_path = plots_dir / filename
-            if force or not plot_path.exists():
+            if not (reuse and plot_path.exists()):
                 self._create_violin_plot(data, threshold, title, ylim, plot_path)
                 created_plots += 1
             else:
-                print(f"📊 Skipping existing plot: {filename}")
+                print(f"⚠️  REUSING existing plot, NOT regenerated: {filename}")
             stats_rows.append(
                 self._threshold_stats(data, threshold, title, panel, column, unit)
             )
@@ -668,7 +669,7 @@ class ProteinAnalysisPipeline:
 
         # Create combined subplot figure
         combined_plot_path = plots_dir / "combined_distributions.png"
-        if force or not combined_plot_path.exists():
+        if not (reuse and combined_plot_path.exists()):
             # Extract plot paths from plot_configs
             plot_paths = [plots_dir / cfg[4] for cfg in plot_configs]
             self._create_combined_plot(plot_paths, combined_plot_path)
@@ -1026,12 +1027,12 @@ Examples:
     )
 
     parser.add_argument(
-        "--force-plots",
+        "--reuse-plots",
         action="store_true",
         help=(
-            "Redraw panels even when a PNG of that name already exists. Without it "
-            "a stale figure from an earlier run is kept and the rerun reports "
-            "success having changed nothing."
+            "Keep panels whose PNG already exists instead of redrawing them. Off by "
+            "default: a stale figure kept while the rerun reports success is how the "
+            "published filtering funnel outlived two corrections to its own data."
         ),
     )
 
@@ -1050,7 +1051,7 @@ Examples:
     result_df = pipeline.run(
         test_mode=args.test,
         plots_only=args.plots_only,
-        force_plots=args.force_plots,
+        reuse_plots=args.reuse_plots,
     )
 
     print("✅ Pipeline completed successfully!")
