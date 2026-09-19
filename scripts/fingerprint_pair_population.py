@@ -82,9 +82,22 @@ def main(argv: list[str] | None = None) -> int:
         del mat
         print(f"  random distances done: {arm}", flush=True)
 
-    # B) the filtered pairs the paper uses, same arms, same sample size
+    # B) the filtered pairs the paper uses, same arms, same sample size.
+    # The per-arm parquets are row-aligned (same pair order, one file per arm), so the columns
+    # are read positionally after checking that the keys agree on a sample.
     cols = [f"dist_{arm}" for arm in ARMS]
-    filt = pl.read_parquet(args.filtered, columns=cols)
+    if args.filtered.is_dir():
+        head = {arm: pl.read_parquet(args.filtered / f"dist_{arm}.parquet", n_rows=1000) for arm in ARMS}
+        ref = head[ARMS[0]].select(["query", "target"])
+        for arm in ARMS[1:]:
+            if not head[arm].select(["query", "target"]).equals(ref):
+                raise SystemExit(f"{arm}: pair order differs from {ARMS[0]} -- cannot read positionally")
+        filt = pl.DataFrame({
+            f"dist_{arm}": pl.read_parquet(args.filtered / f"dist_{arm}.parquet", columns=[f"dist_{arm}"])[f"dist_{arm}"]
+            for arm in ARMS
+        })
+    else:
+        filt = pl.read_parquet(args.filtered, columns=cols)
     mask = np.ones(filt.height, dtype=bool)
     for c in cols:
         v = filt[c].to_numpy()
