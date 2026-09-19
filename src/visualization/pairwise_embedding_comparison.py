@@ -1324,14 +1324,17 @@ class EmbeddingComparisonVisualizer:
             ]
             # Bottom row, upper right: under every normalisation the far right of the
             # last row is empty, and the top right collides with the suptitle.
+            # The box must stay inside its own row and must not be opaque: at
+            # (1.0, 1.15) with framealpha 0.85 the white patch painted over the
+            # baseline and the right tail of the row above it.
             axes[-1].legend(
                 handles=handles,
                 loc="upper right",
-                bbox_to_anchor=(1.0, 1.15),
-                frameon=True,
-                facecolor="white",
+                bbox_to_anchor=(1.0, 0.92),
+                frameon=False,
+                facecolor="none",
                 edgecolor="none",
-                framealpha=0.85,
+                framealpha=0.0,
                 fontsize=int(20 * self.font_scale),
                 handlelength=2.6,
                 labelspacing=0.35,
