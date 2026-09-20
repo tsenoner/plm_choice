@@ -95,7 +95,13 @@ for CANDIDATE in "/dev/shm/probe_${SLURM_JOB_ID}_${IDX}" "$STAGE_ROOT"; do
     fi
     rm -rf "$CANDIDATE" 2>/dev/null || true
 done
-[ "$DATA" = "$SRC" ] && echo "NOT staged (both /dev/shm and local disk refused the copy); reading from DSS"
+if [ "$DATA" = "$SRC" ]; then
+    # Neither RAM nor local disk took the copy. Rather than read one HDF5 dataset per
+    # protein per pair off GPFS -- 0.24 it/s, which is how this cell lost two 12 h
+    # walltimes -- load the arm into the process once. Same values, one sequential read.
+    export PLM_PRELOAD_EMBEDDINGS=1
+    echo "NOT staged (no room in /dev/shm or local disk); preloading embeddings into RAM instead"
+fi
 
 export WANDB_MODE=offline WANDB_SILENT=true
 echo "task=$IDX param=$PARAM arm=$ARM dataset=$DATASET host=$(hostname)"
