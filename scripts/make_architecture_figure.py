@@ -20,10 +20,11 @@ next to the 600-dpi PNG the pandoc->docx build embeds.
 
 Regenerate
 ----------
-    cd /Users/tsenoner/Documents/projects/plm_choice
+From the repository root:
+
     PYTHONPATH=src ./.venv/bin/python scripts/make_architecture_figure.py
 
-    # write straight into the manuscript (separate private repo):
+    # write straight into the manuscript (a separate, private repo):
     PYTHONPATH=src ./.venv/bin/python scripts/make_architecture_figure.py \
         --out-dir manuscript/bib_2026/figures --stem som_figS02
 
