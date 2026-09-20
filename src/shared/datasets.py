@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import h5py
@@ -9,27 +10,53 @@ from shared.protein_cohort import cohort_size, load_excluded_proteins, restrict_
 
 
 class H5PyDataset(Dataset):
+    """Pairs of protein embeddings and one target value.
+
+    Reading is either lazy (one HDF5 lookup per protein per pair, the original behaviour)
+    or preloaded once into a matrix. Preloading is what makes a large arm trainable on a
+    shared filesystem: the loader touches each embedding once per pair, so a 5.6 GB arm on
+    GPFS ran at 0.24 iterations/s against 23 on node-local disk -- a 12 h walltime that
+    produced two epochs. Preloading turns that into one sequential read plus array indexing,
+    and removes the dependency on a node happening to have spare local disk.
+
+    It changes no number: the same float32 values are returned either way, which
+    ``tests/test_datasets_preload.py`` pins on a fixture.
+
+    Enable with ``preload=True`` or ``PLM_PRELOAD_EMBEDDINGS=1``. Cost is the arm's size in
+    RAM (5.4 GB for the widest, esm2_3b at 2560 dimensions over 526,871 proteins), so it is
+    opt-in rather than default.
+    """
+
     def __init__(
         self,
         data: pl.DataFrame,
         file_path: str,
         param_name: str,
+        preload: bool | None = None,
     ):
         self.param_name = param_name
         self.file_path = file_path
         self.file = None
+        if preload is None:
+            preload = os.environ.get("PLM_PRELOAD_EMBEDDINGS", "") == "1"
+        self._store: dict[str, np.ndarray] | None = None
 
         self.queries = data.select("query").to_series().to_numpy()
         self.targets = data.select("target").to_series().to_numpy()
         self.param_values = (
             data.select(param_name).to_series().to_numpy().astype(np.float32)
         )
+        if preload:
+            needed = set(self.queries.tolist()) | set(self.targets.tolist())
+            with h5py.File(file_path, "r") as hdf:
+                self._store = {pid: hdf[pid][:].flatten().astype(np.float32) for pid in needed}
+            print(f"Preloaded {len(self._store):,} embeddings from {file_path} into memory.")
 
     def __len__(self):
         return len(self.queries)
 
     def __getitem__(self, idx):
-        if self.file is None:
+        if self._store is None and self.file is None:
             # Optimized HDF5 file opening with larger cache
             self.file = h5py.File(
                 self.file_path,
@@ -48,11 +75,10 @@ class H5PyDataset(Dataset):
         return query_emb_np, target_emb_np, param_value
 
     def _get_embedding(self, protein_id: str) -> np.ndarray:
-        """Get embedding"""
-        # Load from HDF5
-        embedding = self.file[protein_id][:].flatten().astype(np.float32)
-
-        return embedding
+        """Get one embedding, from memory when preloaded and from the file otherwise."""
+        if self._store is not None:
+            return self._store[protein_id]
+        return self.file[protein_id][:].flatten().astype(np.float32)
 
     def close(self):
         if self.file is not None:
@@ -144,6 +170,7 @@ def create_single_loader(
     batch_size: int = 128,
     shuffle: bool = False,
     num_workers: int = 4,
+    preload: bool | None = None,
 ) -> DataLoader:
     """Creates an optimized DataLoader for a single parquet dataset."""
     data = _load_and_filter_data(parquet_file, hdf_file, param_name)
@@ -152,6 +179,7 @@ def create_single_loader(
         data,
         hdf_file,
         param_name,
+        preload=preload,
     )
 
     persistent_workers = num_workers > 0
