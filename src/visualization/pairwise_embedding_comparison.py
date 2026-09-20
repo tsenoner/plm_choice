@@ -1582,7 +1582,27 @@ class EmbeddingComparisonVisualizer:
         # be covered by the row below rising into this row's band.  The transform stays
         # the owning row's data transform, so the tick still stands exactly on that
         # row's baseline at exactly that row's percentile.
+        foot = 0.012 * (xlim[1] - xlim[0])
         for ax, p_val, tick_h, p_name, is_top_row in tail_marks_to_draw:
+            # A short piece of the row's own baseline under the tick.  Without it the
+            # tick reads as floating: where the row below rises past this row's
+            # baseline it hides it, so at exactly the x values where the tick most
+            # needs an anchor there is no visible line for it to stand on (ESM 1b's
+            # 99th percentile sits in the middle of ESM2 8M's body).
+            fig.add_artist(
+                plt.Line2D(
+                    [p_val - foot, p_val + foot],
+                    [0, 0],
+                    transform=ax.transData,
+                    color="0.12",
+                    linewidth=2.2,
+                    zorder=5,
+                    solid_capstyle="butt",
+                    path_effects=[
+                        pe.withStroke(linewidth=4.4, foreground="white", alpha=0.9)
+                    ],
+                )
+            )
             fig.add_artist(
                 plt.Line2D(
                     [p_val, p_val],
@@ -1610,9 +1630,13 @@ class EmbeddingComparisonVisualizer:
                         {"p1": "1st", "p99": "99th"}[p_name],
                         xy=(p_val, tick_h),
                         xycoords=ax.transData,
-                        xytext=(5 * outward, -2),
+                        xytext=(7 * outward, -2),
                         textcoords="offset points",
-                        fontsize=int(15 * self.font_scale),
+                        # Same size as the key.  At 15 pt this label read on screen and
+                        # died in print: the figure is 20 in wide and goes into a
+                        # 6.5 in column, so every point size on it is multiplied by
+                        # 0.325 and 15 pt lands at 4.9 pt on paper.
+                        fontsize=int(20 * self.font_scale),
                         fontweight="bold",
                         color="0.12",
                         ha="right" if outward < 0 else "left",
