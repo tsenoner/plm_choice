@@ -38,10 +38,15 @@ from visualization.pairwise_embedding_comparison import (  # noqa: E402
 #: all-vs-all over 526,871 proteins would be 1.4e11 pairs, not 7.6e7.
 TITLES = {
     "p99": "Pairwise embedding distances, scaled by each model's 99th percentile",
-    "minmax": "Pairwise embedding distances, min-max scaled (the published scaling)",
+    "minmax": "Pairwise embedding distances, min-max scaled per model",
     "median": "Pairwise embedding distances, scaled by each model's median",
     "log10": "Pairwise embedding distances (raw euclidean, log axis)",
 }
+
+
+def _title(norm: str, suffix: str) -> str:
+    base = TITLES.get(norm, "Pairwise embedding distance distributions")
+    return f"{base}\n{suffix}" if suffix else base
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,6 +55,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-dir", required=True, type=Path)
     ap.add_argument("--norm", nargs="+", default=["p99", "minmax", "median", "log10"])
     ap.add_argument("--grid", type=int, default=500)
+    ap.add_argument(
+        "--xlim",
+        nargs=2,
+        type=float,
+        default=None,
+        metavar=("LO", "HI"),
+        help="Override the normalisation's default x-limits. Applies to every --norm "
+        "given in the same call, so pass one --norm at a time when using it.",
+    )
     ap.add_argument(
         "--overlap",
         type=float,
@@ -62,12 +76,34 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-iqr-band", action="store_true")
     ap.add_argument("--quartile-labels", action="store_true")
     ap.add_argument(
+        "--no-tail-marks",
+        action="store_true",
+        help="Drop the 1st/99th-percentile baseline ticks. They are on by default: the "
+        "quartile rules alone say nothing about how far the tail reaches, which is the "
+        "whole question under a min-max axis anchored on the single most distant pair.",
+    )
+    ap.add_argument(
+        "--legend",
+        choices=("figure", "row"),
+        default="figure",
+        help="Where the key goes. 'figure' is the bottom margin, outside every row; "
+        "'row' is the published placement inside the bottom row, which overlaps the "
+        "row above it at 300 dpi.",
+    )
+    ap.add_argument(
         "--published-look",
         action="store_true",
         help="Reproduce the published geometry exactly (overlap 0.25, 1.0 in rows, no "
         "IQR band) so the only difference from Figure 2 is the data.",
     )
     ap.add_argument("--tag", default="", help="Suffix for the output file names.")
+    ap.add_argument(
+        "--title-suffix",
+        default="",
+        help="Appended to the title on a second line. Use it to name the pair "
+        "population -- the same axis over random pairs and over aligner-found pairs "
+        "are two different figures and the title is the only place that says which.",
+    )
     args = ap.parse_args(argv)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         if norm not in RIDGE_NORMALISATIONS:
             raise SystemExit(f"unknown --norm {norm!r}")
         data = viz.compute_distribution_data_from_summaries(
-            normalisation=norm, grid=args.grid
+            normalisation=norm,
+            grid=args.grid,
+            xlim=tuple(args.xlim) if args.xlim else None,
         )
         stem = f"ridge_{norm}{args.tag}"
         save_path = args.out_dir / f"{stem}.png"
@@ -97,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
             iqr_band=iqr_band,
             quartile_labels=args.quartile_labels,
             quartile_legend=not args.published_look,
-            title=TITLES.get(norm, "Pairwise embedding distance distributions"),
+            tail_marks=not (args.published_look or args.no_tail_marks),
+            legend_loc="row" if args.published_look else args.legend,
+            title=_title(norm, args.title_suffix),
         )
         plt.close(fig)
         (args.out_dir / f"{stem}_distribution_data.json").write_text(

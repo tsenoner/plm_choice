@@ -18,6 +18,7 @@ conventions from the project's visualization framework.
 import argparse
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -25,11 +26,13 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
+import matplotlib.text as mtext
 import matplotlib.ticker as mticker
 import numpy as np
 import polars as pl
 import seaborn as sns
 from diptest import diptest
+from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from scipy.stats import wasserstein_distance
@@ -60,6 +63,7 @@ from visualization.plm_constants import (
     PLM_SIZES,
 )
 
+
 def _nice_tick_step(span: float) -> float:
     """A round tick interval giving roughly 5-10 ticks across ``span``."""
     if span <= 0:
@@ -89,29 +93,190 @@ def distance_column_sort_key(col: str) -> tuple:
     )
 
 
-#: Per-row rescalings the ridge figure can draw under.  Each returns (scaled, divisor,
-#: label); the divisor is carried so the caption can state what the axis is divided by.
+#: Per-row rescalings the ridge figure can draw under.  Each is an increasing affine
+#: map ``(x - offset) / divisor``; both numbers are carried through to the statistics
+#: CSV so a caption can state exactly what the axis was divided by.
 #:
 #: Why this is a choice at all: raw medians span four orders of magnitude across arms
 #: (ankh_large 0.071 ... esm3_open 1160.6), so an unscaled shared axis shows fourteen
 #: spikes at zero and one curve.  Something has to rescale each row -- the only question
 #: is what it anchors on.
+#:
+#: ``offset`` names the summary field subtracted before dividing, ``stat`` the one
+#: divided by; ``"max"`` and ``"min"`` are top-level summary fields, anything else is a
+#: key of ``summary["quantiles"]``.
 RIDGE_NORMALISATIONS: Dict[str, Dict[str, object]] = {
-    # The published choice.  Anchors on the single most distant pair out of ~76 million,
-    # so one outlier fixes the scale for the whole row; an arm whose tail reaches further
-    # gets its entire bulk squeezed toward zero, which is how the rebuilt medians fell to
-    # 0.06-0.31 without any embedding changing.
-    "minmax": {"stat": "max", "label": "Min-Max Normalized Distances", "xlim": (0.0, 1.0)},
-    # Anchors on the 99th percentile: 760,000 pairs decide the scale instead of one, and
-    # the bulk keeps its shape.  Values above 1 are the top percent and are drawn.
+    # The published choice: sklearn's MinMaxScaler, (x - min) / (max - min).  Anchors on
+    # the single most distant pair out of ~76 million, so one outlier fixes the scale for
+    # the whole row; an arm whose tail reaches further gets its entire bulk squeezed
+    # toward zero, which is how the rebuilt medians fell to 0.06-0.31 on the alignable
+    # pairs without any embedding changing.  On uniformly random pairs the squeeze is
+    # far milder (medians 0.14-0.59), which is why it is usable as a main-figure axis.
+    "minmax": {
+        "offset": "min",
+        "stat": "max",
+        # What the two ends mean belongs on the axis, not in the title: the title has
+        # to fit the figure's own width (20 in) and a longer one silently widens the
+        # PNG, which then has to be scaled down to the column and takes the whole plot
+        # with it.
+        "label": "Min-max normalized distance "
+        "(0 = that model's closest pair, 1 = its most distant pair)",
+        "xlim": (0.0, 1.0),
+    },
+    # Anchors on the 99th percentile: 50,000 pairs of the 5M decide the scale instead of
+    # one, and the bulk keeps its shape.  Values above 1 are the top percent and are drawn.
     "p99": {"stat": "p99", "label": "Distance / 99th percentile", "xlim": (0.0, 1.2)},
     # Anchors on the row's own median, so every row is centred on 1 and the picture is
-    # purely about spread -- the scale-free view that matches the QCD numbers.
-    "median": {"stat": "p50", "label": "Distance / median", "xlim": (0.0, 2.2)},
+    # purely about spread -- the scale-free view that matches the QCD numbers.  The
+    # limit is 3.0 and not 2.2 because at 2.2 the 99th percentile of the two ESM-C arms
+    # (2.58 and 2.55 medians out) falls off the axis along with 3% of their pairs: an
+    # axis that cannot show its own marked percentile is not a candidate.
+    "median": {
+        "stat": "p50",
+        "label": "Distance / median (1.0 = that model's typical pair)",
+        "xlim": (0.0, 3.0),
+    },
     # No per-row rescaling at all: the raw euclidean distance on a log axis.  Honest about
     # the four orders of magnitude, at the cost of a log axis in a main figure.
     "log10": {"stat": None, "label": "Euclidean distance (log scale)", "xlim": None},
 }
+
+#: Percentiles the ridge rows can mark, in the order they are drawn.  ``q25``/``median``
+#: /``q75`` are rules that run from the baseline up to the curve; ``p1``/``p99`` are
+#: baseline ticks, because at those x the density is ~0 and a baseline-to-curve rule
+#: would be invisible -- which is exactly why the tails were unmarked before.
+RIDGE_TAIL_PERCENTILES = ("p1", "p99")
+
+
+#: Diverging map for the Spearman cells of the combined fingerprint: purple on the
+#: negative arm, cream at zero, OrRd's own reds on the positive arm.
+#:
+#: Why this exists.  The cells used to be drawn ``cmap="OrRd", vmin=0, vmax=1``.  On the
+#: aligner-found pair population every rho was positive so the clipped floor never
+#: showed; on the uniformly random population 12 of the 91 off-diagonal cells are
+#: negative, down to rho = -0.238, and every one of them involves CLEAN -- which is the
+#: result the figure exists to report.  Under ``vmin=0`` all twelve rendered identically
+#: to rho = 0, i.e. the figure silently erased its own finding.
+#:
+#: Why purple and not the usual RdBu_r.  The upper triangle of the same figure is
+#: already ``Blues`` on a different quantity with its own colourbar; a blue negative arm
+#: would make two unrelated scales share a colour.
+CORR_DIVERGING_CMAP = LinearSegmentedColormap.from_list(
+    "corr_diverging",
+    [
+        "#2D004B", "#542788", "#8073AC", "#B2ABD2", "#D8DAEB",  # negative arm
+        "#FFF7EC",                                              # zero
+        "#FDD49E", "#FC8D59", "#EF6548", "#B30000", "#7F0000",  # positive arm
+    ],
+)
+
+
+def symmetric_corr_limit(*matrices: np.ndarray) -> float:
+    """Smallest 0.01 step covering max|rho| over the off-diagonal of every matrix.
+
+    Passing more than one matrix is how the main-text figure and its supplementary
+    counterpart end up on one scale: equal colour then means equal rho in both, and the
+    two are comparable cell for cell.  Scaled to each matrix's own maximum they are not.
+    """
+    worst = 0.0
+    for m in matrices:
+        m = np.asarray(m, dtype=float)
+        iu = np.triu_indices(m.shape[0], 1)
+        worst = max(worst, float(np.nanmax(np.abs(m[iu]))))
+    return math.ceil(worst * 100) / 100
+
+
+def _readable_text_color(cmap, norm, value: float) -> str:
+    """Black or white, whichever the cell's own colour can carry.
+
+    A fixed ``value > 0.5`` threshold assumes a ramp that darkens monotonically -- true
+    for OrRd from 0, false for any diverging map, where both ends are dark and the
+    middle is pale.  Under the diverging scale that rule painted white text on the cream
+    cells around rho = 0.
+    """
+    r, g, b = mcolors.to_rgb(cmap(norm(value)))
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "white" if luminance < 0.55 else "black"
+
+
+def _place_legend_below_axis_label(fig, legend, bottom_ax, pad_in: float = 0.22) -> None:
+    """Drop the ridge key just under the x-axis label, measured rather than guessed.
+
+    The bottom margin's usable height is not a constant: it depends on the tick font,
+    the label font, ``labelpad`` and the number of rows (which sets the figure height
+    that the margin is a *fraction* of).  A hardcoded ``bbox_to_anchor`` y therefore
+    works for one geometry and collides for the next.  Measuring the label after a draw
+    and anchoring ``pad_in`` inches below it works for all of them.  ``bbox_inches=
+    "tight"`` then grows the saved canvas if the key ends up below the figure edge,
+    so a negative anchor is not a problem.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    label = bottom_ax.xaxis.get_label()
+    label_bottom_px = label.get_window_extent(renderer).y0
+    y = (label_bottom_px - pad_in * fig.dpi) / fig.get_window_extent().height
+    legend.set_bbox_to_anchor((0.5, y), transform=fig.transFigure)
+
+
+def _assert_legend_clear(fig, legend, axes, dpi: int) -> None:
+    """Fail if the ridge key overlaps any row's axes or the x-axis label.
+
+    Measured in rendered pixels at the *save* dpi, because that is the only geometry
+    that ships: a legend that clears a row on a 100-dpi screen preview can sit on its
+    baseline in the 300-dpi PNG, which is how the published key came to overlap the
+    ProtT5 row.  Raising rather than warning is deliberate -- a warning in a log nobody
+    reads is how the overlap survived a figure refresh.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    scale = dpi / float(fig.dpi)
+    lb = legend.get_window_extent(renderer)
+    collisions = []
+    for idx, ax in enumerate(axes):
+        if not ax.get_visible():
+            continue
+        if lb.overlaps(ax.get_window_extent(renderer)):
+            collisions.append(f"row {idx} axes")
+    xlabel = axes[-1].xaxis.get_label()
+    if xlabel.get_text() and lb.overlaps(xlabel.get_window_extent(renderer)):
+        collisions.append("x-axis label")
+    if collisions:
+        raise RuntimeError(
+            "ridge legend overlaps "
+            + ", ".join(collisions)
+            + f" (legend px at {dpi} dpi: "
+            f"x {lb.x0 * scale:.0f}-{lb.x1 * scale:.0f}, "
+            f"y {lb.y0 * scale:.0f}-{lb.y1 * scale:.0f})"
+        )
+    logger.info(
+        "Legend clear of all %d rows and the axis label; its box at %d dpi is "
+        "x %.0f-%.0f, y %.0f-%.0f px",
+        len(axes),
+        dpi,
+        lb.x0 * scale,
+        lb.x1 * scale,
+        lb.y0 * scale,
+        lb.y1 * scale,
+    )
+
+
+def _ridge_anchor(
+    summary: Dict, field: Optional[str], default: Optional[float] = None
+) -> float:
+    """Resolve one ``RIDGE_NORMALISATIONS`` anchor against a per-arm summary.
+
+    ``"min"``/``"max"`` are top-level summary fields, everything else is a key of
+    ``summary["quantiles"]``.  Resolving by name rather than by a chain of ``if``s is
+    what keeps the offset and the divisor spelled the same way, so a normalisation can
+    be added by naming two fields instead of by editing the rescaling arithmetic.
+    """
+    if field is None:
+        if default is None:
+            raise ValueError("no anchor field and no default")
+        return float(default)
+    if field in ("min", "max"):
+        return float(summary[field])
+    return float(summary["quantiles"][field])
 
 #: The lattice the stored distances sit on: ``ridge_pair_distances.py`` writes
 #: ``np.round(d, decimals=4)``.  Needed when rebinning, see
@@ -226,6 +391,41 @@ class EmbeddingComparisonVisualizer:
             "Loaded %d arm summaries, drawing %d rows in family-then-size order",
             len(summaries),
             len(self.dist_cols),
+        )
+        self._setup_plotting_style()
+        return self
+
+    @classmethod
+    def from_matrices(
+        cls,
+        columns: List[str],
+        output_dir: Union[str, Path],
+        font_scale: float = 1.0,
+    ) -> "EmbeddingComparisonVisualizer":
+        """Build a visualizer that can draw the fingerprint and nothing else.
+
+        The combined Wasserstein/correlation figure needs two 14x14 matrices and the
+        row order; it never touches the pair table.  That table is 11.6 GB of parquet
+        for the alignable cohort and 600 MB for the random-pair sample, so the
+        reduction runs where the data is and only the matrices come home -- this
+        constructor is what lets the drawing happen without them.
+
+        ``self.df`` stays None so anything that does need the pairs fails loudly.
+        """
+        self = cls.__new__(cls)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.sample_size = None
+        self.font_scale = font_scale
+        self.df = None
+        self.dist_cols = sorted(
+            (c if c.startswith("dist_") else f"dist_{c}" for c in columns),
+            key=distance_column_sort_key,
+        )
+        logger.info(
+            "No per-pair data loaded; drawing %d precomputed arms: %s",
+            len(self.dist_cols),
+            ", ".join(c.replace("dist_", "") for c in self.dist_cols),
         )
         self._setup_plotting_style()
         return self
@@ -956,6 +1156,8 @@ class EmbeddingComparisonVisualizer:
         iqr_band: bool = False,
         quartile_labels: bool = False,
         quartile_legend: bool = False,
+        tail_marks: bool = False,
+        legend_loc: str = "row",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Create a ridge plot using pre-computed distribution data.
 
@@ -982,7 +1184,26 @@ class EmbeddingComparisonVisualizer:
             alone are easy to lose against a saturated fill; the band makes the middle
             half of the distribution readable at a glance, which is the one thing the
             figure is supposed to show.
+        ``tail_marks``
+            Adds the 1st and 99th percentile to every row as short ticks standing on
+            the baseline, completing the 1/25/50/75/99 set.  They are ticks and not
+            full-height rules for a mechanical reason: at p1 and p99 the density is
+            ~0, so a rule drawn from the baseline up to the curve -- how q25, the
+            median and q75 are drawn -- would have no length at all.  A tick of fixed
+            height is the only mark that is visible where the curve is not.  Left and
+            right are unambiguous by construction (p1 < q25, p99 > q75), so both ticks
+            share one glyph and one legend entry; the top row is additionally
+            annotated "1st" and "99th" so no reader has to infer it.
+        ``legend_loc``
+            ``"row"`` keeps the key inside the bottom row's axes, where it sat before
+            and where, at 300 dpi, it lands on the *second-to-last* row's baseline --
+            the axes overlap, so "inside the last row" is not the same as "in empty
+            space".  ``"figure"`` puts it in the figure's bottom margin under the axis
+            label instead, which is outside every row's axes by construction; the
+            placement is then asserted rather than eyeballed, see ``_assert_no_overlap``.
         """
+        if legend_loc not in ("row", "figure"):
+            raise ValueError(f"legend_loc must be 'row' or 'figure', got {legend_loc!r}")
         if distribution_data is None:
             distribution_data = self.compute_distribution_data(normalize=True)
 
@@ -1028,6 +1249,7 @@ class EmbeddingComparisonVisualizer:
 
         # Extract or estimate percentile values from pre-computed distribution data
         percentile_data = {}
+        tail_data: Dict[str, Dict[str, float]] = {}
         if show_median:
             logger.info(
                 "Extracting/estimating percentiles from precomputed distribution data..."
@@ -1048,6 +1270,13 @@ class EmbeddingComparisonVisualizer:
                             "median": float(dist_data["median"]),
                             "q75": float(dist_data["q75"]),
                         }
+                        # The tails come from the same exact-quantile source or not at
+                        # all: estimating a 99th percentile off a 500-cell smoothed
+                        # curve would put the tick wherever the bandwidth put it.
+                        if all(k in dist_data for k in RIDGE_TAIL_PERCENTILES):
+                            tail_data[plm_name] = {
+                                k: float(dist_data[k]) for k in RIDGE_TAIL_PERCENTILES
+                            }
                         continue
 
                     # First try to get precomputed median
@@ -1116,6 +1345,7 @@ class EmbeddingComparisonVisualizer:
         gs = fig.add_gridspec(len(plm_names), 1, hspace=-abs(overlap))
 
         axes = []
+        tail_marks_to_draw: List[Tuple] = []
         for i, plm_name in enumerate(plm_names):
             # Create subplot
             ax = fig.add_subplot(gs[i])
@@ -1250,6 +1480,38 @@ class EmbeddingComparisonVisualizer:
                                 ],
                             )
 
+            # --- 1st and 99th percentile: ticks standing on the baseline -----------
+            # Height is a fraction of the ROW, not of the density, for the reason in
+            # the docstring: the density at p1/p99 is ~0, so a mark scaled by it has no
+            # length.  The row's peak density is what the row's axes autoscales to, so
+            # a fixed fraction of it is a fixed fraction of the row's drawn height --
+            # the ticks come out the same size on every row whatever the density units
+            # of that row happen to be.
+            if tail_marks and plm_name in tail_data:
+                tick_h = 0.20 * float(np.nanmax(density))
+                for p_name in RIDGE_TAIL_PERCENTILES:
+                    p_val = tail_data[plm_name][p_name]
+                    if p_val is None or np.isnan(p_val):
+                        continue
+                    if not (xlim[0] <= p_val <= xlim[1]):
+                        logger.warning(
+                            "%s %s = %.4g falls outside the drawn range %s; tick not "
+                            "drawn",
+                            plm_name,
+                            p_name,
+                            p_val,
+                            xlim,
+                        )
+                        continue
+                    # Queued, not drawn here.  A tick added to this row's axes is
+                    # painted before the next row's axes and therefore *under* the
+                    # next row's fill -- which in the ridgeline rises above this row's
+                    # baseline and swallowed the tick whole wherever the two lined up
+                    # (Ankh Base's 1st percentile disappeared under Ankh Large).  They
+                    # are drawn at figure level after the loop instead, where nothing
+                    # can be painted over them.
+                    tail_marks_to_draw.append((ax, p_val, tick_h, p_name, i == 0))
+
             # Add PLM label on the left (remove \n for ridge plot)
             plm_display_name = EMBEDDING_DISPLAY_NAMES.get(plm_name, plm_name).replace(
                 "\n", " "
@@ -1315,30 +1577,107 @@ class EmbeddingComparisonVisualizer:
         # A key for the three lines.  The published figure drew q25/median/q75 with no
         # legend at all, so a reader had no way to know what the dotted lines were --
         # they are the figure's only quantitative content and they were unlabelled.
+        # --- tail ticks, drawn above every row ---------------------------------
+        # Figure-level artists are painted after all axes, so a tick added here cannot
+        # be covered by the row below rising into this row's band.  The transform stays
+        # the owning row's data transform, so the tick still stands exactly on that
+        # row's baseline at exactly that row's percentile.
+        for ax, p_val, tick_h, p_name, is_top_row in tail_marks_to_draw:
+            fig.add_artist(
+                plt.Line2D(
+                    [p_val, p_val],
+                    [0, tick_h],
+                    transform=ax.transData,
+                    color="0.12",
+                    linestyle="-",
+                    linewidth=2.2,
+                    zorder=5,
+                    solid_capstyle="butt",
+                    path_effects=[
+                        pe.withStroke(linewidth=4.4, foreground="white", alpha=0.9)
+                    ],
+                )
+            )
+            # Annotate the top row only.  Repeating "1st"/"99th" on fourteen rows would
+            # be the clutter the ticks exist to avoid, and one labelled row is enough
+            # to fix the reading of the other thirteen.  Set outward -- p1's label left
+            # of its tick, p99's right -- so neither is written across the curve whose
+            # tail the tick is marking.
+            if is_top_row:
+                outward = -1 if p_name == "p1" else 1
+                fig.add_artist(
+                    mtext.Annotation(
+                        {"p1": "1st", "p99": "99th"}[p_name],
+                        xy=(p_val, tick_h),
+                        xycoords=ax.transData,
+                        xytext=(5 * outward, -2),
+                        textcoords="offset points",
+                        fontsize=int(15 * self.font_scale),
+                        fontweight="bold",
+                        color="0.12",
+                        ha="right" if outward < 0 else "left",
+                        va="top",
+                        zorder=5,
+                        annotation_clip=False,
+                        path_effects=[pe.withStroke(linewidth=3, foreground="white")],
+                    )
+                )
+
+        legend = None
         if quartile_legend and show_median and axes:
             handles = [
+                plt.Line2D([], [], color="black", linestyle="-", linewidth=3.4,
+                           label="median (50th)"),
                 plt.Line2D([], [], color="0.12", linestyle=(0, (1.6, 1.4)),
                            linewidth=2.6, label="25th / 75th percentile"),
-                plt.Line2D([], [], color="black", linestyle="-", linewidth=3.4,
-                           label="median"),
             ]
-            # Bottom row, upper right: under every normalisation the far right of the
-            # last row is empty, and the top right collides with the suptitle.
-            # The box must stay inside its own row and must not be opaque: at
-            # (1.0, 1.15) with framealpha 0.85 the white patch painted over the
-            # baseline and the right tail of the row above it.
-            axes[-1].legend(
-                handles=handles,
-                loc="upper right",
-                bbox_to_anchor=(1.0, 0.92),
-                frameon=False,
-                facecolor="none",
-                edgecolor="none",
-                framealpha=0.0,
-                fontsize=int(20 * self.font_scale),
-                handlelength=2.6,
-                labelspacing=0.35,
-            )
+            if tail_marks and tail_data:
+                # Drawn as a tick, not as a line segment: a short solid rule in the key
+                # would read as a thinner median, which is the one confusion the key
+                # exists to prevent.
+                handles.append(
+                    plt.Line2D([], [], color="0.12", linestyle="none", marker="|",
+                               markersize=18, markeredgewidth=2.2,
+                               label="1st / 99th percentile (baseline tick)")
+                )
+            if legend_loc == "figure":
+                # The figure's own bottom margin, under the axis label.  This is the
+                # only placement that is outside every row's axes *by construction*:
+                # the rows are laid out with a negative hspace, so any anchor
+                # expressed in one row's axes coordinates can still land on top of a
+                # neighbouring row -- which is exactly what "inside the last row,
+                # upper right" did to the ProtT5 baseline.  Horizontal (one column
+                # per entry) keeps the margin's height free for the axis label.
+                legend = fig.legend(
+                    handles=handles,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 0.0),  # refined below, once measurable
+                    ncol=len(handles),
+                    frameon=False,
+                    facecolor="none",
+                    edgecolor="none",
+                    framealpha=0.0,
+                    fontsize=int(20 * self.font_scale),
+                    handlelength=2.6,
+                    columnspacing=3.0,
+                    borderaxespad=0.0,
+                )
+            else:
+                # The published placement, kept for reproducing the old figure: bottom
+                # row, upper right, transparent so it does not paint over the baseline
+                # of the row above it.  It still *sits* on that row; see legend_loc.
+                legend = axes[-1].legend(
+                    handles=handles,
+                    loc="upper right",
+                    bbox_to_anchor=(1.0, 0.92),
+                    frameon=False,
+                    facecolor="none",
+                    edgecolor="none",
+                    framealpha=0.0,
+                    fontsize=int(20 * self.font_scale),
+                    handlelength=2.6,
+                    labelspacing=0.35,
+                )
 
         # Add y-axis label on the left side (figure-level)
         fig.text(
@@ -1358,6 +1697,14 @@ class EmbeddingComparisonVisualizer:
             fontweight="bold",
             y=0.92,
         )
+
+        # Check the key really is clear of the plotting area, at the dpi the file is
+        # written at.  "It looked fine" is how a legend ends up on a baseline: the old
+        # placement was chosen from a screen-resolution preview and overlapped ProtT5
+        # in the 300-dpi PNG.
+        if legend is not None and legend_loc == "figure":
+            _place_legend_below_axis_label(fig, legend, axes[-1])
+            _assert_legend_clear(fig, legend, axes, dpi=DEFAULT_STYLE["dpi"])
 
         if save_path:
             fig.savefig(save_path, bbox_inches="tight", dpi=DEFAULT_STYLE["dpi"])
@@ -1397,8 +1744,13 @@ class EmbeddingComparisonVisualizer:
                     for key in (
                         "n_used",
                         "n_zero_identical",
+                        "p1",
+                        "p99",
+                        "offset",
                         "divisor",
                         "qcd",
+                        "raw_min",
+                        "raw_p1",
                         "raw_q25",
                         "raw_median",
                         "raw_q75",
@@ -1479,14 +1831,19 @@ class EmbeddingComparisonVisualizer:
                 if normalisation == "log10":
                     counts = npz["hist_log10"].astype(np.float64)
                     edges = npz["edges_log10"]
-                    divisor = 1.0
+                    offset, divisor = 0.0, 1.0
                 else:
                     counts = npz["hist"].astype(np.float64)
                     edges = npz["edges"]
-                    stat = spec["stat"]
-                    divisor = float(
-                        summary["max"] if stat == "max" else summary["quantiles"][stat]
-                    )
+                    # ``offset`` is what makes min-max actually min-max.  This path used
+                    # to divide by ``max`` alone, which is a different map whenever the
+                    # smallest distance is not 0 -- and it never is: the closest of 5M
+                    # random pairs sits at min/max = 0.0014 (esm1b) to 0.0065 (CLEAN).
+                    # The published figure used sklearn's MinMaxScaler, i.e.
+                    # (x - min) / (max - min), so dividing by max was also a silent
+                    # disagreement with the definition the caption claims.
+                    offset = _ridge_anchor(summary, spec.get("offset"), default=0.0)
+                    divisor = _ridge_anchor(summary, spec["stat"]) - offset
             centres = 0.5 * (edges[:-1] + edges[1:])
 
             # Undo the storage quantisation before re-binning.  The distances were
@@ -1507,7 +1864,7 @@ class EmbeddingComparisonVisualizer:
                     counts = uniform_filter1d(
                         counts, size=quantum_bins, mode="nearest"
                     )
-                centres = centres / divisor
+                centres = (centres - offset) / divisor
 
             n_used = float(summary["n_used"])
             binned, _ = np.histogram(centres, bins=x_edges, weights=counts)
@@ -1522,14 +1879,16 @@ class EmbeddingComparisonVisualizer:
             sigma_cells = max((n_used ** (-1 / 5)) * np.sqrt(var) / dx, 0.8)
             density = gaussian_filter1d(density, sigma_cells, mode="nearest")
 
-            # ``divisor`` is bound as a default rather than captured: the closure is
-            # rebuilt per arm inside this loop, and a late-binding capture would silently
-            # rescale every row by the last arm's divisor if this ever stopped being
-            # called in the same iteration.
-            def _scale(value: float, divisor: float = divisor) -> float:
+            # ``offset``/``divisor`` are bound as defaults rather than captured: the
+            # closure is rebuilt per arm inside this loop, and a late-binding capture
+            # would silently rescale every row by the last arm's divisor if this ever
+            # stopped being called in the same iteration.
+            def _scale(
+                value: float, offset: float = offset, divisor: float = divisor
+            ) -> float:
                 if normalisation == "log10":
                     return float(np.log10(value)) if value > 0 else float("nan")
-                return float(value) / divisor
+                return (float(value) - offset) / divisor
 
             q = summary["quantiles"]
             tail = float(counts[centres > xlim[1]].sum() / total)
@@ -1544,15 +1903,24 @@ class EmbeddingComparisonVisualizer:
                 "median": _scale(summary["median"]),
                 "q25": _scale(summary["q25"]),
                 "q75": _scale(summary["q75"]),
+                # The tails, on the drawn axis.  p99 is here because the axis this
+                # figure used to be drawn on was built on it, so a reader has to be
+                # able to see where it lands under any other axis; p1 is its mirror,
+                # and the two together say how wide the drawn middle really is.
+                "p1": _scale(q["p1"]),
+                "p99": _scale(q["p99"]),
+                "offset": offset,
                 "divisor": divisor,
                 "n_used": int(summary["n_used"]),
                 "n_zero_identical": int(summary["n_zero_identical"]),
                 "qcd": float(summary["qcd"]),
                 "frac_beyond_xlim": tail,
+                "raw_p1": float(q["p1"]),
                 "raw_q25": float(summary["q25"]),
                 "raw_median": float(summary["median"]),
                 "raw_q75": float(summary["q75"]),
                 "raw_p99": float(q["p99"]),
+                "raw_min": float(summary["min"]),
                 "raw_max": float(summary["max"]),
                 "bandwidth_cells": float(sigma_cells),
             }
@@ -2452,9 +2820,25 @@ class EmbeddingComparisonVisualizer:
         correlation_data: Optional[Dict] = None,
         gridsize: int = 50,
         save_path: Optional[Path] = None,
+        corr_vlim: Optional[float] = None,
+        wass_vmax: Optional[float] = None,
     ) -> Tuple[plt.Figure, np.ndarray]:
         """Create a combined plot with Wasserstein distance (upper triangle),
-        model names (diagonal), and correlation values (lower triangle)."""
+        model names (diagonal), and correlation values (lower triangle).
+
+        ``corr_vlim``
+            Half-width of the *symmetric* correlation scale: the lower triangle and its
+            colourbar run from ``-corr_vlim`` to ``+corr_vlim`` through
+            ``CORR_DIVERGING_CMAP``, so equal colour distance means equal difference in
+            rho on both sides of zero.  Default: ``symmetric_corr_limit`` of this
+            matrix.  Pass an explicit value to put two figures on one scale.
+        ``wass_vmax``
+            Top of the Wasserstein scale.  Default: this matrix's own maximum, which is
+            what the figure used to hardcode in three separate places (the cell vmax,
+            the white/black text threshold and the colourbar).  Pass an explicit value
+            to share the scale with another figure -- without it two figures scale their
+            blues to their own maxima and identical shades mean different distances.
+        """
 
         # Data should be provided by the caller (from viz_map)
         if wasserstein_data is None or correlation_data is None:
@@ -2468,6 +2852,30 @@ class EmbeddingComparisonVisualizer:
         correlations = np.array(correlation_data["correlations"])
         wasserstein_distances = np.array(wasserstein_data["distances"])
         n = len(dist_cols)
+
+        # One scale per quantity, resolved once.  Both used to be recomputed inline at
+        # each use site, which is how the cells and their colourbar could disagree.
+        if corr_vlim is None:
+            corr_vlim = symmetric_corr_limit(correlations)
+        if wass_vmax is None:
+            wass_vmax = float(np.nanmax(wasserstein_distances))
+        corr_norm = plt.Normalize(vmin=-corr_vlim, vmax=corr_vlim)
+        n_negative = int((correlations[np.triu_indices(n, 1)] < 0).sum())
+        logger.info(
+            "Correlation scale: symmetric +/-%.2f over rho in [%+.3f, %+.3f], "
+            "%d of %d off-diagonal cells negative. Wasserstein top: %.4f",
+            corr_vlim,
+            float(np.nanmin(correlations[np.triu_indices(n, 1)])),
+            float(np.nanmax(correlations[np.triu_indices(n, 1)])),
+            n_negative,
+            n * (n - 1) // 2,
+            wass_vmax,
+        )
+        if corr_vlim < abs(float(np.nanmin(correlations[np.triu_indices(n, 1)]))):
+            raise ValueError(
+                f"corr_vlim={corr_vlim} clips the most negative correlation "
+                f"{float(np.nanmin(correlations[np.triu_indices(n, 1)])):+.3f}"
+            )
 
         # Calculate figure size to ensure square cells
         # Base size per cell to ensure readability
@@ -2558,14 +2966,12 @@ class EmbeddingComparisonVisualizer:
                                 [[wasserstein_val]],
                                 cmap="Blues",
                                 vmin=0,
-                                vmax=np.nanmax(wasserstein_distances),
+                                vmax=wass_vmax,
                                 aspect="auto",
                                 extent=[0, 1, 0, 1],
                             )
                             # Determine text color based on background
-                            normalized_val = wasserstein_val / np.nanmax(
-                                wasserstein_distances
-                            )
+                            normalized_val = wasserstein_val / wass_vmax
                             text_color = "white" if normalized_val > 0.5 else "black"
                             # Display value multiplied by 100 (no "0." prefix, no decimal)
                             ax.text(
@@ -2598,13 +3004,15 @@ class EmbeddingComparisonVisualizer:
                             # Create a heatmap cell with proper extent
                             im = ax.imshow(
                                 [[correlation_val]],
-                                cmap="OrRd",
-                                vmin=0,
-                                vmax=1,
+                                cmap=CORR_DIVERGING_CMAP,
+                                vmin=-corr_vlim,
+                                vmax=corr_vlim,
                                 aspect="auto",
                                 extent=[0, 1, 0, 1],
                             )
-                            text_color = "white" if correlation_val > 0.5 else "black"
+                            text_color = _readable_text_color(
+                                CORR_DIVERGING_CMAP, corr_norm, correlation_val
+                            )
                             # Display value multiplied by 100 (no "0." prefix, no decimal)
                             ax.text(
                                 0.5,
@@ -2673,7 +3081,7 @@ class EmbeddingComparisonVisualizer:
         cbar_wass_ax = fig.add_subplot(gs_right[0])
         im_wass = plt.cm.ScalarMappable(
             cmap="Blues",
-            norm=plt.Normalize(vmin=0, vmax=np.nanmax(wasserstein_distances) * 100),
+            norm=plt.Normalize(vmin=0, vmax=wass_vmax * 100),
         )
         cbar_wass = plt.colorbar(im_wass, cax=cbar_wass_ax, orientation="vertical")
         cbar_wass.ax.tick_params(labelsize=32 * self.font_scale)
@@ -2684,7 +3092,8 @@ class EmbeddingComparisonVisualizer:
         # Add colorbar for correlations (bottom half)
         cbar_corr_ax = fig.add_subplot(gs_right[1])
         im_corr = plt.cm.ScalarMappable(
-            cmap="OrRd", norm=plt.Normalize(vmin=0, vmax=100)
+            cmap=CORR_DIVERGING_CMAP,
+            norm=plt.Normalize(vmin=-corr_vlim * 100, vmax=corr_vlim * 100),
         )
         cbar_corr = plt.colorbar(im_corr, cax=cbar_corr_ax, orientation="vertical")
         cbar_corr.ax.tick_params(labelsize=32 * self.font_scale)
