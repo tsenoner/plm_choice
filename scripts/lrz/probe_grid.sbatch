@@ -75,26 +75,27 @@ if [ "$IDX" -ge $((N * ${#PARAMS[@]})) ]; then echo "index $IDX out of range"; e
 PARAM=${PARAMS[$((IDX / N))]}
 ARM=${ARMS[$((IDX % N))]}
 
-# Stage the arm to node-local disk. Headroom is 1.15x, not 2x: nothing else is written
-# there, and 2x cost us the esm2_3b cell twice. That arm is 5.6 GB, a dgx-a100 node had
-# 7.4 GB free, so staging was skipped and the run fell back to GPFS -- 0.20 it/s against
-# 23 it/s staged, i.e. ~100x slower, which is what burned two 12 h walltimes. 57 of 59
-# cells staged fine; only that arm on that node did not.
+# Stage the arm off GPFS. The loader reads one HDF5 dataset per protein per pair, and that
+# metadata-heavy pattern measured ~100x slower on GPFS than on a staged copy (0.20-0.24 it/s
+# against 23 it/s). Two 12 h walltimes were burned on esm2_3b because a free-space PREDICTION
+# refused to stage it -- the second time by 87 MB. So stop predicting: try RAM, then local
+# disk, and fall back to GPFS only when a copy actually fails.
 STAGE_ROOT="${TMPDIR:-/tmp}/probe_${SLURM_JOB_ID}_${IDX}"
 H5="$SRC/embeddings/$ARM.h5"
-NEED_KB=$(( $(du -Lk "$H5" | cut -f1) * 115 / 100 ))
-FREE_KB=$(df -Pk "${TMPDIR:-/tmp}" | awk 'NR==2 {print $4}')
-if [ "$FREE_KB" -gt "$NEED_KB" ]; then
-    DATA="$STAGE_ROOT/$DATASET"
-    mkdir -p "$DATA/embeddings"
-    trap 'rm -rf "$STAGE_ROOT"' EXIT
-    ln -s "$(readlink -f "$SRC/sets")" "$DATA/sets"
-    cp -L "$H5" "$DATA/embeddings/$ARM.h5"
-    echo "staged $ARM.h5 to $DATA (free ${FREE_KB} kB)"
-else
-    DATA="$SRC"
-    echo "NOT staged: ${FREE_KB} kB free < ${NEED_KB} kB needed; reading from DSS"
-fi
+DATA="$SRC"
+for CANDIDATE in "/dev/shm/probe_${SLURM_JOB_ID}_${IDX}" "$STAGE_ROOT"; do
+    TRY="$CANDIDATE/$DATASET"
+    if mkdir -p "$TRY/embeddings" 2>/dev/null && cp -L "$H5" "$TRY/embeddings/$ARM.h5" 2>/dev/null; then
+        ln -sfn "$(readlink -f "$SRC/sets")" "$TRY/sets"
+        DATA="$TRY"
+        STAGE_ROOT="$CANDIDATE"
+        trap 'rm -rf "$STAGE_ROOT"' EXIT
+        echo "staged $ARM.h5 to $DATA"
+        break
+    fi
+    rm -rf "$CANDIDATE" 2>/dev/null || true
+done
+[ "$DATA" = "$SRC" ] && echo "NOT staged (both /dev/shm and local disk refused the copy); reading from DSS"
 
 export WANDB_MODE=offline WANDB_SILENT=true
 echo "task=$IDX param=$PARAM arm=$ARM dataset=$DATASET host=$(hostname)"
