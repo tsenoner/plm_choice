@@ -1625,6 +1625,16 @@ class EmbeddingComparisonVisualizer:
             # tail the tick is marking.
             if is_top_row:
                 outward = -1 if p_name == "p1" else 1
+                # ...unless the tick already sits against the axis edge, where there is
+                # no room outward: the label crosses into the row-label gutter and reads
+                # as part of the model name ("Ankh Base 1st" on the aligner-found twin,
+                # whose top-row p1 is 0.020 against 0.191 in Figure 2).  Flip it inward.
+                lo, hi = ax.get_xlim()
+                margin = 0.05 * (hi - lo)
+                if (p_val - lo) < margin:
+                    outward = 1
+                elif (hi - p_val) < margin:
+                    outward = -1
                 fig.add_artist(
                     mtext.Annotation(
                         {"p1": "1st", "p99": "99th"}[p_name],

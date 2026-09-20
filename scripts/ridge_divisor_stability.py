@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """How much does each candidate ridge divisor move when the pairs are resampled?
 
-The manuscript's case for the /p99 axis rests on a measured number -- resampling 10%
-of the pairs moves the min-max divisor (the single most distant pair) by up to 13.7%
-and the 99th-percentile divisor by at most 0.094%.  That was measured on the 75.5M
-aligner-found pairs.  Figure 2 is now drawn on 5,000,000 uniformly random pairs, a
-different population with different tails, so the number has to be re-measured there
+The manuscript quotes a measured number for how far each candidate divisor moves --
+the published 13.7% (min-max) against 0.094% (99th percentile) was measured on the
+75.5M aligner-found pairs.  Figure 2 is now drawn on 5,000,000 uniformly random pairs,
+a different population with different tails, so the number has to be re-measured there
 before it is quoted for or against either axis.
+
+``minmax`` is the divisor the figure actually applies: ``plot_ridge_distributions``
+min-max scales, i.e. divides by ``max - min``, not by ``max``.  Quoting the stability
+of ``max`` for it was the same conflation that was already fixed once in the summary
+path, so both are measured here and ``minmax`` is the one to cite.
 
 Each divisor is a statistic of the same column, so they are compared on the same
 draws: one resample, three divisors.  Deviation is reported against the full-sample
@@ -25,9 +29,11 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-#: The three anchors the ridge axis can be built on, as percentile levels.  ``None``
-#: means the sample maximum, which is what min-max divides by.
-DIVISORS = {"max": None, "p99.9": 99.9, "p99": 99.0}
+#: The anchors the ridge axis can be built on.  A float is a percentile level; the two
+#: strings are the whole-sample statistics -- ``"span"`` is ``max - min``, the divisor a
+#: min-max axis actually uses, and ``"max"`` is kept beside it because it is what the
+#: published number measured and the two differ by 0.15-0.65% per arm.
+DIVISORS = {"minmax": "span", "max": "max", "p99.9": 99.9, "p99": 99.0}
 
 ARMS = (
     "ankh_base", "ankh_large", "clean", "esm1b", "esm2_8m", "esm2_35m", "esm2_150m",
@@ -36,8 +42,12 @@ ARMS = (
 )
 
 
-def value(x: np.ndarray, level: float | None) -> float:
-    return float(x.max()) if level is None else float(np.percentile(x, level))
+def value(x: np.ndarray, level: float | str) -> float:
+    if level == "span":
+        return float(x.max() - x.min())
+    if level == "max":
+        return float(x.max())
+    return float(np.percentile(x, level))
 
 
 def main(argv: list[str] | None = None) -> int:

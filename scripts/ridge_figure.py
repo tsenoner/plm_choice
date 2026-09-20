@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ import polars as pl  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from visualization.pairwise_embedding_comparison import (  # noqa: E402
+    EMBEDDING_DISPLAY_NAMES,
     RIDGE_NORMALISATIONS,
     EmbeddingComparisonVisualizer,
 )
@@ -44,8 +46,55 @@ TITLES = {
 }
 
 
-def _title(norm: str, suffix: str) -> str:
+def _pairs_phrase(summaries: dict) -> str:
+    """The pair count the rows were actually drawn from, as a printable phrase.
+
+    WHY THIS EXISTS (2026-09-21). The title's pair count used to be free text on the
+    command line, and it drifted: the aligner-found figure shipped reading "75,849,972
+    ... pairs" while every row in it was drawn from ``n_used`` = 75,508,738 (74,567,905
+    for CLEAN and ESM-1b).  75,849,972 is the corrected pair set *before* identical-
+    sequence pairs are removed -- a real number from a different step.  A title that
+    restates the data cannot be allowed to disagree with it, so it is derived here.
+    """
+    by_count: dict[int, list[str]] = {}
+    for arm, s in summaries.items():
+        # Display names carry "\n" so row labels wrap ("ESM\n1b"); in a title that is
+        # a line break in the middle of a sentence.
+        by_count.setdefault(int(s["n_used"]), []).append(
+            EMBEDDING_DISPLAY_NAMES.get(arm, arm).replace("\n", " ").strip()
+        )
+    if len(by_count) == 1:
+        return f"{next(iter(by_count)):,}"
+    # The arms that cover the most pairs set the headline; the rest are named, because
+    # a reader who sees one number must not assume every row carries it.
+    main_count = max(by_count)
+    parts = []
+    for count in sorted(by_count, reverse=True)[1:]:
+        names = sorted(by_count[count])
+        joined = " and ".join(names) if len(names) <= 2 else ", ".join(names[:-1]) + f" and {names[-1]}"
+        parts.append(f"{count:,} for {joined}")
+    return f"{main_count:,} ({'; '.join(parts)})"
+
+
+#: A comma-grouped integer that a "pair"/"pairs" word follows within the same clause is
+#: claiming to be the figure's pair count, and must be one the summaries actually hold.
+#: Numbers that are not pair counts -- "the 526,871-protein cohort" -- are left alone.
+#: This is the guard that would have caught the 75,849,972.
+_PAIR_COUNT = re.compile(r"\b(\d{1,3}(?:,\d{3})+)\b(?=[^.\n]{0,40}?\bpairs?\b)")
+
+
+def _title(norm: str, suffix: str, summaries: dict) -> str:
     base = TITLES.get(norm, "Pairwise embedding distance distributions")
+    if suffix:
+        suffix = suffix.replace("{pairs}", _pairs_phrase(summaries))
+        allowed = {f"{int(s['n_used']):,}" for s in summaries.values()}
+        bogus = [n for n in _PAIR_COUNT.findall(suffix) if n not in allowed]
+        if bogus:
+            raise SystemExit(
+                f"--title-suffix calls {bogus} a pair count, but no arm's n_used "
+                f"matches (the summaries hold {sorted(allowed)}). Write '{{pairs}}' "
+                f"instead of typing the count, or fix the number."
+            )
     return f"{base}\n{suffix}" if suffix else base
 
 
@@ -102,7 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Appended to the title on a second line. Use it to name the pair "
         "population -- the same axis over random pairs and over aligner-found pairs "
-        "are two different figures and the title is the only place that says which.",
+        "are two different figures and the title is the only place that says which. "
+        "Write '{pairs}' where the pair count goes and it is filled from the "
+        "summaries' n_used; a count typed by hand that no arm matches is refused.",
     )
     args = ap.parse_args(argv)
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             quartile_legend=not args.published_look,
             tail_marks=not (args.published_look or args.no_tail_marks),
             legend_loc="row" if args.published_look else args.legend,
-            title=_title(norm, args.title_suffix),
+            title=_title(norm, args.title_suffix, viz.summaries),
         )
         plt.close(fig)
         (args.out_dir / f"{stem}_distribution_data.json").write_text(
