@@ -9,9 +9,12 @@ code concatenates), it never labelled the 128-wide concatenation, and its input
 dimensions ("128 / 1024 / 2560") were an arbitrary three of the eleven native widths
 actually used. A schematic of a network should be derived from the network.
 
-So every dimension and every parameter count printed here is read off a live
+So every layer width and every parameter count printed here is read off a live
 ``FNNPredictor`` at draw time (see ``_facts``). If ``src/training/models.py`` changes,
-this figure changes with it, or it fails loudly.
+this figure changes with it, or it fails loudly. The one number *not* derived that way
+is the input range n = 128…2,560, which comes from the ``NATIVE_DIMS`` literal below:
+the arms' embedding widths are a property of the arms, not of the probe, so the model
+has nothing to say about them.
 
 Tool choice: matplotlib. The repo's whole figure pipeline is matplotlib on the committed
 ``.venv``, so this regenerates with the same interpreter as every other figure and needs
@@ -49,6 +52,11 @@ from training.models import FNNPredictor
 # Native per-protein embedding widths of the fifteen arms (Table S1). The probe is also
 # run on 128-dimensional PCA features, which is why 128 is both the minimum and the PCA
 # setting.
+#
+# NOTE: unlike the layer widths and parameter counts, this tuple is a literal that
+# models.py cannot contradict -- _facts()'s guards check the layer structure, not this.
+# It is checked by hand against the Embedding-dim column of Table S1
+# (90.supplementary.md), whose distinct values are exactly these eleven.
 NATIVE_DIMS = (128, 320, 480, 640, 768, 960, 1024, 1152, 1280, 1536, 2560)
 
 # train.py --hidden_size default; scripts/lrz/probe_grid.sbatch never overrides it.
@@ -164,9 +172,17 @@ def _arrow(ax, x0, y0, x1, y1, color=MUTED, lw=0.9, ls="-", zorder=3):
     )
 
 
-def _op(ax, x0, x1, y, lines, fs=FS_OP, gap=1.6, lh=3.2):
-    """An operation: a horizontal arrow with its label stacked above it."""
+def _op(ax, x0, x1, y, lines, fs=FS_OP, gap=1.6, lh=3.2, backdrop=None):
+    """An operation: a horizontal arrow with its label stacked above it.
+
+    ``backdrop`` fills the label's box with a colour, so a line routed behind the label
+    is interrupted by it rather than drawn through the glyphs.  Pass the colour of
+    whatever the label sits on, not white, or the patch itself becomes visible.
+    """
     _arrow(ax, x0, y, x1, y)
+    bbox = None if backdrop is None else dict(
+        facecolor=backdrop, edgecolor="none", pad=0.6
+    )
     for i, line in enumerate(reversed(lines)):
         ax.text(
             (x0 + x1) / 2,
@@ -176,6 +192,8 @@ def _op(ax, x0, x1, y, lines, fs=FS_OP, gap=1.6, lh=3.2):
             va="bottom",
             fontsize=fs,
             color=INK,
+            bbox=bbox,
+            zorder=6,
         )
 
 
@@ -185,8 +203,18 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     w1, w2, w3 = f["widths"]
     half = proj * UNITS_PER_DIM
 
-    plt.rcParams["font.family"] = ["Arial", "Helvetica", "DejaVu Sans"]
-    plt.rcParams["mathtext.fontset"] = "dejavusans"
+    SANS = ["Arial", "Helvetica", "DejaVu Sans"]
+    plt.rcParams["font.family"] = SANS
+    # One family for prose AND math. The default "dejavusans" mathtext set renders the
+    # math labels in DejaVu while the prose is Arial, and \mathbb has no DejaVu glyph so
+    # it fell back again to STIXGeneral -- three typefaces, two of them 2 mm apart in the
+    # same panel. "custom" points every math alphabet at the same family; \mathbb is not
+    # used, because no sans family has blackboard-bold.
+    plt.rcParams["mathtext.fontset"] = "custom"
+    for _k in ("rm", "it", "bf", "sf", "tt", "cal"):
+        plt.rcParams[f"mathtext.{_k}"] = SANS[0] + (":italic" if _k in ("it", "cal") else "")
+    plt.rcParams["mathtext.bf"] = SANS[0] + ":bold"
+    plt.rcParams["mathtext.default"] = "it"
     # Type 42 (TrueType), not matplotlib's default Type 3: Type 3 text cannot be
     # selected or re-set in Illustrator and several publishers reject it outright.
     plt.rcParams["pdf.fonttype"] = 42
@@ -237,7 +265,8 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
         )
         ax.text(X_PROT + W_PROT / 2, y, label, ha="center", va="center",
                 fontsize=FS_BOX, color=INK, zorder=6)
-        _op(ax, X_PROT + W_PROT, X_INPUT, y, ["frozen pLM", "mean-pooled"])
+        _op(ax, X_PROT + W_PROT, X_INPUT, y, ["frozen pLM", "mean-pooled"],
+            backdrop=FROZEN_BAND)
         _bar(ax, X_INPUT, y, INPUT_BAR_H, fill, edge)
         # a break mark: the bar's height is not to scale, because n varies 20-fold
         for off in (-1.3, 1.3):
@@ -247,10 +276,10 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
             )
 
     ax.text(X_INPUT + BAR_W / 2, LANE_A_Y - INPUT_BAR_H / 2 - 1.8,
-            "$x_A \\in \\mathbb{R}^n$", ha="center", va="top",
+            "$x_A$", ha="center", va="top",
             fontsize=FS_BOX, color=INK, zorder=6)
     ax.text(X_INPUT + BAR_W / 2, LANE_B_Y + INPUT_BAR_H / 2 + 7.2,
-            "$x_B \\in \\mathbb{R}^n$", ha="center", va="bottom",
+            "$x_B$", ha="center", va="bottom",
             fontsize=FS_BOX, color=INK, zorder=6)
     ax.text(X_INPUT + BAR_W / 2, LANE_B_Y + INPUT_BAR_H / 2 + 1.0,
             f"n = {f['n_min']}…{f['n_max']:,}\n(Table S1)",
@@ -288,7 +317,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
             f"concatenate → {concat}", ha="center", va="bottom",
             fontsize=FS_OP, color=INK, zorder=6)
     ax.text(X_CONCAT + W_CONCAT / 2 + 8, TRUNK_Y - half - 2.0,
-            "$[\\,h_A\\,;\\,h_B\\,]$, ordered:\n$f(A,B) \\neq f(B,A)$",
+            "$[\\,h_A\\,;\\,h_B\\,]$, ordered:\n$f(A,B)$ ≠ $f(B,A)$",
             ha="center", va="top", fontsize=FS_NOTE, color=MUTED,
             style="italic", zorder=6)
 
@@ -304,13 +333,21 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     ax.text(X_OUT - 2.0, TRUNK_Y - 5.0,
             "trained separately for\n" + ", ".join(TARGETS),
             ha="center", va="top", fontsize=FS_NOTE, color=MUTED, zorder=6)
-    ax.text(118, 21.5,
-            "every arrow is a fully connected layer; its label gives in → out widths",
+    # Kept to two short lines: the one-line version ran off the right edge of the figure
+    # and through the shared box.  It must not say "every arrow is a fully connected
+    # layer" -- of the ten arrows drawn, seven only route vectors, and the fourth fully
+    # connected layer is a box.
+    ax.text(131, 20.0,
+            "fully connected layers: the shared Linear(n → 64) box\n"
+            "and the three trunk arrows labelled in → out",
             ha="center", va="bottom", fontsize=FS_NOTE, color=MUTED,
-            style="italic", zorder=6)
+            style="italic", linespacing=1.5, zorder=6)
 
     # ---- the training-free Euclidean read-out, off the same frozen embeddings ----
-    rail = X_INPUT - 5.0
+    # 6.5 units left of the bars, not 5.0: at 5.0 the rail clipped the leading "n" of
+    # the "n = 128…2,560" label, whose box starts at ~37.7.  The two lane labels it still
+    # passes behind are given the band's own colour as a backdrop, below.
+    rail = X_INPUT - 6.5
     for y in (LANE_A_Y, LANE_B_Y):
         ax.plot([X_INPUT, rail], [y, y], color=E_EDGE, lw=0.9,
                 ls=(0, (3, 2)), zorder=2)
@@ -325,7 +362,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
         )
     )
     ax.text(X_INPUT + 60, EUCL_Y + 2.0,
-            "Euclidean read-out:   $\\|x_A - x_B\\|_2$",
+            "Euclidean read-out:   ‖$x_A - x_B$‖$_2$",
             ha="center", va="center", fontsize=FS_BOX + 0.4, color=INK, zorder=5)
     ax.text(X_INPUT + 60, EUCL_Y - 3.2,
             "the same frozen embeddings, no trained parameters, symmetric",
