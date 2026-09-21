@@ -5,9 +5,15 @@
 # reads with --hexbin_json, so the figure itself is drawn locally from a few MB of
 # counts rather than from ~30 GB of per-arm distance files.
 #
-#   sbatch scripts/lrz/fingerprint_hexbin.sbatch                       # published min-max axes
-#   P99_LIMIT=1.2 OUT_NAME=fingerprint_hexbin_p99 \
-#       sbatch scripts/lrz/fingerprint_hexbin.sbatch                   # ridge-figure axes
+#     cd ~/plm_choice && mkdir -p logs
+#     sbatch scripts/lrz/fingerprint_hexbin.sbatch                       # published min-max axes
+#     P99_LIMIT=1.2 OUT_NAME=fingerprint_hexbin_p99 \
+#         sbatch scripts/lrz/fingerprint_hexbin.sbatch                   # ridge-figure axes
+#
+# REPO names the checkout to run, for driving this from a branch worktree before
+# the branch is merged:
+#
+#     REPO=$HOME/plm_choice_suppfigs sbatch scripts/lrz/fingerprint_hexbin.sbatch
 #SBATCH -J fp-hexbin
 #SBATCH -p lrz-cpu
 #SBATCH --qos=cpu
@@ -19,10 +25,13 @@
 set -euo pipefail
 unset VIRTUAL_ENV
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
-cd "$HOME/plm_choice_suppfigs"
+REPO="${REPO:-$HOME/plm_choice}"
+PY="$HOME/plm_choice/.venv/bin/python"   # a worktree has no .venv of its own
+[ -d "$REPO/src" ] || { echo "repo missing: $REPO"; exit 2; }
+cd "$REPO"
 mkdir -p logs
-export PYTHONPATH="$HOME/plm_choice_suppfigs/src"
-srun "$HOME/plm_choice/.venv/bin/python" scripts/fingerprint_hexbin_reduce.py \
+export PYTHONPATH="$REPO/src"
+srun "$PY" scripts/fingerprint_hexbin_reduce.py \
   --dist-dir "$DSS/ridge_full" \
   --identical-dir "$DSS/ridge_identical" \
   --splits train val test \

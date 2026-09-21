@@ -2,14 +2,21 @@
 # Redraw the supplementary pair-filtering figure from the corrected pipeline.
 #
 # --plots-only stops before the merge, so the canonical merged pair table is read
-# from but never rewritten; --force-plots is what makes the rerun actually replace
-# the panels instead of finding the old PNGs and skipping them.
+# from but never rewritten. Redrawing every panel is the DEFAULT: the opposite
+# flag, --reuse-plots, keeps whatever PNGs are already in the output directory,
+# which is how the published funnel outlived two corrections to its own data.
 #
 # This runs on the cluster because the two inputs are the raw all-vs-all search
 # tables (102.5M MMseqs2 rows, 276.9M Foldseek rows) and the deduplication sorts
 # them whole.
 #
-#   sbatch scripts/lrz/filtering_figure.sbatch
+#     cd ~/plm_choice && mkdir -p logs
+#     sbatch scripts/lrz/filtering_figure.sbatch
+#
+# REPO names the checkout to run, for driving this from a branch worktree before
+# the branch is merged:
+#
+#     REPO=$HOME/plm_choice_suppfigs sbatch scripts/lrz/filtering_figure.sbatch
 #SBATCH -J supp-filtering
 #SBATCH -p lrz-cpu
 #SBATCH --qos=cpu
@@ -21,12 +28,15 @@
 set -euo pipefail
 unset VIRTUAL_ENV
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
-cd "$HOME/plm_choice_suppfigs"
+REPO="${REPO:-$HOME/plm_choice}"
+PY="$HOME/plm_choice/.venv/bin/python"   # a worktree has no .venv of its own
+[ -d "$REPO/src" ] || { echo "repo missing: $REPO"; exit 2; }
+cd "$REPO"
 mkdir -p logs
-export PYTHONPATH="$HOME/plm_choice_suppfigs/src"
+export PYTHONPATH="$REPO/src"
 export MPLBACKEND=Agg
-srun "$HOME/plm_choice/.venv/bin/python" src/data_preparation/merge_datasets.py \
+srun "$PY" src/data_preparation/merge_datasets.py \
   --dataset sprot_pre2024 \
   --data-dir "$DSS/plm_choice_data/data" \
   --output-dir "$DSS/supp_figures/filtering" \
-  --plots-only --force-plots
+  --plots-only

@@ -78,7 +78,7 @@ class EmbeddingComparisonVisualizer:
 
     def __init__(
         self,
-        data_path: Union[str, Path],
+        data_path: Optional[Union[str, Path]],
         output_dir: Union[str, Path],
         sample_size: Optional[int] = None,
         font_scale: float = 1.0,

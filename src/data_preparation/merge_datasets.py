@@ -651,6 +651,7 @@ class ProteinAnalysisPipeline:
         created_plots = 0
         stats_rows: list[dict[str, object]] = []
         plot_paths: list[Path] = []
+        reused: list[str] = []
         for data, threshold, title, ylim, filename, panel, column, unit in plot_configs:
             plot_path = plots_dir / filename
             plot_paths.append(plot_path)
@@ -659,15 +660,26 @@ class ProteinAnalysisPipeline:
                 created_plots += 1
             else:
                 print(f"⚠️  REUSING existing plot, NOT regenerated: {filename}")
+                reused.append(filename)
             stats_rows.append(
                 self._threshold_stats(data, threshold, title, panel, column, unit)
             )
 
         # The numbers the figure annotates, written out so the caption can be checked
-        # against the run that produced the PNG rather than against memory.
+        # against the run that produced the PNG rather than against memory. That only
+        # holds if the PNG came from this run: under --reuse-plots these stats describe
+        # today's data while the panel beside them was drawn from older data, so
+        # writing the CSV anyway would have it certify exactly the stale figure the
+        # redraw-by-default exists to kill.
         stats_path = plots_dir / "filtering_thresholds.csv"
-        pl.DataFrame(stats_rows).write_csv(stats_path)
-        print(f"💾 Threshold statistics → {stats_path}")
+        if reused:
+            print(
+                f"⚠️  NOT writing {stats_path.name}: {len(reused)} reused panel(s) "
+                f"({', '.join(reused)}) were not drawn from this data."
+            )
+        else:
+            pl.DataFrame(stats_rows).write_csv(stats_path)
+            print(f"💾 Threshold statistics → {stats_path}")
 
         # Create combined subplot figure
         combined_plot_path = plots_dir / "combined_distributions.png"
@@ -898,9 +910,14 @@ class ProteinAnalysisPipeline:
             }
         )
 
-        # Calculate statistics
-        count_below = (data < threshold).sum()
-        percentage_below = (count_below / len(data)) * 100
+        # Calculate statistics over the finite values only -- the same denominator
+        # _threshold_stats writes to filtering_thresholds.csv, and the same population
+        # seaborn actually draws, since violinplot discards non-finite values. Counting
+        # nulls in the denominator here (but not there) would make the red annotation
+        # and the CSV disagree for any metric column carrying them.
+        finite = data[np.isfinite(data)]
+        count_below = (finite < threshold).sum()
+        percentage_below = (count_below / finite.size) * 100
         count_str = ProteinAnalysisPipeline._human_format(count_below)
 
         # Create plot

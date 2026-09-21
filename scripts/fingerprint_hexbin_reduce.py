@@ -86,11 +86,23 @@ def check_alignment(dist_dir: Path, arms: list[str]) -> int:
 
     ref_arm = arms[0]
     probe = min(ALIGNMENT_PROBE_ROWS, n)
-    ref_head = pl.read_parquet(dist_dir / f"dist_{ref_arm}.parquet", columns=["query", "target"], n_rows=probe)
-    for arm in arms[1:]:
-        head = pl.read_parquet(dist_dir / f"dist_{arm}.parquet", columns=["query", "target"], n_rows=probe)
-        if not head.equals(ref_head):
-            raise SystemExit(f"{dist_dir}/dist_{arm}.parquet: pair order differs from dist_{ref_arm}.parquet")
+
+    def pair_keys(arm: str, end: str) -> pl.DataFrame:
+        keys = pl.scan_parquet(dist_dir / f"dist_{arm}.parquet").select("query", "target")
+        return (keys.head(probe) if end == "first" else keys.tail(probe)).collect()
+
+    # Both ends, not just the head: a file that was concatenated or re-sorted
+    # differently only past row 50,000 agrees on its first rows and disagrees on
+    # everything after, which is precisely the misalignment described above. The
+    # slice is pushed into the parquet scan, so the tail costs the same as the head.
+    for end in ("first", "last"):
+        ref = pair_keys(ref_arm, end)
+        for arm in arms[1:]:
+            if not pair_keys(arm, end).equals(ref):
+                raise SystemExit(
+                    f"{dist_dir}/dist_{arm}.parquet: pair order differs from "
+                    f"dist_{ref_arm}.parquet in the {end} {probe:,} rows"
+                )
     return n
 
 
@@ -98,7 +110,16 @@ def load_split(dist_dir: Path, arms: list[str], identical_path: Path) -> tuple[d
     """One split's per-arm distances plus its identical-sequence mask."""
     n = check_alignment(dist_dir, arms)
 
-    identical = pl.read_parquet(identical_path)["identical"].to_numpy()
+    # Cast rather than trust the stored dtype. The mask comes from a manual cluster
+    # step that this repo does not contain, so nothing pins it to Boolean -- and an
+    # Int8 0/1 mask would make ``~identical`` give -1/-2, so ``values[arm][keep]``
+    # below would be integer fancy indexing rather than masking: every arm silently
+    # replaced by a full-length array of its first two values, with keep.sum() still
+    # reporting the plausible count. A Boolean column with nulls comes back as an
+    # object array instead, which cannot be a mask either.
+    identical = pl.read_parquet(identical_path)["identical"].cast(pl.Boolean).to_numpy()
+    if identical.dtype != np.bool_:
+        raise SystemExit(f"{identical_path}: 'identical' is not a complete boolean column (nulls?)")
     if identical.size != n:
         raise SystemExit(
             f"{identical_path}: {identical.size:,} mask rows but {n:,} pair rows in {dist_dir} -- not row-aligned"
@@ -221,11 +242,17 @@ def main(argv: list[str] | None = None) -> int:
                 hi = limit
         ranges[arm] = (lo, hi)
         clipped[arm] = n_clipped
+        if n_clipped:
+            # Fold the tail onto the limit here rather than only inside the digitise()
+            # call, so --verify-pairs below re-derives the panels from exactly the
+            # values that were binned. Clipping leaves min == lo and max == hi, so
+            # both histogram2d forms still reproduce these edges and these counts.
+            values[arm] = np.minimum(values[arm], hi)
         # linspace over the arm's own extremes is what histogram2d builds for bins=G,
         # and because every panel is drawn over one common pair set these extremes are
         # each panel's extremes too.
         edges[arm] = np.linspace(lo, hi, G + 1)
-        index[arm] = digitise(np.minimum(values[arm], hi) if n_clipped else values[arm], edges[arm])
+        index[arm] = digitise(values[arm], edges[arm])
         note = f"  ({n_clipped:,} above, {100 * n_clipped / n_keep:.3f}%, binned at the edge)" if n_clipped else ""
         print(f"  {arm}: [{lo:.4f}, {hi:.4f}]{note}", flush=True)
     hexbin: dict[str, object] = {"metadata": {"dist_cols": [f"dist_{a}" for a in arms], "gridsize": G, "max_count": 0}}
@@ -267,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
 
     hexbin["metadata"]["max_count"] = max_count
 
-    if args.verify_pairs and not any(clipped.values()):
+    if args.verify_pairs:
         rng = np.random.default_rng(args.seed)
         for a, b in [pairs[i] for i in rng.choice(len(pairs), min(args.verify_pairs, len(pairs)), replace=False)]:
             got = np.array(hexbin[f"dist_{a}_vs_dist_{b}"]["counts"])
