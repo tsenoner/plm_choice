@@ -107,20 +107,22 @@ class EmbeddingComparisonVisualizer:
 
         # Load and process data
         if data_path is None:
-            if not columns:
-                raise ValueError(
-                    "Either data_path or columns must be given: without one of them "
-                    "there is nothing to draw and no way to know what the axes are."
-                )
             self.df = None
-            self.dist_cols = self._sort_dist_cols(
-                [c if c.startswith("dist_") else f"dist_{c}" for c in columns]
-            )
-            logger.info(
-                "No per-pair data loaded; drawing %d precomputed arms: %s",
-                len(self.dist_cols),
-                ", ".join(c.replace("dist_", "") for c in self.dist_cols),
-            )
+            if columns:
+                self.dist_cols = self._sort_dist_cols(
+                    [c if c.startswith("dist_") else f"dist_{c}" for c in columns]
+                )
+                logger.info(
+                    "No per-pair data loaded; drawing %d precomputed arms: %s",
+                    len(self.dist_cols),
+                    ", ".join(c.replace("dist_", "") for c in self.dist_cols),
+                )
+            else:
+                # Plot-only. The hexbin cache carries its own column order, so the
+                # arms are not known here and are not needed: every plot_* method
+                # takes its data as an argument. Only the compute_* methods need
+                # the frame, and they are not reachable on this object.
+                self.dist_cols = []
         else:
             self.df = self._load_data(data_path)
             self.dist_cols = self._identify_distance_columns()
@@ -423,8 +425,15 @@ class EmbeddingComparisonVisualizer:
                         # Upper triangle: turn off (show only lower triangle)
                         ax.axis("off")
                     else:
-                        # Lower triangle: show hexbin plots
-                        key = f"{col1}_vs_{col2}"
+                        # Lower triangle: show hexbin plots.
+                        #
+                        # The key is (x-axis arm, y-axis arm), and
+                        # ``_plot_hexbin_pair`` puts the FIRST-named arm on the
+                        # horizontal axis. The tick labels below are written from
+                        # ``col2`` on x and ``col1`` on y, so the lookup has to be
+                        # ``col2_vs_col1``. It used to be ``col1_vs_col2``, which drew
+                        # every panel transposed with respect to its own axis labels.
+                        key = f"{col2}_vs_{col1}"
                         if key in hexbin_data:
                             self._plot_hexbin_pair(ax, hexbin_data[key], vmax)
                         else:
@@ -2365,6 +2374,16 @@ def main():
         "(default: <output_dir>/combined_wasserstein_correlation.png).",
     )
     parser.add_argument(
+        "--hexbin_json",
+        type=Path,
+        default=None,
+        help=(
+            "Draw the hexagonal comparison from a precomputed cache instead of from "
+            "--data_path. Use this for the full-cohort figure, whose counts are "
+            "reduced on the cluster by scripts/fingerprint_hexbin_reduce.py."
+        ),
+    )
+    parser.add_argument(
         "--output_dir",
         type=Path,
         default=Path("out/embedding_comparison"),
@@ -2458,8 +2477,10 @@ def main():
         logger.info(f"=== Precomputed fingerprint written to {out_path} ===")
         return
 
-    if args.data_path is None:
-        parser.error("--data_path is required unless --precomputed is given")
+    if args.data_path is None and args.hexbin_json is None:
+        parser.error(
+            "one of --data_path, --precomputed or --hexbin_json is required"
+        )
 
     # Create visualizer and generate visualizations
     visualizer = EmbeddingComparisonVisualizer(
@@ -2468,6 +2489,18 @@ def main():
         sample_size=args.sample_size,
         font_scale=args.font_scale,
     )
+
+    if args.hexbin_json is not None:
+        # Plot-only path: the counts were reduced elsewhere, so nothing is recomputed
+        # and the figure covers whatever cohort that reduction covered.
+        with open(args.hexbin_json) as fh:
+            hexbin_data = json.load(fh)
+        output_path = args.output_dir / "hexagonal_distance_comparison.png"
+        visualizer.plot_hexagonal_distance_comparison(
+            hexbin_data=hexbin_data, save_path=output_path
+        )
+        logger.info("Hexagonal comparison written to %s", output_path)
+        return
 
     if "all" in args.visualizations:
         output_paths = visualizer.generate_all_visualizations(
