@@ -66,7 +66,7 @@ class FNNPredictor(BasePredictor):  # Inherit from BasePredictor
         proc1 = self.individual_layers(emb1)
         proc2 = self.individual_layers(emb2)
         combined = torch.cat([proc1, proc2], dim=1)
-        return self.combined_layers(combined).squeeze()
+        return self.combined_layers(combined).squeeze(-1)
 
     # training_step, validation_step, predict_step, _common_step, configure_optimizers are inherited
 
@@ -82,7 +82,7 @@ class LinearRegressionPredictor(BasePredictor):  # Inherit from BasePredictor
 
     def forward(self, emb1, emb2):
         combined = torch.cat([emb1, emb2], dim=1)
-        return self.linear(combined).squeeze()
+        return self.linear(combined).squeeze(-1)
 
     # training_step, validation_step, predict_step, _common_step, configure_optimizers are inherited
 
@@ -99,6 +99,6 @@ class LinearDistancePredictor(BasePredictor):  # Inherit from BasePredictor
     def forward(self, emb1, emb2):
         # Calculate element-wise squared difference
         diff_sq = (emb1 - emb2).pow(2)
-        return self.linear(diff_sq).squeeze()
+        return self.linear(diff_sq).squeeze(-1)
 
     # training_step, validation_step, predict_step, _common_step, configure_optimizers are inherited
