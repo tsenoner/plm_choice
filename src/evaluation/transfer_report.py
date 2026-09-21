@@ -61,7 +61,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -80,6 +79,7 @@ import scipy.sparse as sp
 
 from data_preparation.go_semantic_similarity import GOTerm, parse_obo
 from evaluation.analysis_io import json_safe, load_frozen_ids
+from evaluation.canonical_set import raw_file_sha256
 from evaluation.go_similarity_matrix import (
     PROTEIN_BINDING,
     clean_mf_annotations,
@@ -141,15 +141,6 @@ def _log(message: str) -> None:
 # --------------------------------------------------------------------------- #
 #                                   inputs
 # --------------------------------------------------------------------------- #
-
-
-def sha256_file(path: Path | str, *, chunk: int = 1 << 22) -> str:
-    """Streaming SHA-256 of a file, so a multi-GB embedding slice costs no extra RAM."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(chunk), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def arm_name(path: Path | str) -> str:
@@ -1028,7 +1019,7 @@ def run_transfer_report(
     tau_rows: list[dict] = []
     # {(distance, variant, subset, score): {arm: per-query score vector}}
     collected: dict[tuple[str, str, str, str], dict[str, np.ndarray]] = defaultdict(dict)
-    subset_names = [SUBSET_ALL, SUBSET_HBI, SUBSET_NO_HIT]
+    subset_names = list(SUBSET_DESCRIPTIONS)
 
     def emit(
         arm: str,
@@ -1215,15 +1206,16 @@ def run_transfer_report(
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
+    # raw_file_sha256 streams the file, so a multi-GB embedding slice costs no extra RAM.
     inputs = {"freeze": str(freeze), "labels": str(labels)}
-    hashed = {str(freeze): sha256_file(freeze), str(labels): sha256_file(labels)}
+    hashed = {str(freeze): raw_file_sha256(freeze), str(labels): raw_file_sha256(labels)}
     for key, path in (("go_obo", go_obo), ("identity_m8", identity_m8)):
         if path is not None:
             inputs[key] = str(path)
-            hashed[str(path)] = sha256_file(path)
+            hashed[str(path)] = raw_file_sha256(path)
     if hash_arms:
         for path in arm_paths:
-            hashed[str(path)] = sha256_file(path)
+            hashed[str(path)] = raw_file_sha256(path)
 
     manifest = {
         "labels_kind": labels_kind,
@@ -1326,8 +1318,8 @@ def _finish_summary(
     query_sets: Mapping[tuple[str, str], np.ndarray],
     score_names: Sequence[str],
     *,
-    hbi_baseline: Mapping[str, Mapping[str, np.ndarray]] | None = None,
-    hbi_arms: set[str] | None = None,
+    hbi_baseline: Mapping[str, Mapping[str, np.ndarray]],
+    hbi_arms: set[str],
 ) -> pd.DataFrame:
     """One summary row per (arm, distance, variant, subset, score) with its bootstrap CI.
 
@@ -1340,8 +1332,6 @@ def _finish_summary(
     MMseqs2 hits, and the cohort oracle printed on an HBI row would be a ceiling that arm
     could not reach even in principle.
     """
-    hbi_baseline = hbi_baseline or {}
-    hbi_arms = hbi_arms or set()
     out: list[dict] = []
     for row in rows:
         variant, subset = row["variant"], row["subset"]
@@ -1564,7 +1554,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             hash_arms=not args.no_hash_arms,
             out_dir=args.out_dir,
         )
-    except (TransferInputError, FileNotFoundError, OSError, ValueError, KeyError) as exc:
+    except (TransferInputError, OSError, ValueError, KeyError) as exc:
         print(f"transfer_report: INPUT ERROR: {exc}", file=sys.stderr, flush=True)
         return 2
     print(

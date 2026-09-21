@@ -68,7 +68,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import subprocess
@@ -86,10 +85,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from data_preparation.export_go_annotations import read_fai_lengths  # noqa: E402
 from data_preparation.go_semantic_similarity import CAFA_CORE6, GOTerm, parse_obo  # noqa: E402
-from shared.protein_cohort import load_excluded_proteins  # noqa: E402
 
-MF_ROOT = "GO:0003674"
-MF_NAMESPACE = "molecular_function"
+# The same two constants the scorer uses, imported rather than restated: if the cohort and
+# evaluation.go_similarity_matrix disagreed on what "MF" or "the root" is, the cohort would
+# contain proteins the scorer has no scoreable term for.
+from evaluation.go_similarity_matrix import MF_NAMESPACE, MF_ROOT  # noqa: E402
+from shared.protein_cohort import content_hash, load_excluded_proteins  # noqa: E402
+
 SET_NAME = "go_mf_core6_sfcap"
 
 #: MMseqs2 settings of the identity control (design item 3). Fixed here rather
@@ -248,11 +250,6 @@ def superfamily_stats(assigned: Mapping[str, str], gene3d: Mapping[str, list[str
     }
 
 
-def content_sha256(ids: Iterable[str]) -> str:
-    payload = json.dumps(sorted(ids), separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def build_cohort(
     raw_core6: Mapping[str, set[str]],
     go_terms: Mapping[str, GOTerm],
@@ -313,7 +310,7 @@ def build_cohort(
         "annotation_drops": dropped,
         "cohort_stats": superfamily_stats({p: assigned[p] for p in ids}, gene3d),
         "population_stats": superfamily_stats(assigned, gene3d),
-        "content_sha256": content_sha256(ids),
+        "content_sha256": content_hash(ids),
     }
     return manifest, {p: scoreable[p] for p in ids}
 

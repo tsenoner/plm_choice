@@ -90,8 +90,10 @@ def test_stratified_cap_depends_only_on_the_contents_and_the_seed(cohort):
 
 
 def test_content_sha256_is_order_independent(cohort):
-    assert cohort.content_sha256(["b", "a"]) == cohort.content_sha256(["a", "b"])
-    assert cohort.content_sha256(["a"]) != cohort.content_sha256(["a", "b"])
+    """The freeze's content hash is shared.protein_cohort.content_hash — the one every other
+    freeze in the repo records — so it must hash the SET, not the order it arrived in."""
+    assert cohort.content_hash(["b", "a"]) == cohort.content_hash(["a", "b"])
+    assert cohort.content_hash(["a"]) != cohort.content_hash(["a", "b"])
 
 
 # ── the union FASTA and the hit table behind the identity control ─────────────
