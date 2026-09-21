@@ -154,7 +154,9 @@ REGION_BOT, REGION_TOP = 20.0, 82.0
 
 UNITS_PER_DIM = 18.0 / 128.0  # a 128-wide tensor is 18 units tall
 BAR_W = 6.0
-INPUT_BAR_H = 18.0  # n varies 20-fold, so this bar is drawn broken, not to scale
+INPUT_BAR_H = 18.0  # not to scale: n varies 20-fold. The adjacent "n = 128...2,560"
+# label carries that; this used to also carry a drawn break mark, but two white slashes
+# across the bar read as an artefact rather than as a break.
 
 BAND_W = 40.0  # the frozen region: 0 .. 40
 PROBE_X, PROBE_W = 45.0, 122.0  # the trained region: 45 .. 167
@@ -275,7 +277,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
             linestyle=(0, (4, 3)), linewidth=0.8, zorder=1,
         )
     )
-    ax.text(PROBE_X + PROBE_W / 2, REGION_TOP + 1.5, "trained probe",
+    ax.text(PROBE_X + PROBE_W / 2, REGION_TOP + 1.5, "trained probe — one per target",
             ha="center", va="bottom",
             fontsize=FS_NOTE, color=MUTED, style="italic")
 
@@ -295,12 +297,6 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
                 fontsize=FS_BOX, color=INK, zorder=6)
         _arrow(ax, X_PROT + W_PROT, y, X_INPUT, y)
         _bar(ax, X_INPUT, y, INPUT_BAR_H, fill, edge)
-        # a break mark: the bar's height is not to scale, because n varies 20-fold
-        for off in (-1.3, 1.3):
-            ax.plot(
-                [X_INPUT - 0.7, X_INPUT + BAR_W + 0.7], [y + off, y + off + 1.5],
-                color="white", lw=1.5, solid_capstyle="butt", zorder=5,
-            )
         _arrow(ax, X_INPUT + BAR_W, y, X_SHARED, y)
 
     # x_A under its bar, x_B over its bar, the shared width between them.
