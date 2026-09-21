@@ -89,14 +89,14 @@ HIDDEN_SIZE = 64
 TARGETS = ("PIDE", "TM-score", "HFSP")
 
 
-def _facts(hidden_size: int = HIDDEN_SIZE) -> dict:
+def _facts() -> dict:
     """Read the layer widths and parameter counts off a live model.
 
     Nothing in the drawing is allowed to be a literal that the code could contradict.
     The parameter counts are not drawn any more -- they live in the caption -- but they
     are still derived here and printed by ``main``, so the caption has a source.
     """
-    probe = FNNPredictor(embedding_size=NATIVE_DIMS[0], hidden_size=hidden_size)
+    probe = FNNPredictor(embedding_size=NATIVE_DIMS[0], hidden_size=HIDDEN_SIZE)
 
     shared = [m for m in probe.individual_layers if hasattr(m, "in_features")]
     combined = [m for m in probe.combined_layers if hasattr(m, "in_features")]
@@ -112,16 +112,16 @@ def _facts(hidden_size: int = HIDDEN_SIZE) -> dict:
         )
 
     def n_params(dim: int) -> int:
-        m = FNNPredictor(embedding_size=dim, hidden_size=hidden_size)
+        m = FNNPredictor(embedding_size=dim, hidden_size=HIDDEN_SIZE)
         return sum(p.numel() for p in m.parameters())
 
     return {
         "proj_out": shared[0].out_features,
         "concat": combined[0].in_features,
         "widths": [ly.out_features for ly in combined],  # 64, 32, 1
-        "per_dim": hidden_size,  # params grow as hidden_size * n
+        "per_dim": HIDDEN_SIZE,  # params grow as hidden_size * n
         "fixed": sum(p.numel() for p in probe.combined_layers.parameters())
-        + hidden_size,  # trunk + the shared layer's bias
+        + HIDDEN_SIZE,  # trunk + the shared layer's bias
         "p_min": n_params(min(NATIVE_DIMS)),
         "p_max": n_params(max(NATIVE_DIMS)),
         "n_min": min(NATIVE_DIMS),
@@ -178,7 +178,7 @@ FS_SUB = 6.0  # the activation line under a layer's in -> out; "no activation" i
 # rest -- at 6.4 pt it overruns W_LAYER.
 
 
-def _bar(ax, x, ycenter, height, fill, edge, width=BAR_W, zorder=4):
+def _bar(ax, x, ycenter, height, fill, edge, width=BAR_W):
     ax.add_patch(
         Rectangle(
             (x, ycenter - height / 2),
@@ -187,29 +187,29 @@ def _bar(ax, x, ycenter, height, fill, edge, width=BAR_W, zorder=4):
             facecolor=fill,
             edgecolor=edge,
             linewidth=0.9,
-            zorder=zorder,
+            zorder=4,
         )
     )
 
 
-def _arrow(ax, x0, y0, x1, y1, color=MUTED, lw=0.9, ls="-", zorder=3):
+def _arrow(ax, x0, y0, x1, y1, color=MUTED, ls="-"):
     ax.add_patch(
         FancyArrowPatch(
             (x0, y0),
             (x1, y1),
             arrowstyle="-|>",
             mutation_scale=8,
-            linewidth=lw,
+            linewidth=0.9,
             linestyle=ls,
             color=color,
             shrinkA=0,
             shrinkB=0,
-            zorder=zorder,
+            zorder=3,
         )
     )
 
 
-def _layer(ax, x, ycenter, label, sub, w=W_LAYER, h=H_LAYER):
+def _layer(ax, x, ycenter, label, sub, w=W_LAYER):
     """A trained layer: a box carrying ``in -> out`` and its activation.
 
     Every trained layer in the figure is drawn by this one function, so "box" means
@@ -217,7 +217,7 @@ def _layer(ax, x, ycenter, label, sub, w=W_LAYER, h=H_LAYER):
     """
     ax.add_patch(
         FancyBboxPatch(
-            (x, ycenter - h / 2), w, h,
+            (x, ycenter - H_LAYER / 2), w, H_LAYER,
             boxstyle="round,pad=0,rounding_size=1.6",
             facecolor=T_FILL, edgecolor=T_EDGE, linewidth=0.9, zorder=4,
         )
@@ -242,7 +242,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     # same panel. "custom" points every math alphabet at the same family; \mathbb is not
     # used, because no sans family has blackboard-bold.
     plt.rcParams["mathtext.fontset"] = "custom"
-    for _k in ("rm", "it", "bf", "sf", "tt", "cal"):
+    for _k in ("rm", "it", "sf", "tt", "cal"):
         plt.rcParams[f"mathtext.{_k}"] = SANS[0] + (":italic" if _k in ("it", "cal") else "")
     plt.rcParams["mathtext.bf"] = SANS[0] + ":bold"
     plt.rcParams["mathtext.default"] = "it"
@@ -367,17 +367,19 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     _arrow(ax, TAP_X, EUCL_Y, X_SHARED, EUCL_Y, color=E_EDGE, ls=(0, (3, 2)))
     # Left edge under the shared layers, right edge under the second trunk layer, so the
     # box lines up with the thing it is the alternative to.
+    eucl_w = X_T2 + W_LAYER - X_SHARED
+    eucl_cx = X_SHARED + eucl_w / 2
     ax.add_patch(
         FancyBboxPatch(
-            (X_SHARED, EUCL_Y - 6.0), X_T2 + W_LAYER - X_SHARED, 12,
+            (X_SHARED, EUCL_Y - 6.0), eucl_w, 12,
             boxstyle="round,pad=0,rounding_size=2",
             facecolor=E_FILL, edgecolor=E_EDGE, linewidth=0.9, zorder=4,
         )
     )
-    ax.text((X_SHARED + X_T2 + W_LAYER) / 2, EUCL_Y + 1.8,
+    ax.text(eucl_cx, EUCL_Y + 1.8,
             "Euclidean read-out:   ‖$x_A - x_B$‖$_2$",
             ha="center", va="center", fontsize=FS_BOX, color=INK, zorder=5)
-    ax.text((X_SHARED + X_T2 + W_LAYER) / 2, EUCL_Y - 3.2, "no training",
+    ax.text(eucl_cx, EUCL_Y - 3.2, "no training",
             ha="center", va="center", fontsize=FS_NOTE, color=MUTED,
             style="italic", zorder=5)
 
