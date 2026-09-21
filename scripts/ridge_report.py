@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import polars as pl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from visualization.plm_constants import EMBEDDING_DISPLAY_NAMES  # noqa: E402
 
 ORDER = [
     "dist_ankh_base", "dist_ankh_large", "dist_clean", "dist_esm1b",
@@ -15,16 +19,14 @@ ORDER = [
     "dist_esm2_3b", "dist_esm3_open", "dist_esmc_300m", "dist_esmc_600m",
     "dist_prott5", "dist_prottucker",
 ]
-#: Two-line figure labels, verbatim from visualization/plm_constants.py, plus the
-#: older spellings the *published* statistics CSV used ("ESM1b" where the table now
-#: says "ESM\n1b").  The published CSV keys its rows by label, so mapping back to
-#: the embedding key needs both spellings.
+#: The two-line figure labels, taken from the one place that owns them rather than
+#: retyped -- a label that drifts from plm_constants.py is the same model named two
+#: ways in two panels of one paper.  ``_LEGACY`` carries the older spellings the
+#: *published* statistics CSV used ("ESM1b" where the table now says "ESM\n1b"); that
+#: CSV keys its rows by label, so mapping back to the embedding key needs both.
 _DISPLAY = {
-    "ankh_base": "Ankh\nBase", "ankh_large": "Ankh\nLarge", "clean": "CLEAN",
-    "esm1b": "ESM\n1b", "esm2_8m": "ESM2\n8M", "esm2_35m": "ESM2\n35M",
-    "esm2_150m": "ESM2\n150M", "esm2_650m": "ESM2\n650M", "esm2_3b": "ESM2\n3B",
-    "esm3_open": "ESM3", "esmc_300m": "ESM C\n300M", "esmc_600m": "ESM C\n600M",
-    "prott5": "Prot\nT5", "prottucker": "Prot\nTucker",
+    col.removeprefix("dist_"): EMBEDDING_DISPLAY_NAMES[col.removeprefix("dist_")]
+    for col in ORDER
 }
 _LEGACY = {"esm1b": "ESM1b"}
 LABEL = {f"dist_{k}": v.replace("\n", " ") for k, v in _DISPLAY.items()}

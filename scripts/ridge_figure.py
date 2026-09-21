@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 
     overlap = 0.25 if args.published_look else args.overlap
     row_height = 1.0 if args.published_look else args.row_height
-    iqr_band = False if (args.published_look or args.no_iqr_band) else True
+    iqr_band = not (args.published_look or args.no_iqr_band)
 
     viz = EmbeddingComparisonVisualizer.from_distribution_summaries(
         summary_dir=args.summary_dir, output_dir=args.out_dir

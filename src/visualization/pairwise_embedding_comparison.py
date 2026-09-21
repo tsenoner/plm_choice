@@ -147,6 +147,23 @@ RIDGE_NORMALISATIONS: Dict[str, Dict[str, object]] = {
 #: would be invisible -- which is exactly why the tails were unmarked before.
 RIDGE_TAIL_PERCENTILES = ("p1", "p99")
 
+#: How the three quartile rules are drawn.  Darker and fully opaque compared with the
+#: published figure's "0.3" at alpha 0.7: drawn over a saturated fill and then partly
+#: covered by the row in front, a 70%-opaque mid-grey dotted line is the first thing to
+#: disappear, and these three lines are the figure's quantitative content.  Each also
+#: gets a white halo (path_effects at the draw site).
+#:
+#: It lives here rather than inside ``plot_ridge_distributions`` because the key at the
+#: bottom of the figure has to draw the same glyphs.  With the widths and the dash
+#: pattern typed out a second time for the legend, a change to one of them produces a
+#: key that lies about the lines.
+_RIDGE_QUARTILE_STYLE = {"color": "0.12", "linestyle": (0, (1.6, 1.4)), "linewidth": 2.6}
+RIDGE_PERCENTILE_STYLES: Dict[str, Dict] = {
+    "q25": _RIDGE_QUARTILE_STYLE,
+    "median": {"color": "black", "linestyle": "-", "linewidth": 3.4},
+    "q75": _RIDGE_QUARTILE_STYLE,
+}
+
 
 #: Diverging map for the Spearman cells of the combined fingerprint: purple on the
 #: negative arm, cream at zero, OrRd's own reds on the positive arm.
@@ -1151,7 +1168,6 @@ class EmbeddingComparisonVisualizer:
         overlap: float = 0.25,
         row_height: float = 1.0,
         xlim: Optional[Tuple[float, float]] = None,
-        x_label: Optional[str] = None,
         title: Optional[str] = None,
         iqr_band: bool = False,
         quartile_labels: bool = False,
@@ -1210,8 +1226,9 @@ class EmbeddingComparisonVisualizer:
         meta = distribution_data.get("metadata", {})
         if xlim is None:
             xlim = tuple(meta.get("xlim", (0.0, 1.0)))
-        if x_label is None:
-            x_label = meta.get("label", "Min-Max Normalized Distances")
+        # The axis label belongs to the normalisation, so it travels with the data
+        # rather than being passed alongside it.
+        x_label = meta.get("label", "Min-Max Normalized Distances")
         if title is None:
             title = "Normalized Pairwise All-vs-All Distance Distributions"
 
@@ -1401,32 +1418,6 @@ class EmbeddingComparisonVisualizer:
             if show_median and plm_name in percentile_data:
                 percentiles = percentile_data[plm_name]
 
-                # Line styles.  Darker and fully opaque compared with the published
-                # figure's "0.3" at alpha 0.7: drawn over a saturated fill and then
-                # partly covered by the row in front, a 70%-opaque mid-grey dotted line
-                # is the first thing to disappear, and these three lines are the figure's
-                # quantitative content.  Each also gets a white halo (path_effects below).
-                percentile_styles = {
-                    "q25": {
-                        "color": "0.12",
-                        "linestyle": (0, (1.6, 1.4)),
-                        "linewidth": 2.6,
-                        "alpha": 1.0,
-                    },
-                    "median": {
-                        "color": "black",
-                        "linestyle": "-",
-                        "linewidth": 3.4,
-                        "alpha": 1.0,
-                    },
-                    "q75": {
-                        "color": "0.12",
-                        "linestyle": (0, (1.6, 1.4)),
-                        "linewidth": 2.6,
-                        "alpha": 1.0,
-                    },
-                }
-
                 for p_name, p_val in percentiles.items():
                     # The guard used to be a hardcoded ``0 <= p_val <= 1``, which is only
                     # correct because min-max scaling happens to produce that range.
@@ -1447,14 +1438,12 @@ class EmbeddingComparisonVisualizer:
                     p_y = np.interp(p_val, x_range, density)
                     # Only draw if interpolated y is valid
                     if not np.isnan(p_y) and p_y >= 0:
-                        style = percentile_styles[p_name]
+                        style = RIDGE_PERCENTILE_STYLES[p_name]
                         ax.plot(
                             [p_val, p_val],
                             [0, p_y],
-                            color=style["color"],
-                            linestyle=style["linestyle"],
-                            linewidth=style["linewidth"],
-                            alpha=style["alpha"],
+                            **style,
+                            alpha=1.0,
                             clip_on=False,
                             zorder=3,
                             solid_capstyle="butt",
@@ -1584,40 +1573,27 @@ class EmbeddingComparisonVisualizer:
         # row's baseline at exactly that row's percentile.
         foot = 0.012 * (xlim[1] - xlim[0])
         for ax, p_val, tick_h, p_name, is_top_row in tail_marks_to_draw:
+            # The transform is the owning row's, so the mark is placed in that row's
+            # data coordinates even though the artist belongs to the figure.
+            tick_style = dict(
+                transform=ax.transData,
+                color="0.12",
+                linewidth=2.2,
+                zorder=5,
+                solid_capstyle="butt",
+                path_effects=[
+                    pe.withStroke(linewidth=4.4, foreground="white", alpha=0.9)
+                ],
+            )
             # A short piece of the row's own baseline under the tick.  Without it the
             # tick reads as floating: where the row below rises past this row's
             # baseline it hides it, so at exactly the x values where the tick most
             # needs an anchor there is no visible line for it to stand on (ESM 1b's
             # 99th percentile sits in the middle of ESM2 8M's body).
             fig.add_artist(
-                plt.Line2D(
-                    [p_val - foot, p_val + foot],
-                    [0, 0],
-                    transform=ax.transData,
-                    color="0.12",
-                    linewidth=2.2,
-                    zorder=5,
-                    solid_capstyle="butt",
-                    path_effects=[
-                        pe.withStroke(linewidth=4.4, foreground="white", alpha=0.9)
-                    ],
-                )
+                plt.Line2D([p_val - foot, p_val + foot], [0, 0], **tick_style)
             )
-            fig.add_artist(
-                plt.Line2D(
-                    [p_val, p_val],
-                    [0, tick_h],
-                    transform=ax.transData,
-                    color="0.12",
-                    linestyle="-",
-                    linewidth=2.2,
-                    zorder=5,
-                    solid_capstyle="butt",
-                    path_effects=[
-                        pe.withStroke(linewidth=4.4, foreground="white", alpha=0.9)
-                    ],
-                )
-            )
+            fig.add_artist(plt.Line2D([p_val, p_val], [0, tick_h], **tick_style))
             # Annotate the top row only.  Repeating "1st"/"99th" on fourteen rows would
             # be the clutter the ticks exist to avoid, and one labelled row is enough
             # to fix the reading of the other thirteen.  Set outward -- p1's label left
@@ -1659,11 +1635,13 @@ class EmbeddingComparisonVisualizer:
 
         legend = None
         if quartile_legend and show_median and axes:
+            # Same style objects the rules were drawn with, so the key cannot drift
+            # away from what is on the rows.
             handles = [
-                plt.Line2D([], [], color="black", linestyle="-", linewidth=3.4,
-                           label="median (50th)"),
-                plt.Line2D([], [], color="0.12", linestyle=(0, (1.6, 1.4)),
-                           linewidth=2.6, label="25th / 75th percentile"),
+                plt.Line2D([], [], label="median (50th)",
+                           **RIDGE_PERCENTILE_STYLES["median"]),
+                plt.Line2D([], [], label="25th / 75th percentile",
+                           **RIDGE_PERCENTILE_STYLES["q25"]),
             ]
             if tail_marks and tail_data:
                 # Drawn as a tick, not as a line segment: a short solid rule in the key
@@ -1848,9 +1826,9 @@ class EmbeddingComparisonVisualizer:
             # Bound by percentiles, not by min and max.  The minimum of a rounded
             # distance column can be one quantum (1e-4), which would open the axis by
             # four empty decades to accommodate a handful of pairs.
-            summaries = self._ridge_summaries().values()
-            lo = min(s["quantiles"]["p0.1"] for s in summaries)
-            hi = max(s["quantiles"]["p99.9"] for s in summaries)
+            drawn = [self.summaries[c.replace("dist_", "")] for c in self.dist_cols]
+            lo = min(s["quantiles"]["p0.1"] for s in drawn)
+            hi = max(s["quantiles"]["p99.9"] for s in drawn)
             xlim = (float(np.floor(np.log10(lo))), float(np.ceil(np.log10(hi))))
 
         x_edges = np.linspace(xlim[0], xlim[1], grid + 1)
@@ -1981,9 +1959,6 @@ class EmbeddingComparisonVisualizer:
         if save_path:
             self._save_json_data(data, save_path, "Distribution data (from summaries)")
         return data
-
-    def _ridge_summaries(self) -> Dict[str, Dict]:
-        return {c.replace("dist_", ""): self.summaries[c.replace("dist_", "")] for c in self.dist_cols}
 
     def compute_distribution_data(
         self, normalize: bool = False, save_path: Optional[Path] = None
@@ -2894,21 +2869,24 @@ class EmbeddingComparisonVisualizer:
         if wass_vmax is None:
             wass_vmax = float(np.nanmax(wasserstein_distances))
         corr_norm = plt.Normalize(vmin=-corr_vlim, vmax=corr_vlim)
-        n_negative = int((correlations[np.triu_indices(n, 1)] < 0).sum())
+        off_diagonal = correlations[np.triu_indices(n, 1)]
+        rho_lo = float(np.nanmin(off_diagonal))
+        rho_hi = float(np.nanmax(off_diagonal))
+        n_negative = int((off_diagonal < 0).sum())
         logger.info(
             "Correlation scale: symmetric +/-%.2f over rho in [%+.3f, %+.3f], "
             "%d of %d off-diagonal cells negative. Wasserstein top: %.4f",
             corr_vlim,
-            float(np.nanmin(correlations[np.triu_indices(n, 1)])),
-            float(np.nanmax(correlations[np.triu_indices(n, 1)])),
+            rho_lo,
+            rho_hi,
             n_negative,
             n * (n - 1) // 2,
             wass_vmax,
         )
-        if corr_vlim < abs(float(np.nanmin(correlations[np.triu_indices(n, 1)]))):
+        if corr_vlim < abs(rho_lo):
             raise ValueError(
                 f"corr_vlim={corr_vlim} clips the most negative correlation "
-                f"{float(np.nanmin(correlations[np.triu_indices(n, 1)])):+.3f}"
+                f"{rho_lo:+.3f}"
             )
 
         # Calculate figure size to ensure square cells
