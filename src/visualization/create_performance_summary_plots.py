@@ -50,11 +50,14 @@ MODEL_MARKER_MAP: Dict[str, str] = {
     "euclidean": "X",  # X
 }
 
-# Titles for the plot facets
+# Titles for the plot facets.
+# HFSP carries no "Function -" prefix on purpose: it is derived from an alignment and
+# tracks sequence identity (r = 0.920), so labelling its panel "Function" would assert
+# exactly what the paper argues against. The Discussion calls it a sequence panel.
 PARAMETER_TITLES: Dict[str, str] = {
     "fident": "Sequence - PIDE",
     "alntmscore": "Structure - TM-score",
-    "hfsp": "Function - HFSP",
+    "hfsp": "HFSP",
 }
 
 
