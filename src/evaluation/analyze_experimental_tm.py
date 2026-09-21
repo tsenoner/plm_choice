@@ -133,29 +133,25 @@ def main() -> None:
     }
 
     # ---- CATH -----------------------------------------------------------
-    same_cath = None
-    if args.cath and args.cath.exists():
+    have_cath = bool(args.cath and args.cath.exists())
+    if have_cath:
         wanted = set(
-            zip(scored["q_pdb"].to_list(), scored["q_chain"].to_list())
-        ) | set(zip(scored["t_pdb"].to_list(), scored["t_chain"].to_list()))
+            zip(scored["q_pdb"].to_list(), scored["q_chain"].to_list(), strict=True)
+        ) | set(zip(scored["t_pdb"].to_list(), scored["t_chain"].to_list(), strict=True))
         cath = load_cath(args.cath, wanted)
         S["cath_chains_assigned"] = len(cath)
         S["cath_chains_wanted"] = len(wanted)
 
-        def sf(pdb, ch):
-            return cath.get((pdb, ch))
-
         lab = []
         for qp, qc, tp, tc in zip(
-            both["q_pdb"], both["q_chain"], both["t_pdb"], both["t_chain"]
+            both["q_pdb"], both["q_chain"], both["t_pdb"], both["t_chain"], strict=True
         ):
-            a, b = sf(qp, qc), sf(tp, tc)
+            a, b = cath.get((qp, qc)), cath.get((tp, tc))
             lab.append(None if not a or not b else ("same" if a & b else "different"))
         both = both.with_columns(pl.Series("cath_rel", lab, dtype=pl.Utf8))
-        same_cath = both["cath_rel"]
-        S["cath_pairs_labelled"] = int(same_cath.is_not_null().sum())
-        S["cath_same"] = int((same_cath == "same").sum())
-        S["cath_different"] = int((same_cath == "different").sum())
+        S["cath_pairs_labelled"] = int(both["cath_rel"].is_not_null().sum())
+        S["cath_same"] = int((both["cath_rel"] == "same").sum())
+        S["cath_different"] = int((both["cath_rel"] == "different").sum())
 
     # ---- headline agreement --------------------------------------------
     S["agreement"] = {}
@@ -201,7 +197,7 @@ def main() -> None:
     for lo, hi, name in bins:
         sub = fid.filter((pl.col("fident") >= lo) & (pl.col("fident") < hi))
         blk = corr_block(sub["tmscore_exp"].to_numpy(), sub["alntmscore"].to_numpy())
-        if blk.get("n", 0) >= 10:
+        if blk["n"] >= 10:
             blk["r2_fident_vs_exp"] = float(
                 stats.pearsonr(sub["fident"].to_numpy(), sub["tmscore_exp"].to_numpy())[0] ** 2
             )
@@ -215,7 +211,7 @@ def main() -> None:
     )
 
     # ---- by CATH relation -----------------------------------------------
-    if same_cath is not None:
+    if have_cath:
         S["by_cath"] = {}
         for rel in ("same", "different"):
             sub = both.filter(pl.col("cath_rel") == rel)

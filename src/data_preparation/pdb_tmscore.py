@@ -76,10 +76,11 @@ import gzip
 import json
 import logging
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -342,16 +343,15 @@ def download_cif(pdb_id: str, cache_dir: Path, retries: int = 3) -> Path | None:
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     url = RCSB_DOWNLOAD_URL.format(pdb_id=pdb_id.upper())
+    tmp = dest.with_suffix(".part")
     for attempt in range(retries):
         try:
-            tmp = dest.with_suffix(".part")
             urllib.request.urlretrieve(url, str(tmp))
             tmp.rename(dest)
             return dest
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             if attempt == retries - 1:
                 logger.debug("download failed %s: %s", pdb_id, exc)
-                return None
     return None
 
 
@@ -381,23 +381,18 @@ def _split_cif_line(line: str) -> list[str]:
     return out
 
 
+_AUTH_SEQ_RE = re.compile(r"([+-]?\d+)(.*)$")
+
+
 def _auth_seq_key(label: str) -> tuple[int, str] | None:
     """'27A' -> (27, 'A'); '-3' -> (-3, ''); 'None'/'' -> None."""
     label = label.strip()
     if not label or label in {".", "?", "None", "null"}:
         return None
-    sign = 1
-    k = 0
-    if label[0] in "+-":
-        sign = -1 if label[0] == "-" else 1
-        k = 1
-    digits = ""
-    while k < len(label) and label[k].isdigit():
-        digits += label[k]
-        k += 1
-    if not digits:
+    m = _AUTH_SEQ_RE.match(label)
+    if m is None:
         return None
-    return sign * int(digits), label[k:].strip()
+    return int(m.group(1)), m.group(2).strip()
 
 
 def extract_chain_ca_pdb(
@@ -405,7 +400,7 @@ def extract_chain_ca_pdb(
     chain_id: str,
     segments: Sequence[tuple[int, int, str, str]],
     out_pdb: Path,
-) -> tuple[int, int, bool]:
+) -> tuple[int, bool]:
     """
     Write the CA atoms of one author chain to a fixed-width PDB file.
 
@@ -420,13 +415,13 @@ def extract_chain_ca_pdb(
         genuine residue of the chain and is deposited as HETATM);
       * residues restricted to the SIFTS PDB_BEG..PDB_END author ranges when
         those parse; if none parse, the whole chain is kept and the caller is
-        told via the third return value;
+        told via the second return value;
       * chain relabelled 'A' and residues renumbered 1..N, because PDB format
         has one column for the chain id and four for the residue number while
         mmCIF ``auth_asym_id``/``auth_seq_id`` have neither limit. TM-align is
         sequence-order independent, so renumbering cannot change the score.
 
-    Returns (n_ca_written, n_ca_in_whole_chain, used_whole_chain_fallback).
+    Returns (n_ca_written, used_whole_chain_fallback).
     """
     ranges: list[tuple[tuple[int, str], tuple[int, str]]] = []
     for _, _, pdb_beg, pdb_end in segments:
@@ -441,7 +436,9 @@ def extract_chain_ca_pdb(
     in_loop = False
     model0: str | None = None
     kept: list[tuple[str, float, float, float, float, float, str]] = []
-    whole_chain_ca = 0
+    # Every CA of the chain, before the SIFTS range filter. Collected in the same
+    # pass so the whole-chain fallback below does not have to re-read the gzip.
+    chain_ca: list[tuple[str, float, float, float, float, float, str]] = []
 
     with gzip.open(cif_gz, "rt", errors="replace") as f:
         for line in f:
@@ -452,7 +449,7 @@ def extract_chain_ca_pdb(
             if not in_loop:
                 continue
             if line.startswith("#") or not line.strip():
-                if kept or whole_chain_ca:
+                if chain_ca:
                     break
                 in_loop = False
                 cols = {}
@@ -483,40 +480,33 @@ def extract_chain_ca_pdb(
                 key = _auth_seq_key(p[seq_col])
                 if key is None:
                     continue
-                whole_chain_ca += 1
+                atom = (
+                    comp,
+                    float(p[cols["Cartn_x"]]),
+                    float(p[cols["Cartn_y"]]),
+                    float(p[cols["Cartn_z"]]),
+                    float(p[cols["occupancy"]]) if "occupancy" in cols else 1.0,
+                    float(p[cols["B_iso_or_equiv"]]) if "B_iso_or_equiv" in cols else 0.0,
+                    p[cols["type_symbol"]] if "type_symbol" in cols else "C",
+                )
+                chain_ca.append(atom)
                 if ranges and not in_range(key):
                     continue
-                kept.append(
-                    (
-                        comp,
-                        float(p[cols["Cartn_x"]]),
-                        float(p[cols["Cartn_y"]]),
-                        float(p[cols["Cartn_z"]]),
-                        float(p[cols["occupancy"]]) if "occupancy" in cols else 1.0,
-                        float(p[cols["B_iso_or_equiv"]]) if "B_iso_or_equiv" in cols else 0.0,
-                        p[cols["type_symbol"]] if "type_symbol" in cols else "C",
-                    )
-                )
+                kept.append(atom)
             except (KeyError, IndexError, ValueError):
                 continue
 
-    fallback = False
-    if not kept and whole_chain_ca:
+    if not kept and chain_ca:
         # Author ranges did not intersect anything (renumbered entry, odd
         # insertion codes); fall back to the whole chain rather than dropping.
-        fallback = True
-        return _extract_whole_chain(cif_gz, chain_id, out_pdb) + (True,)
+        _write_ca_pdb(chain_ca, out_pdb)
+        return len(chain_ca), True
 
     if not kept:
-        return 0, whole_chain_ca, fallback
+        return 0, False
 
     _write_ca_pdb(kept, out_pdb)
-    return len(kept), whole_chain_ca, fallback
-
-
-def _extract_whole_chain(cif_gz: Path, chain_id: str, out_pdb: Path) -> tuple[int, int]:
-    n, total, _ = extract_chain_ca_pdb(cif_gz, chain_id, [], out_pdb)
-    return n, total
+    return len(kept), False
 
 
 def _write_ca_pdb(rows, out_pdb: Path) -> None:
@@ -723,7 +713,7 @@ def main() -> None:
             continue
         out = chain_dir / f"{acc}_{p['pdb_id']}_{p['chain']}.pdb"
         try:
-            n, n_chain, fb = extract_chain_ca_pdb(cif, p["chain"], p["segments"], out)
+            n, fb = extract_chain_ca_pdb(cif, p["chain"], p["segments"], out)
         except Exception as exc:  # noqa: BLE001
             logger.debug("extract failed %s: %s", acc, exc)
             reject[acc] = "chain_extraction_error"
@@ -732,7 +722,7 @@ def main() -> None:
             reject[acc] = f"too_few_ca:{n}"
             continue
         chain_files[acc] = out
-        extract_stats[acc] = {"n_ca": n, "n_ca_chain": n_chain, "whole_chain_fallback": fb}
+        extract_stats[acc] = {"n_ca": n, "whole_chain_fallback": fb}
     logger.info("Usable chain files: %d", len(chain_files))
     attrition.append(("proteins with a usable CA chain file", len(chain_files)))
 
@@ -752,9 +742,10 @@ def main() -> None:
                 done[(rec["query"], rec["target"])] = rec["res"]
         logger.info("Resuming: %d pairs already in %s", len(done), ckpt)
 
+    pair_ids = list(zip(pairs["query"].to_list(), pairs["target"].to_list(), strict=True))
     work = [
         (q, t, str(chain_files[q]), str(chain_files[t]), exe)
-        for q, t in zip(pairs["query"].to_list(), pairs["target"].to_list())
+        for q, t in pair_ids
         if (q, t) not in done
     ]
     logger.info("US-align on %d pairs (%d workers)", len(work), args.max_workers)
@@ -773,7 +764,7 @@ def main() -> None:
                     fh.flush()
 
     rows = []
-    for q, t in zip(pairs["query"].to_list(), pairs["target"].to_list()):
+    for q, t in pair_ids:
         res = done.get((q, t))
         pq, pt = picks[q], picks[t]
         row = {
@@ -806,9 +797,7 @@ def main() -> None:
                 "usalign_version": version,
                 "resolution_cutoff": args.resolution_cutoff,
                 "coverage_guard": args.coverage_guard,
-                "reject_reasons": dict(sorted(
-                    __import__("collections").Counter(reject.values()).items()
-                )),
+                "reject_reasons": dict(sorted(Counter(reject.values()).items())),
             },
             fh, indent=2,
         )
