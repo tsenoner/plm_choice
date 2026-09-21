@@ -1806,7 +1806,12 @@ class EmbeddingComparisonVisualizer:
         Quartiles are the exact ones from ``np.percentile`` over the full cohort, carried
         through the same rescaling -- not read off the smoothed curve.
         """
-        if self.df is not None and not hasattr(self, "summaries"):
+        # The test is whether the summaries are here, full stop.  Pairing it with
+        # ``self.df is not None`` missed every other way of building this object that
+        # leaves df None -- from_matrices() is one, and it got a bare AttributeError
+        # from deep inside the loop instead of the sentence naming the constructor
+        # it should have used.
+        if not hasattr(self, "summaries"):
             raise RuntimeError(
                 "compute_distribution_data_from_summaries needs the summary-backed "
                 "constructor: EmbeddingComparisonVisualizer.from_distribution_summaries"
@@ -2862,17 +2867,47 @@ class EmbeddingComparisonVisualizer:
         wasserstein_distances = np.array(wasserstein_data["distances"])
         n = len(dist_cols)
 
+        # What the two halves actually span.  Off the diagonal only: the diagonal
+        # carries rho = 1 and W1 = 0 by construction and is drawn as model names.
+        upper = np.triu_indices(n, 1)
+        rho_lo = float(np.nanmin(correlations[upper]))
+        rho_hi = float(np.nanmax(correlations[upper]))
+        n_negative = int((correlations[upper] < 0).sum())
+        wass_top = float(np.nanmax(wasserstein_distances[upper]))
+
         # One scale per quantity, resolved once.  Both used to be recomputed inline at
         # each use site, which is how the cells and their colourbar could disagree.
+        # A scale derived here covers its data by construction; only an override can
+        # be too small, so only an override is checked.
         if corr_vlim is None:
             corr_vlim = symmetric_corr_limit(correlations)
+        else:
+            # The scale is SYMMETRIC, so either end can run off it: the test is on
+            # max|rho|, not on the minimum.  Testing only the minimum let a matrix
+            # whose rho reaches +0.95 through under corr_vlim=0.10, and +0.95 and
+            # +0.80 then rendered as the identical saturated red -- the same silent
+            # saturation as the vmin=0 hardcode this scale was built to replace.  It
+            # also called a positive number "the most negative correlation" whenever
+            # every rho happened to be positive.
+            worst_rho = rho_lo if abs(rho_lo) >= abs(rho_hi) else rho_hi
+            if corr_vlim < abs(worst_rho):
+                raise ValueError(
+                    f"corr_vlim={corr_vlim} clips rho={worst_rho:+.3f}; the "
+                    f"off-diagonal runs [{rho_lo:+.3f}, {rho_hi:+.3f}], so it needs "
+                    f"at least {math.ceil(abs(worst_rho) * 100) / 100}"
+                )
         if wass_vmax is None:
             wass_vmax = float(np.nanmax(wasserstein_distances))
+        elif wass_vmax < wass_top:
+            # The Wasserstein override had no check at all, so --wass-vmax 0.01
+            # against W1 reaching 0.30 drew every upper-triangle cell in one blue and
+            # said nothing.  One override policed and the other not is worse than
+            # neither, because it reads as though both were.
+            raise ValueError(
+                f"wass_vmax={wass_vmax} clips the largest Wasserstein distance "
+                f"{wass_top:.4f}"
+            )
         corr_norm = plt.Normalize(vmin=-corr_vlim, vmax=corr_vlim)
-        off_diagonal = correlations[np.triu_indices(n, 1)]
-        rho_lo = float(np.nanmin(off_diagonal))
-        rho_hi = float(np.nanmax(off_diagonal))
-        n_negative = int((off_diagonal < 0).sum())
         logger.info(
             "Correlation scale: symmetric +/-%.2f over rho in [%+.3f, %+.3f], "
             "%d of %d off-diagonal cells negative. Wasserstein top: %.4f",
@@ -2883,11 +2918,6 @@ class EmbeddingComparisonVisualizer:
             n * (n - 1) // 2,
             wass_vmax,
         )
-        if corr_vlim < abs(rho_lo):
-            raise ValueError(
-                f"corr_vlim={corr_vlim} clips the most negative correlation "
-                f"{rho_lo:+.3f}"
-            )
 
         # Calculate figure size to ensure square cells
         # Base size per cell to ensure readability

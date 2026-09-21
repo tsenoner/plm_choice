@@ -1,26 +1,35 @@
 #!/bin/bash
-# E7/M-8: everything that runs on the Mac once the cluster job's per-arm distance
-# parquets have been rsynced into $RES/dist/.
+# E7/M-8: everything that runs on a laptop once the cluster job's per-arm distance
+# parquets have been rsynced into $RIDGE_RESULTS/dist/.
 #
-#   bash run_ridge_rebuild.sh
+#   RIDGE_RESULTS=/somewhere/outside/the/repo bash scripts/run_ridge_rebuild.sh
 #
-# Writes only into the results dir (outside git) -- never into the main repo.
+# Writes only into the results dir (outside git) -- never into the repo.
+#
+# Every path is derived from where this script sits or taken from the environment.
+# It used to hardcode three absolute paths from one machine, including the name of a
+# private results directory, into a repository whose origin is public.
 set -euo pipefail
 
-REPO=/Users/tsenoner/Documents/projects/plm_choice
-WT=/Users/tsenoner/Documents/projects/plm_choice_ridge
-RES=/Users/tsenoner/Documents/projects/_plm_choice_internal_backup/ridge_2026-09-18
-PY="$REPO/.venv/bin/python"
-PAIRS="$REPO/data/processed/sprot_pre2024_e1_sub10/sets/train.parquet"
-RANKING="$REPO/out/sprot_pre2024_subset/plm_ranking_by_spearman.csv"
+# The checkout this script is part of, and the checkout that owns the venv and the
+# data tree.  They are the same directory unless the work is being done in a
+# worktree, which is what PLM_CHOICE_REPO is for.
+WT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${PLM_CHOICE_REPO:-$WT}"
+RES="${RIDGE_RESULTS:?set RIDGE_RESULTS to a results directory outside the repo}"
+PY="${PLM_CHOICE_PYTHON:-$REPO/.venv/bin/python}"
+PAIRS="${RIDGE_PAIRS:-$REPO/data/processed/sprot_pre2024_e1_sub10/sets/train.parquet}"
+RANKING="${RIDGE_RANKING:-$REPO/out/sprot_pre2024_subset/plm_ranking_by_spearman.csv}"
 
 mkdir -p "$RES/new_data" "$RES/figure"
 
-# 1. merge the per-arm parquets into one pairwise table
-"$PY" - <<'EOF'
+# 1. merge the per-arm parquets into one pairwise table.
+# The heredoc stays quoted so the shell leaves the Python alone; the two paths it
+# needs come in as argv rather than being spelled out a second time.
+"$PY" - "$RES" "$PAIRS" <<'EOF'
+import sys
 import polars as pl, glob, os
-RES="/Users/tsenoner/Documents/projects/_plm_choice_internal_backup/ridge_2026-09-18"
-PAIRS="/Users/tsenoner/Documents/projects/plm_choice/data/processed/sprot_pre2024_e1_sub10/sets/train.parquet"
+RES, PAIRS = sys.argv[1], sys.argv[2]
 out=f"{RES}/new_data/pairwise_distances_e1_sub10_train.parquet"
 base=pl.read_parquet(PAIRS)
 print("base", base.shape)

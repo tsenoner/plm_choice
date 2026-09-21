@@ -34,11 +34,18 @@ ARMS = ["clean", "esm1b", "prott5", "prottucker", "ankh_base", "ankh_large", "es
 
 
 def load_matrix(path: Path, ids: list[str]) -> np.ndarray:
+    # mean(axis=0) over a 2-D dataset: the protein-level pooling rule
+    # ridge_pair_distances.py and distance_computation.py share. Identical to a
+    # flatten on the (1, D) cohort2k arms, and not a flatten on an (L, D) one.
+    out = None
     with h5py.File(path, "r") as h:
-        first = np.asarray(h[ids[0]]).ravel()
-        out = np.empty((len(ids), first.size), dtype=np.float32)
         for i, pid in enumerate(ids):
-            out[i] = np.asarray(h[pid]).ravel()
+            emb = np.asarray(h[pid])
+            if emb.ndim > 1:
+                emb = emb.mean(axis=0)
+            if out is None:
+                out = np.empty((len(ids), emb.size), dtype=np.float32)
+            out[i] = emb
     return out
 
 

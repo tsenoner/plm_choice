@@ -91,15 +91,34 @@ def main(argv: list[str] | None = None) -> int:
     b = rng.integers(0, len(ids), size=need)
     keep = (a != b) & (h[a] != h[b])
     a, b = a[keep][: args.n_pairs], b[keep][: args.n_pairs]
+    # The 5% headroom is a guess about the collision and redundancy rate; nothing
+    # guarantees it. Without this, a draw that fell short would write the parquet
+    # anyway and record the short count in summary["n_pairs"], and the docstring's
+    # precision argument ("at n = 5,000,000 the standard error is about
+    # 1/sqrt(n) = 4.5e-4") would be resting on a number nothing checked.
+    if a.size != args.n_pairs:
+        raise SystemExit(
+            f"asked for {args.n_pairs:,} pairs but only {a.size:,} of the {need:,} "
+            f"drawn survived the self-pair and identical-sequence filters; raise the "
+            f"oversampling headroom above 1.05x"
+        )
     print(f"{a.size:,} random pairs kept ({need - keep.sum():,} dropped as self or identical)", flush=True)
 
     frame = {"query": [ids[i] for i in a], "target": [ids[i] for i in b]}
     for arm in arms:
         with h5py.File(args.emb_dir / f"{arm}.h5") as fh:
-            first = np.asarray(fh[ids[0]]).ravel()
-            mat = np.empty((len(ids), first.size), dtype=np.float32)
+            mat = None
             for i, pid in enumerate(ids):
-                mat[i] = np.asarray(fh[pid]).ravel()
+                # Protein-level pooling, the rule scripts/ridge_pair_distances.py and
+                # src/data_preparation/distance_computation.py both use: mean over
+                # axis 0 for a 2-D dataset. Identical to a flatten for the (1, D)
+                # cohort2k files, and a silent flatten of an (L, D) one without it.
+                emb = np.asarray(fh[pid])
+                if emb.ndim > 1:
+                    emb = emb.mean(axis=0)
+                if mat is None:
+                    mat = np.empty((len(ids), emb.size), dtype=np.float32)
+                mat[i] = emb
         frame[f"dist_{arm}"] = pair_distances(mat, a, b)
         del mat
         print(f"  {arm} done", flush=True)

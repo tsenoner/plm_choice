@@ -48,7 +48,11 @@ def normalise(x: np.ndarray, how: str) -> tuple[np.ndarray, float]:
     """Return the scaled values and the divisor, so the caption can state it."""
     if how == "minmax":
         lo, hi = x.min(), x.max()
-        return (x - lo) / (hi - lo), float(hi)
+        # ``hi - lo``, not ``hi``: min-max divides by the SPAN.  Reporting the maximum
+        # here recorded a divisor the rows were never scaled by -- the same conflation
+        # of "max" with "the divisor min-max actually uses" that was fixed in the
+        # summary path and in ridge_divisor_stability.py.
+        return (x - lo) / (hi - lo), float(hi - lo)
     if how == "p99":
         hi = float(np.percentile(x, 99))
         return x / hi, hi

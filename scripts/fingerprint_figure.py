@@ -93,13 +93,18 @@ def main(argv: list[str] | None = None) -> int:
         name, _, path = spec.partition("=")
         loaded[name] = load(Path(path), args.out_dir)
 
-    corr_vlim = args.corr_vlim or symmetric_corr_limit(
-        *(corr for _, _, corr, _, _ in loaded.values())
-    )
-    wass_vmax = args.wass_vmax or max(
-        float(np.nanmax(wass[np.triu_indices(wass.shape[0], 1)]))
-        for _, _, _, wass, _ in loaded.values()
-    )
+    # `is None`, not `or`: 0.0 is a legal-looking value for both and it is falsy, so
+    # `or` would silently swap a caller's 0 for the derived scale instead of letting
+    # the plotter reject it as the clipping value it is.
+    corr_vlim = args.corr_vlim
+    if corr_vlim is None:
+        corr_vlim = symmetric_corr_limit(*(corr for _, _, corr, _, _ in loaded.values()))
+    wass_vmax = args.wass_vmax
+    if wass_vmax is None:
+        wass_vmax = max(
+            float(np.nanmax(wass[np.triu_indices(wass.shape[0], 1)]))
+            for _, _, _, wass, _ in loaded.values()
+        )
     print(
         f"shared correlation scale: [{-corr_vlim:+.2f}, {corr_vlim:+.2f}] "
         f"(x100 on the colourbar: {-corr_vlim * 100:.0f} to {corr_vlim * 100:.0f})"

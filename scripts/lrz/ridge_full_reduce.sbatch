@@ -5,6 +5,11 @@
 #     cd ~/plm_choice_ridge && git pull && mkdir -p logs
 #     sbatch --array=0-14%8 scripts/lrz/ridge_full_reduce.sbatch
 #
+# REQUIRES scripts/lrz/ridge_identical.sbatch to have run first.  The --identical-root
+# below is an INPUT and that job is the only thing that writes it; without it
+# ridge_full_reduce.py falls back to the `distance == 0` rule, the exclusion stops being
+# the same rows in every arm, and n_used -- the pair count in Figure 2's title -- moves.
+#
 # One array task per arm so a single slow arm does not hold the others.  Each task holds one
 # arm's 75.8M float64 distances (~607 MB) plus the sorted copies diptest makes of it, which is
 # what sets --mem: three live copies at 607 MB each plus polars' read buffers stays well under

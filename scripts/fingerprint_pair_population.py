@@ -34,12 +34,23 @@ ARMS = ["clean", "esm1b", "prott5", "prottucker", "ankh_base", "ankh_large", "es
 
 
 def load_matrix(h5_path: Path, ids: list[str]) -> np.ndarray:
-    """Embeddings for `ids`, one row each, float32. Handles the (1, D) arms."""
+    """Embeddings for `ids`, one row each, float32, pooled to protein level.
+
+    ``mean(axis=0)`` over a 2-D dataset is the rule ``ridge_pair_distances.py`` and
+    ``src/data_preparation/distance_computation.py`` both use.  For the (1, D)
+    cohort2k arms it is identical to a flatten; for an (L, D) file a flatten is not a
+    mean, and the only thing that stopped it being used as one was that ragged L
+    happens to break the row assignment below.
+    """
+    out = None
     with h5py.File(h5_path, "r") as h:
-        first = np.asarray(h[ids[0]]).ravel()
-        out = np.empty((len(ids), first.size), dtype=np.float32)
         for i, pid in enumerate(ids):
-            out[i] = np.asarray(h[pid]).ravel()
+            emb = np.asarray(h[pid])
+            if emb.ndim > 1:
+                emb = emb.mean(axis=0)
+            if out is None:
+                out = np.empty((len(ids), emb.size), dtype=np.float32)
+            out[i] = emb
     return out
 
 

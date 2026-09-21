@@ -55,6 +55,14 @@ def _pairs_phrase(summaries: dict) -> str:
     for CLEAN and ESM-1b).  75,849,972 is the corrected pair set *before* identical-
     sequence pairs are removed -- a real number from a different step.  A title that
     restates the data cannot be allowed to disagree with it, so it is derived here.
+
+    It must be handed the summaries of the rows the figure DRAWS, not every summary on
+    disk.  ``ridge_full_reduce.sbatch`` reduces all fifteen arms, but
+    ``from_distribution_summaries`` drops the i.i.d. random baseline and prostt5 before
+    drawing, and the baseline has no missing embeddings and no identical-sequence pairs
+    to lose -- so its ``n_used`` is the largest of the fifteen and ``max(by_count)``
+    below would hand the title a count belonging to a row that is not in the figure.
+    That is the exact failure this function exists to prevent, one arm further out.
     """
     by_count: dict[int, list[str]] = {}
     for arm, s in summaries.items():
@@ -165,6 +173,11 @@ def main(argv: list[str] | None = None) -> int:
     viz = EmbeddingComparisonVisualizer.from_distribution_summaries(
         summary_dir=args.summary_dir, output_dir=args.out_dir
     )
+    # Only the arms that become rows. viz.summaries also holds the ones the
+    # constructor excluded, and a title derived from those describes a figure that was
+    # not drawn -- see _pairs_phrase.
+    drawn = {c.replace("dist_", ""): viz.summaries[c.replace("dist_", "")]
+             for c in viz.dist_cols}
 
     written: list[Path] = []
     for norm in args.norm:
@@ -188,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             quartile_legend=not args.published_look,
             tail_marks=not (args.published_look or args.no_tail_marks),
             legend_loc="row" if args.published_look else args.legend,
-            title=_title(norm, args.title_suffix, viz.summaries),
+            title=_title(norm, args.title_suffix, drawn),
         )
         plt.close(fig)
         (args.out_dir / f"{stem}_distribution_data.json").write_text(

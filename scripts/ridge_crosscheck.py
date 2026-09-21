@@ -46,8 +46,11 @@ def main() -> None:
     )
     print(f"overlapping pairs found in train_ext: {len(old):,}")
     if not len(old):
-        print("NO OVERLAP -- cannot cross-check this way")
-        return
+        # Exit non-zero: this script's whole job is to validate the recompute chain,
+        # and "there was nothing to compare" is a failure to validate, not a pass.
+        # Returning normally made the process exit 0, so a driver under `set -e`
+        # would read a cross-check that never happened as a cross-check that passed.
+        raise SystemExit("NO OVERLAP -- cannot cross-check this way")
 
     merged = old.join(new.select(["query", "target", *shared]), on=["query", "target"],
                       suffix="_new")
