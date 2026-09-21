@@ -29,7 +29,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import polars as pl
 
@@ -41,7 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_source_subset(source_path: Path, columns: List[str]) -> Optional[pl.DataFrame]:
+def load_source_subset(source_path: Path, columns: list[str]) -> pl.DataFrame | None:
     """
     Read only the join keys and the columns being merged from the source parquet.
 
@@ -63,8 +62,8 @@ def load_source_subset(source_path: Path, columns: List[str]) -> Optional[pl.Dat
 def merge_columns(
     source_subset: pl.DataFrame,
     target_path: Path,
-    columns: List[str],
-) -> Dict[str, int]:
+    columns: list[str],
+) -> dict[str, int]:
     """
     Merge specific columns from a source frame into target parquet.
 
@@ -85,7 +84,7 @@ def merge_columns(
     merged = target_df.join(source_subset, on=["query", "target"], how="left")
 
     # Count valid values
-    valid_counts: Dict[str, int] = {}
+    valid_counts: dict[str, int] = {}
     for col in columns:
         valid = len(merged) - merged[col].null_count()
         # is_nan() is only defined on floats; check the kind, not one exact dtype,

@@ -41,9 +41,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from evaluation.canonical_set import canonical_content_sha256, parse_fasta
 from evaluation.population import PopulationError, assert_population
@@ -198,7 +198,7 @@ def verify_analysis(
     manifest_path: Path | str,
     *,
     fasta_path: Path | str | None = None,
-    population_inputs: dict[str, "Iterable[str]"] | None = None,
+    population_inputs: dict[str, Iterable[str]] | None = None,
     esm1b_name: str = "esm1b",
 ) -> VerifyReport:
     """Run the freeze-integrity gate and return a :class:`VerifyReport`.

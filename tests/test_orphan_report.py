@@ -17,8 +17,10 @@ from evaluation.orphan_report import (
     ORPHAN_PARQUET_GUARDS,
     ORPHAN_PER_PAIR_COLUMNS,
     OrphanPopulationError,
-    main as orphan_main,
     orphan_correlation_report,
+)
+from evaluation.orphan_report import (
+    main as orphan_main,
 )
 
 

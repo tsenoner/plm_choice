@@ -27,7 +27,6 @@ import gc
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
 
 import h5py
 import numpy as np
@@ -126,7 +125,7 @@ class EmbeddingDistanceComputer:
         self.embedding_files = self._discover_embedding_files()
         self.embedding_info = self._get_embedding_info()
 
-    def _discover_embedding_files(self) -> List[Path]:
+    def _discover_embedding_files(self) -> list[Path]:
         """Find all H5 embedding files in the directory."""
         embedding_files = list(self.embeddings_dir.glob("*.h5"))
         if not embedding_files:
@@ -138,7 +137,7 @@ class EmbeddingDistanceComputer:
 
         return sorted(embedding_files)
 
-    def _get_embedding_info(self) -> Dict[str, Dict]:
+    def _get_embedding_info(self) -> dict[str, dict]:
         """Get information about each embedding file (dimensions, protein count)."""
         embedding_info = {}
 
@@ -177,8 +176,8 @@ class EmbeddingDistanceComputer:
         return embedding_info
 
     def _load_embedding_for_proteins(
-        self, embedding_file: Path, protein_ids: Set[str]
-    ) -> Dict[str, np.ndarray]:
+        self, embedding_file: Path, protein_ids: set[str]
+    ) -> dict[str, np.ndarray]:
         """
         Load embeddings for specific proteins from an H5 file.
 
@@ -208,8 +207,8 @@ class EmbeddingDistanceComputer:
         self,
         pairs_batch: pl.DataFrame,
         embedding_name: str,
-        embeddings: Dict[str, np.ndarray],
-    ) -> List[float]:
+        embeddings: dict[str, np.ndarray],
+    ) -> list[float]:
         """
         Compute euclidean distances for a batch of protein pairs.
 
@@ -369,7 +368,7 @@ class EmbeddingDistanceComputer:
 
 def validate_inputs(
     input_parquet: Path, embeddings_dir: Path
-) -> Tuple[pl.DataFrame, Path]:
+) -> tuple[pl.DataFrame, Path]:
     """
     Validate input files and directories.
 

@@ -33,10 +33,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
-from evaluation.snn_report import SNN_PARQUET_GUARDS, SNN_PER_QUERY_COLUMNS
 # Shared base helpers. SpecBuildError + write_barrier_spec are also part of this
 # module's public surface (tests import them from here).
 from evaluation.barrier_spec_base import (
@@ -48,6 +47,7 @@ from evaluation.barrier_spec_base import (
     require_grid_size,
     write_barrier_spec,
 )
+from evaluation.snn_report import SNN_PARQUET_GUARDS, SNN_PER_QUERY_COLUMNS
 
 DEFAULT_DISTANCES: tuple[str, ...] = ("cosine", "euclidean", "manhattan")
 

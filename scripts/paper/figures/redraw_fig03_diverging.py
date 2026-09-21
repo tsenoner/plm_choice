@@ -29,15 +29,14 @@ from __future__ import annotations
 
 import json
 import math
-from contextlib import contextmanager
-from pathlib import Path
-
-import matplotlib
-
 
 # These paths were absolute to one machine. They are environment variables now, so an
 # unset one fails here by name rather than as a FileNotFoundError further down.
 import os
+from contextlib import contextmanager
+from pathlib import Path
+
+import matplotlib
 
 
 def _need(var: str) -> str:
@@ -52,13 +51,13 @@ ARTEFACTS = _need("PAPER_ARTEFACTS")
 REPO = _need("REPO")
 
 matplotlib.use("Agg")
+import sys  # noqa: E402
+
 import matplotlib.cm as mcm  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
-
-import sys  # noqa: E402
 
 W = Path(REPO)
 sys.path.insert(0, str(W / "src"))

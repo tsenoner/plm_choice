@@ -30,13 +30,13 @@ Design rules:
 from __future__ import annotations
 
 import math
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from scipy import stats as _scipy_stats
 from scipy.stats import norm as _norm
-
 
 # ---------------------------------------------------------------------------
 # BCa bootstrap

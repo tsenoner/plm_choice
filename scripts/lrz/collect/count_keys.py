@@ -1,4 +1,9 @@
-import h5py, os, glob, sys
+import glob
+import os
+import sys
+
+import h5py
+
 d = sys.argv[1]
 files = sorted(glob.glob(os.path.join(d, "*.h5")))
 print("%-36s %9s %6s %7s  %s" % ("file", "keys", "dim", "GB", "cohort"))

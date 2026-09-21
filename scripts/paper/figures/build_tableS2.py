@@ -15,15 +15,13 @@ cell-by-cell diff, so the change count quoted to the user is measured, not guess
 
 from __future__ import annotations
 
+# These paths were absolute to one machine. They are environment variables now, so an
+# unset one fails here by name rather than as a FileNotFoundError further down.
+import os
 import re
 from pathlib import Path
 
 import pandas as pd
-
-
-# These paths were absolute to one machine. They are environment variables now, so an
-# unset one fails here by name rather than as a FileNotFoundError further down.
-import os
 
 
 def _need(var: str) -> str:

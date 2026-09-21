@@ -18,10 +18,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
+from evaluation.aac_floor_report import aac_floor_report, main
 from evaluation.analysis_barrier import ArtifactSpec, check_artifact
 from evaluation.population import PopulationError
 from evaluation.recall_fp_report import (
@@ -29,7 +29,6 @@ from evaluation.recall_fp_report import (
     PARQUET_GUARDS,
     PER_QUERY_COLUMNS,
 )
-from evaluation.aac_floor_report import aac_floor_report, main
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────

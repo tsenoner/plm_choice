@@ -24,10 +24,11 @@ python plot_ecdf.py --dir out/sprot_pre2024_subset/inference --slices 3 --rows 4
 """
 
 import argparse
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 

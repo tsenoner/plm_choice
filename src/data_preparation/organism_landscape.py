@@ -39,7 +39,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -52,7 +51,7 @@ from scipy.stats import gaussian_kde, ks_2samp
 
 HUMAN_TAX_ID = 9606
 
-MODEL_ORGANISMS: Dict[int, str] = {
+MODEL_ORGANISMS: dict[int, str] = {
     9606: "Human",
     10090: "Mouse",
     7227: "Drosophila",
@@ -61,14 +60,14 @@ MODEL_ORGANISMS: Dict[int, str] = {
     83333: "E. coli K-12",
 }
 
-PARTITION_COLORS: Dict[str, str] = {
+PARTITION_COLORS: dict[str, str] = {
     "human_human": "#1f77b4",
     "human_other": "#ff7f0e",
     "other_other": "#2ca02c",
     "model_model": "#d62728",
 }
 
-PARTITION_LABELS: Dict[str, str] = {
+PARTITION_LABELS: dict[str, str] = {
     "human_human": "Human-Human",
     "human_other": "Human-Other",
     "other_other": "Other-Other",
@@ -91,8 +90,8 @@ logger = logging.getLogger(__name__)
 
 
 def load_organism_mapping(
-    path: Path, target_proteins: Optional[Set[str]] = None
-) -> Dict[str, int]:
+    path: Path, target_proteins: set[str] | None = None
+) -> dict[str, int]:
     """
     Load protein-to-organism mapping from a TSV file.
 
@@ -114,7 +113,7 @@ def load_organism_mapping(
     mapping_df = pl.read_csv(path, separator="\t")
 
     # Normalize column names — accept common variants
-    col_map: Dict[str, str] = {}
+    col_map: dict[str, str] = {}
     for col in mapping_df.columns:
         lower = col.lower().strip()
         if lower in ("protein_id", "accession", "entry", "id"):
@@ -141,7 +140,7 @@ def load_organism_mapping(
     if target_proteins is not None:
         mapping_df = mapping_df.filter(pl.col("protein_id").is_in(target_proteins))
 
-    mapping: Dict[str, int] = dict(
+    mapping: dict[str, int] = dict(
         zip(
             mapping_df["protein_id"].to_list(),
             mapping_df["organism_id"].to_list(),
@@ -170,9 +169,9 @@ def load_organism_mapping(
 
 def partition_pairs(
     pairs_df: pl.DataFrame,
-    organism_map: Dict[str, int],
+    organism_map: dict[str, int],
     include_model_organisms: bool = True,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     Partition protein pairs into organism groups.
 
@@ -216,7 +215,7 @@ def partition_pairs(
     q_is_human = query_org == HUMAN_TAX_ID
     t_is_human = target_org == HUMAN_TAX_ID
 
-    masks: Dict[str, np.ndarray] = {
+    masks: dict[str, np.ndarray] = {
         "human_human": both_annotated & q_is_human & t_is_human,
         "human_other": both_annotated & (q_is_human ^ t_is_human),  # XOR
         "other_other": both_annotated & ~q_is_human & ~t_is_human,
@@ -247,8 +246,8 @@ def partition_pairs(
 
 def compute_partition_stats(
     pairs_df: pl.DataFrame,
-    distance_columns: List[str],
-    masks: Dict[str, np.ndarray],
+    distance_columns: list[str],
+    masks: dict[str, np.ndarray],
 ) -> pl.DataFrame:
     """
     Compute per-partition distribution statistics for each embedding distance.
@@ -265,7 +264,7 @@ def compute_partition_stats(
         Polars DataFrame with columns:
             partition, embedding, count, mean, std, median, q25, q75, min, max
     """
-    rows: List[Dict] = []
+    rows: list[dict] = []
 
     for dist_col in distance_columns:
         if dist_col not in pairs_df.columns:
@@ -317,8 +316,8 @@ def compute_partition_stats(
 
 def compute_ks_tests(
     pairs_df: pl.DataFrame,
-    distance_columns: List[str],
-    masks: Dict[str, np.ndarray],
+    distance_columns: list[str],
+    masks: dict[str, np.ndarray],
 ) -> pl.DataFrame:
     """
     Run two-sample Kolmogorov-Smirnov tests between all partition pairs.
@@ -336,7 +335,7 @@ def compute_ks_tests(
             embedding, partition_a, partition_b, ks_statistic, p_value, n_a, n_b
     """
     partition_names = list(masks.keys())
-    rows: List[Dict] = []
+    rows: list[dict] = []
 
     for dist_col in distance_columns:
         if dist_col not in pairs_df.columns:
@@ -345,7 +344,7 @@ def compute_ks_tests(
         all_distances = np.asarray(pairs_df[dist_col].to_numpy(), dtype=np.float64)
 
         # Extract valid distances per partition
-        partition_values: Dict[str, np.ndarray] = {}
+        partition_values: dict[str, np.ndarray] = {}
         for name, mask in masks.items():
             vals = all_distances[mask]
             partition_values[name] = vals[~np.isnan(vals)]
@@ -399,7 +398,7 @@ def compute_ks_tests(
 def plot_partition_densities(
     pairs_df: pl.DataFrame,
     dist_col: str,
-    masks: Dict[str, np.ndarray],
+    masks: dict[str, np.ndarray],
     output_path: Path,
     max_kde_points: int = 500,
 ) -> None:
@@ -424,7 +423,7 @@ def plot_partition_densities(
     x_max_global = -np.inf
 
     # Collect valid data for all partitions first (for x-axis range)
-    partition_data: Dict[str, np.ndarray] = {}
+    partition_data: dict[str, np.ndarray] = {}
     for name, mask in masks.items():
         vals = all_distances[mask]
         valid = vals[~np.isnan(vals)]
@@ -493,7 +492,7 @@ def plot_partition_densities(
 # ---------------------------------------------------------------------------
 
 
-def detect_distance_columns(pairs_df: pl.DataFrame) -> List[str]:
+def detect_distance_columns(pairs_df: pl.DataFrame) -> list[str]:
     """Find all dist_* columns in the DataFrame."""
     return [col for col in pairs_df.columns if col.startswith("dist_")]
 
@@ -506,9 +505,9 @@ def detect_distance_columns(pairs_df: pl.DataFrame) -> List[str]:
 def run_organism_landscape(
     pairs_parquet: Path,
     organism_mapping_path: Path,
-    distance_columns: Optional[List[str]],
+    distance_columns: list[str] | None,
     output_dir: Path,
-    sample_size: Optional[int] = None,
+    sample_size: int | None = None,
     include_model_organisms: bool = True,
 ) -> None:
     """

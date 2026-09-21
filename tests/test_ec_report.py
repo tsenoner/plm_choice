@@ -157,6 +157,7 @@ def test_report_writes_parquet_and_returns_manifest(tmp_path):
 
 
 import h5py
+
 from evaluation.ec_report import main as ec_main
 
 

@@ -33,23 +33,25 @@ python infer_pairs.py \
 """
 
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
-from typing import Tuple
+
 import numpy as np
 import pandas as pd
-import torch
 import pytorch_lightning as pl
+import torch
 
 # --------------------------------------------------------------------------- #
 # Project-specific imports – adjust package path if needed
 from shared.datasets import create_single_loader
+from shared.helpers import get_device
 from training.models import (
     FNNPredictor,
-    LinearRegressionPredictor,
     LinearDistancePredictor,
+    LinearRegressionPredictor,
 )
-from shared.helpers import get_device
+
 # --------------------------------------------------------------------------- #
 
 MODEL_CLASSES = {
@@ -95,7 +97,7 @@ def make_loader(
 @torch.no_grad()
 def predict(
     model: pl.LightningModule, loader: torch.utils.data.DataLoader, device: torch.device
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     preds, tgts = [], []
     for q_emb, t_emb, val in loader:
         q_emb = q_emb.to(device, non_blocking=True)

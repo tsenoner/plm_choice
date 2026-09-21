@@ -28,9 +28,11 @@ python batch_infer.py \
 """
 
 from __future__ import annotations
+
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
+
 from evaluation import infer_pairs as infer_mod
 
 

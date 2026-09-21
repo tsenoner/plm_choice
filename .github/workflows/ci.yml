@@ -38,10 +38,14 @@ jobs:
         run: uv lock --check
 
       - name: Lint (new code — gating)
-        # The legacy tree carries ~683 pre-existing ruff findings; fixing them is
-        # a large mechanical diff that does not belong on the resubmission's
-        # critical path. Gate the CLI package and the tests written against it so
-        # new code cannot add to the pile, and clear the backlog after the paper.
+        # The legacy tree's mechanical findings have been cleared: `ruff check
+        # --fix` took it from 801 to 145. What is left needs judgement rather than
+        # a flag -- 42 zip() without strict=, 34 semicolon statements, 19 imports
+        # below the top of their file, and a handful (B023, B904, B006, E722) where
+        # the fix can change behaviour and so needs reading the surrounding code.
+        # That does not belong on the resubmission's critical path. Gate the CLI
+        # package and the tests written against it so new code cannot add to the
+        # pile, and clear the remainder after the paper.
         run: uv run ruff check src/plm_choice
 
       - name: Lint (whole repo — informational)

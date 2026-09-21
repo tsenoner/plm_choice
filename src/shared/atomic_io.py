@@ -33,8 +33,8 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from evaluation.analysis_barrier import ArtifactSpec, check_artifact
 
@@ -50,7 +50,7 @@ def _resolve_target(final_path: Path, mode: str, timestamp: str | None) -> Path:
     if mode == "timestamp":
         if not final_path.exists():
             return final_path
-        ts = timestamp or _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ts = timestamp or _dt.datetime.now(_dt.UTC).strftime("%Y%m%d_%H%M%S")
         cand = _timestamped(final_path, ts)
         i = 1
         while cand.exists():  # same-second rerun / explicit duplicate stamp

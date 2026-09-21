@@ -20,7 +20,6 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
@@ -105,7 +104,7 @@ def distance_column_sort_key(col: str) -> tuple:
 #: ``offset`` names the summary field subtracted before dividing, ``stat`` the one
 #: divided by; ``"max"`` and ``"min"`` are top-level summary fields, anything else is a
 #: key of ``summary["quantiles"]``.
-RIDGE_NORMALISATIONS: Dict[str, Dict[str, object]] = {
+RIDGE_NORMALISATIONS: dict[str, dict[str, object]] = {
     # The published choice: sklearn's MinMaxScaler, (x - min) / (max - min).  Anchors on
     # the single most distant pair out of ~76 million, so one outlier fixes the scale for
     # the whole row; an arm whose tail reaches further gets its entire bulk squeezed
@@ -158,7 +157,7 @@ RIDGE_TAIL_PERCENTILES = ("p1", "p99")
 #: pattern typed out a second time for the legend, a change to one of them produces a
 #: key that lies about the lines.
 _RIDGE_QUARTILE_STYLE = {"color": "0.12", "linestyle": (0, (1.6, 1.4)), "linewidth": 2.6}
-RIDGE_PERCENTILE_STYLES: Dict[str, Dict] = {
+RIDGE_PERCENTILE_STYLES: dict[str, dict] = {
     "q25": _RIDGE_QUARTILE_STYLE,
     "median": {"color": "black", "linestyle": "-", "linewidth": 3.4},
     "q75": _RIDGE_QUARTILE_STYLE,
@@ -278,7 +277,7 @@ def _assert_legend_clear(fig, legend, axes, dpi: int) -> None:
 
 
 def _ridge_anchor(
-    summary: Dict, field: Optional[str], default: Optional[float] = None
+    summary: dict, field: str | None, default: float | None = None
 ) -> float:
     """Resolve one ``RIDGE_NORMALISATIONS`` anchor against a per-arm summary.
 
@@ -321,11 +320,11 @@ class EmbeddingComparisonVisualizer:
 
     def __init__(
         self,
-        data_path: Optional[Union[str, Path]] = None,
-        output_dir: Union[str, Path] = Path("out/embedding_comparison"),
-        sample_size: Optional[int] = None,
+        data_path: str | Path | None = None,
+        output_dir: str | Path = Path("out/embedding_comparison"),
+        sample_size: int | None = None,
         font_scale: float = 1.0,
-        columns: Optional[List[str]] = None,
+        columns: list[str] | None = None,
     ):
         """
         Initialize the visualizer.
@@ -374,7 +373,7 @@ class EmbeddingComparisonVisualizer:
         self._setup_plotting_style()
 
     @staticmethod
-    def _sort_dist_cols(dist_cols: List[str]) -> List[str]:
+    def _sort_dist_cols(dist_cols: list[str]) -> list[str]:
         """Order arms by family, then size within family — the figure's row order.
 
         A thin delegate to `distance_column_sort_key`, which is the same ordering as a
@@ -388,9 +387,9 @@ class EmbeddingComparisonVisualizer:
     @classmethod
     def from_distribution_summaries(
         cls,
-        summary_dir: Union[str, Path],
-        output_dir: Union[str, Path],
-        arms: Optional[List[str]] = None,
+        summary_dir: str | Path,
+        output_dir: str | Path,
+        arms: list[str] | None = None,
         font_scale: float = 1.0,
     ) -> "EmbeddingComparisonVisualizer":
         """Build a visualizer from ``scripts/ridge_full_reduce.py`` output.
@@ -404,7 +403,7 @@ class EmbeddingComparisonVisualizer:
         plotting something else.
         """
         summary_dir = Path(summary_dir)
-        summaries: Dict[str, Dict] = {}
+        summaries: dict[str, dict] = {}
         for path in sorted(summary_dir.glob("*.json")):
             arm = path.stem
             if arms is not None and arm not in arms:
@@ -451,8 +450,8 @@ class EmbeddingComparisonVisualizer:
     @classmethod
     def from_matrices(
         cls,
-        columns: List[str],
-        output_dir: Union[str, Path],
+        columns: list[str],
+        output_dir: str | Path,
         font_scale: float = 1.0,
     ) -> "EmbeddingComparisonVisualizer":
         """Build a visualizer that can draw the fingerprint and nothing else.
@@ -483,7 +482,7 @@ class EmbeddingComparisonVisualizer:
         self._setup_plotting_style()
         return self
 
-    def _load_data(self, data_path: Union[str, Path]) -> pl.DataFrame:
+    def _load_data(self, data_path: str | Path) -> pl.DataFrame:
         """Load data from various sources, returning polars DataFrame."""
         data_path = Path(data_path)
         logger.info(f"Loading data from {data_path}")
@@ -502,7 +501,7 @@ class EmbeddingComparisonVisualizer:
 
         return df
 
-    def _identify_distance_columns(self) -> List[str]:
+    def _identify_distance_columns(self) -> list[str]:
         """Identify and validate distance columns in the dataset, excluding random embeddings."""
         # Get all distance columns
         all_dist_cols = [
@@ -581,7 +580,7 @@ class EmbeddingComparisonVisualizer:
         embedding_name = dist_col.replace("dist_", "").lower()
         return EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown")
 
-    def _get_family_boundaries(self, dist_cols: List[str]) -> List[int]:
+    def _get_family_boundaries(self, dist_cols: list[str]) -> list[int]:
         """Get indices where family changes occur."""
         boundaries = [0]
         prev_family = None
@@ -593,7 +592,7 @@ class EmbeddingComparisonVisualizer:
         boundaries.append(len(dist_cols))
         return boundaries
 
-    def _cache_fingerprint(self) -> Dict:
+    def _cache_fingerprint(self) -> dict:
         """Identify the inputs a cache entry was computed from.
 
         A cache keyed on filename alone cannot tell a full run from a
@@ -609,7 +608,7 @@ class EmbeddingComparisonVisualizer:
             "schema_version": CACHE_SCHEMA_VERSION,
         }
 
-    def _save_json_data(self, data: Dict, save_path: Path, description: str):
+    def _save_json_data(self, data: dict, save_path: Path, description: str):
         """Helper method to save JSON data with consistent logging."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
         data = dict(data)
@@ -622,7 +621,7 @@ class EmbeddingComparisonVisualizer:
 
     def _load_cached_data(
         self, cache_path: Path, force_recompute: bool
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Load a cache entry only if it was computed from the same inputs.
 
         Returns None (i.e. recompute) when the cache is stale or unfingerprinted,
@@ -631,7 +630,7 @@ class EmbeddingComparisonVisualizer:
         if force_recompute or not cache_path.exists():
             return None
 
-        with open(cache_path, "r") as f:
+        with open(cache_path) as f:
             data = json.load(f)
 
         stored = (data.get("metadata") or {}).get("_fingerprint")
@@ -664,8 +663,8 @@ class EmbeddingComparisonVisualizer:
     # --- Hexagonal Distance Comparison ---
 
     def compute_hexbin_data(
-        self, gridsize: int = 50, save_path: Optional[Path] = None
-    ) -> Dict:
+        self, gridsize: int = 50, save_path: Path | None = None
+    ) -> dict:
         """Pre-compute hexbin data for distance comparisons."""
         logger.info("Computing hexbin data for distance comparisons...")
 
@@ -717,10 +716,10 @@ class EmbeddingComparisonVisualizer:
 
     def plot_hexagonal_distance_comparison(
         self,
-        hexbin_data: Optional[Dict] = None,
+        hexbin_data: dict | None = None,
         gridsize: int = 50,
-        save_path: Optional[Path] = None,
-    ) -> Tuple[plt.Figure, np.ndarray]:
+        save_path: Path | None = None,
+    ) -> tuple[plt.Figure, np.ndarray]:
         """Create a grid of hexbin plots showing distance comparisons between embeddings."""
         if hexbin_data is None:
             hexbin_data = self.compute_hexbin_data(gridsize)
@@ -834,7 +833,7 @@ class EmbeddingComparisonVisualizer:
 
         return fig, axes
 
-    def _plot_hexbin_pair(self, ax: plt.Axes, data: Dict, vmax: float):
+    def _plot_hexbin_pair(self, ax: plt.Axes, data: dict, vmax: float):
         """Plot a single hexbin pair on the given axes."""
         counts = np.array(data["counts"])
         xedges = np.array(data["xedges"])
@@ -851,7 +850,7 @@ class EmbeddingComparisonVisualizer:
 
     # --- Correlation Analysis ---
 
-    def compute_correlation_data(self, save_path: Optional[Path] = None) -> Dict:
+    def compute_correlation_data(self, save_path: Path | None = None) -> dict:
         """Pre-compute Spearman correlations and confidence intervals for distance columns."""
         logger.info("Computing correlation data...")
 
@@ -903,10 +902,10 @@ class EmbeddingComparisonVisualizer:
 
     def plot_correlation_heatmap(
         self,
-        correlation_data: Optional[Dict] = None,
+        correlation_data: dict | None = None,
         show_ci: bool = False,
-        save_path: Optional[Path] = None,
-    ) -> Tuple[plt.Figure, plt.Axes]:
+        save_path: Path | None = None,
+    ) -> tuple[plt.Figure, plt.Axes]:
         """Create a correlation heatmap from pre-computed correlation data."""
         if correlation_data is None:
             correlation_data = self.compute_correlation_data()
@@ -953,7 +952,7 @@ class EmbeddingComparisonVisualizer:
         return fig, ax
 
     def _add_correlation_annotations(
-        self, ax: plt.Axes, data: Dict, show_ci: bool, n: int
+        self, ax: plt.Axes, data: dict, show_ci: bool, n: int
     ):
         """Add correlation annotations to the heatmap."""
         correlations = np.array(data["correlations"])
@@ -1036,7 +1035,7 @@ class EmbeddingComparisonVisualizer:
         scaler = MinMaxScaler()
         return scaler.fit_transform(x_clean.reshape(-1, 1)).ravel()
 
-    def _compute_wasserstein_pair(self, col1: str, col2: str) -> Tuple[float, int]:
+    def _compute_wasserstein_pair(self, col1: str, col2: str) -> tuple[float, int]:
         """Compute Wasserstein distance between two columns."""
         # Create a mask for rows where both columns have valid values
         mask = ~(self.df[col1].is_nan() | self.df[col2].is_nan())
@@ -1064,7 +1063,7 @@ class EmbeddingComparisonVisualizer:
             )
             return np.nan, len(valid_df)
 
-    def compute_wasserstein_data(self, save_path: Optional[Path] = None) -> Dict:
+    def compute_wasserstein_data(self, save_path: Path | None = None) -> dict:
         """Compute Wasserstein distances between all pairs of normalized distance distributions."""
         logger.info("Computing Wasserstein distances...")
 
@@ -1100,11 +1099,11 @@ class EmbeddingComparisonVisualizer:
 
     def plot_wasserstein_heatmap(
         self,
-        wasserstein_data: Optional[Dict] = None,
+        wasserstein_data: dict | None = None,
         show_values: bool = True,
         cmap: str = "Blues",
-        save_path: Optional[Path] = None,
-    ) -> Tuple[plt.Figure, plt.Axes]:
+        save_path: Path | None = None,
+    ) -> tuple[plt.Figure, plt.Axes]:
         """Create a heatmap from pre-computed Wasserstein distance data."""
         if wasserstein_data is None:
             wasserstein_data = self.compute_wasserstein_data()
@@ -1152,7 +1151,7 @@ class EmbeddingComparisonVisualizer:
         return fig, ax
 
     def _add_wasserstein_annotations(
-        self, ax: plt.Axes, distances: np.ndarray, columns: List[str], cmap: str, n: int
+        self, ax: plt.Axes, distances: np.ndarray, columns: list[str], cmap: str, n: int
     ):
         """Add annotations to Wasserstein heatmap with optimized text colors."""
         colormap = plt.colormaps[cmap]
@@ -1203,21 +1202,21 @@ class EmbeddingComparisonVisualizer:
 
     def plot_ridge_distributions(
         self,
-        distribution_data: Optional[Dict] = None,
+        distribution_data: dict | None = None,
         show_median: bool = True,
         alpha: float = 0.8,
-        save_path: Optional[Path] = None,
-        ranking_csv: Optional[Path] = None,
+        save_path: Path | None = None,
+        ranking_csv: Path | None = None,
         overlap: float = 0.25,
         row_height: float = 1.0,
-        xlim: Optional[Tuple[float, float]] = None,
-        title: Optional[str] = None,
+        xlim: tuple[float, float] | None = None,
+        title: str | None = None,
         iqr_band: bool = False,
         quartile_labels: bool = False,
         quartile_legend: bool = False,
         tail_marks: bool = False,
         legend_loc: str = "row",
-    ) -> Tuple[plt.Figure, plt.Axes]:
+    ) -> tuple[plt.Figure, plt.Axes]:
         """Create a ridge plot using pre-computed distribution data.
 
         The defaults reproduce the published Figure 2 exactly; every new argument is
@@ -1309,7 +1308,7 @@ class EmbeddingComparisonVisualizer:
 
         # Extract or estimate percentile values from pre-computed distribution data
         percentile_data = {}
-        tail_data: Dict[str, Dict[str, float]] = {}
+        tail_data: dict[str, dict[str, float]] = {}
         if show_median:
             logger.info(
                 "Extracting/estimating percentiles from precomputed distribution data..."
@@ -1405,7 +1404,7 @@ class EmbeddingComparisonVisualizer:
         gs = fig.add_gridspec(len(plm_names), 1, hspace=-abs(overlap))
 
         axes = []
-        tail_marks_to_draw: List[Tuple] = []
+        tail_marks_to_draw: list[tuple] = []
         for i, plm_name in enumerate(plm_names):
             # Create subplot
             ax = fig.add_subplot(gs[i])
@@ -1828,9 +1827,9 @@ class EmbeddingComparisonVisualizer:
         self,
         normalisation: str = "p99",
         grid: int = 500,
-        xlim: Optional[Tuple[float, float]] = None,
-        save_path: Optional[Path] = None,
-    ) -> Dict:
+        xlim: tuple[float, float] | None = None,
+        save_path: Path | None = None,
+    ) -> dict:
         """Build ridge-plot densities from the cluster-reduced histograms.
 
         Why a histogram and not a KDE over the values.  ``compute_distribution_data``
@@ -1883,7 +1882,7 @@ class EmbeddingComparisonVisualizer:
         x_range = 0.5 * (x_edges[:-1] + x_edges[1:])
         dx = float(x_edges[1] - x_edges[0])
 
-        distributions: Dict[str, Dict] = {}
+        distributions: dict[str, dict] = {}
         for col in self.dist_cols:
             arm = col.replace("dist_", "")
             summary = self.summaries[arm]
@@ -2009,8 +2008,8 @@ class EmbeddingComparisonVisualizer:
         return data
 
     def compute_distribution_data(
-        self, normalize: bool = False, save_path: Optional[Path] = None
-    ) -> Dict:
+        self, normalize: bool = False, save_path: Path | None = None
+    ) -> dict:
         """Pre-compute distribution data for plotting."""
         logger.info(f"Computing distribution data (normalize={normalize})...")
 
@@ -2073,7 +2072,7 @@ class EmbeddingComparisonVisualizer:
         return distribution_data
 
     def compute_hartigan_dip_test(
-        self, save_path: Optional[Path] = None
+        self, save_path: Path | None = None
     ) -> pl.DataFrame:
         """
         Compute Hartigan's dip test on normalized distance distributions for each PLM.
@@ -2213,21 +2212,21 @@ class EmbeddingComparisonVisualizer:
             # Save manuscript table
             df_manuscript.write_csv(save_path)
             logger.info(f"\nManuscript table saved to {save_path}")
-            logger.info(f"Columns: Embedding, Dip Statistic (4 decimals), p-value")
-            logger.info(f"Sorted by: PLM family, then parameter size within family")
+            logger.info("Columns: Embedding, Dip Statistic (4 decimals), p-value")
+            logger.info("Sorted by: PLM family, then parameter size within family")
 
         return df_results
 
     def plot_distributions(
         self,
-        distribution_data: Optional[Dict] = None,
+        distribution_data: dict | None = None,
         normalize: bool = False,
         alpha: float = 0.05,
         linewidth: float = 2.5,
         show_peaks: bool = True,
-        y_break: Optional[Tuple[float, float]] = None,
-        save_path: Optional[Path] = None,
-    ) -> Tuple[plt.Figure, Union[plt.Axes, Tuple[plt.Axes, plt.Axes]]]:
+        y_break: tuple[float, float] | None = None,
+        save_path: Path | None = None,
+    ) -> tuple[plt.Figure, plt.Axes | tuple[plt.Axes, plt.Axes]]:
         """Create distribution plots from pre-computed data."""
         if distribution_data is None:
             distribution_data = self.compute_distribution_data(normalize)
@@ -2278,14 +2277,14 @@ class EmbeddingComparisonVisualizer:
 
     def _create_single_distribution_plot(
         self,
-        distribution_data: Dict,
-        color_dict: Dict,
+        distribution_data: dict,
+        color_dict: dict,
         alpha: float,
         linewidth: float,
         show_peaks: bool,
-        font_sizes: Dict,
-        figsize: Tuple,
-    ) -> Tuple[plt.Figure, plt.Axes]:
+        font_sizes: dict,
+        figsize: tuple,
+    ) -> tuple[plt.Figure, plt.Axes]:
         """Create a single distribution plot."""
         fig, ax = plt.subplots(figsize=figsize)
         fig.patch.set_facecolor("white")
@@ -2341,15 +2340,15 @@ class EmbeddingComparisonVisualizer:
 
     def _create_broken_distribution_plot(
         self,
-        distribution_data: Dict,
-        color_dict: Dict,
+        distribution_data: dict,
+        color_dict: dict,
         alpha: float,
         linewidth: float,
         show_peaks: bool,
-        y_break: Tuple[float, float],
-        font_sizes: Dict,
-        figsize: Tuple,
-    ) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes]]:
+        y_break: tuple[float, float],
+        font_sizes: dict,
+        figsize: tuple,
+    ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
         """Create a distribution plot with broken y-axis."""
         fig = plt.figure(figsize=figsize)
         gs = fig.add_gridspec(2, 1, height_ratios=[1, 1.5], hspace=0.08)
@@ -2446,7 +2445,7 @@ class EmbeddingComparisonVisualizer:
         return fig, (ax1, ax2)
 
     def _add_peak_labels_smart(
-        self, ax: plt.Axes, peak_data: List[Tuple[float, float, str, str]]
+        self, ax: plt.Axes, peak_data: list[tuple[float, float, str, str]]
     ):
         """Add peak labels with smart positioning to avoid overlaps."""
         if not peak_data:
@@ -2517,7 +2516,7 @@ class EmbeddingComparisonVisualizer:
         ax.plot([x, x], [y, text_y], color=color, linestyle=":", linewidth=1, alpha=0.5)
 
     def _customize_distribution_plot(
-        self, ax: plt.Axes, distribution_data: Dict, font_sizes: Dict
+        self, ax: plt.Axes, distribution_data: dict, font_sizes: dict
     ):
         """Apply common customizations to distribution plots."""
         is_normalized = distribution_data["metadata"]["normalized"]
@@ -2551,8 +2550,8 @@ class EmbeddingComparisonVisualizer:
     # --- Violin Plot Analysis ---
 
     def create_violin_plot_comparison(
-        self, sample_size: int = 10_000, save_path: Optional[Path] = None
-    ) -> Tuple[plt.Figure, np.ndarray]:
+        self, sample_size: int = 10_000, save_path: Path | None = None
+    ) -> tuple[plt.Figure, np.ndarray]:
         """Create violin plots comparing PLM distance differences.
 
         ``sample_size`` subsamples the pair table because the violins are drawn
@@ -2617,7 +2616,7 @@ class EmbeddingComparisonVisualizer:
 
     def _compute_violin_data(
         self, normalized_data: pl.DataFrame, n_models: int
-    ) -> Tuple[Dict, Dict, float, float]:
+    ) -> tuple[dict, dict, float, float]:
         """Compute differences and statistics for violin plots."""
         all_medians = []
         differences = {}
@@ -2652,8 +2651,8 @@ class EmbeddingComparisonVisualizer:
     def _create_violin_plots(
         self,
         axes: np.ndarray,
-        differences: Dict,
-        row_ylims: Dict,
+        differences: dict,
+        row_ylims: dict,
         min_median: float,
         max_median: float,
         n_models: int,
@@ -2717,7 +2716,7 @@ class EmbeddingComparisonVisualizer:
         diff: pl.Series,
         median: float,
         gray_val: float,
-        ylim: Optional[Tuple[float, float]],
+        ylim: tuple[float, float] | None,
     ):
         """Create a single violin plot with consistent styling."""
         sns.violinplot(y=diff.drop_nulls(), ax=ax, inner="box", color=str(gray_val))
@@ -2761,7 +2760,7 @@ class EmbeddingComparisonVisualizer:
 
     def generate_all_visualizations(
         self, force_recompute: bool = False
-    ) -> Dict[str, Path]:
+    ) -> dict[str, Path]:
         """Generate all visualization types and save them to the output directory."""
         logger.info("Generating all embedding comparison visualizations...")
 
@@ -2873,13 +2872,13 @@ class EmbeddingComparisonVisualizer:
 
     def plot_combined_wasserstein_correlation(
         self,
-        wasserstein_data: Optional[Dict] = None,
-        correlation_data: Optional[Dict] = None,
+        wasserstein_data: dict | None = None,
+        correlation_data: dict | None = None,
         gridsize: int = 50,
-        save_path: Optional[Path] = None,
-        corr_vlim: Optional[float] = None,
-        wass_vmax: Optional[float] = None,
-    ) -> Tuple[plt.Figure, np.ndarray]:
+        save_path: Path | None = None,
+        corr_vlim: float | None = None,
+        wass_vmax: float | None = None,
+    ) -> tuple[plt.Figure, np.ndarray]:
         """Create a combined plot with Wasserstein distance (upper triangle),
         model names (diagonal), and correlation values (lower triangle).
 
@@ -3193,7 +3192,7 @@ class EmbeddingComparisonVisualizer:
         return fig, axes
 
     def _add_family_grouping_combined(
-        self, fig: plt.Figure, axes: np.ndarray, dist_cols: List[str]
+        self, fig: plt.Figure, axes: np.ndarray, dist_cols: list[str]
     ):
         """Add thick black frames around PLM families (2+ members only) in combined plot."""
         boundaries = self._get_family_boundaries(dist_cols)

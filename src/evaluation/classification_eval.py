@@ -39,7 +39,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 import polars as pl
@@ -91,7 +90,7 @@ logger = logging.getLogger(__name__)
 
 def build_same_level_labels(
     pairs_df: pl.DataFrame,
-    protein_classifications: Dict[str, str],
+    protein_classifications: dict[str, str],
 ) -> np.ndarray:
     """
     Build boolean labels: True if both proteins share the same classification.
@@ -129,8 +128,8 @@ def build_same_level_labels(
 
 def evaluate_at_hierarchy_levels(
     pairs_df: pl.DataFrame,
-    distance_columns: List[str],
-    classification_map: Dict[str, Dict[str, str]],
+    distance_columns: list[str],
+    classification_map: dict[str, dict[str, str]],
 ) -> pl.DataFrame:
     """
     Evaluate all distance columns at all hierarchy levels.
@@ -214,8 +213,8 @@ def evaluate_at_hierarchy_levels(
 
 def load_classifications_from_parquet(
     classification_path: Path,
-    hierarchy_columns: List[str],
-) -> Dict[str, Dict[str, str]]:
+    hierarchy_columns: list[str],
+) -> dict[str, dict[str, str]]:
     """
     Load protein classifications from a parquet file.
 

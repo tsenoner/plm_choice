@@ -15,8 +15,9 @@ silent-under-coverage grid-size guard, the per-cell orphan/reconstruct *tail*
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence, TypeVar
+from typing import TypeVar
 
 from shared.atomic_io import atomic_write
 

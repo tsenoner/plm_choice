@@ -20,7 +20,6 @@ import pandas as pd
 import pytest
 
 from evaluation.analysis_barrier import ArtifactSpec, check_artifact
-from evaluation.population import PopulationError
 from evaluation.cross_plm_report import (
     CROSS_PLM_METRICS,
     CROSS_PLM_PARQUET_GUARDS,
@@ -28,6 +27,7 @@ from evaluation.cross_plm_report import (
     cross_plm_report,
     main,
 )
+from evaluation.population import PopulationError
 
 IDS = ["P1", "P2", "P3", "P4", "P5", "P6"]
 

@@ -7,16 +7,15 @@ from __future__ import annotations
 
 import argparse
 import json
+
+# These paths were absolute to one machine. They are environment variables now, so an
+# unset one fails here by name rather than as a FileNotFoundError further down.
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
-
-
-# These paths were absolute to one machine. They are environment variables now, so an
-# unset one fails here by name rather than as a FileNotFoundError further down.
-import os
 
 
 def _need(var: str) -> str:
@@ -861,8 +860,8 @@ def main() -> None:
         lines.append("")
         lines.append(
             f"Largest rank move: {int((rank_before - rank_after).abs().max())} place(s); the term "
-            f"costs every arm {abs((sens_cell.loc[shared, 'mean'] - main_cell.loc[shared, 'mean'])).min():.4f}"
-            f"-{abs((sens_cell.loc[shared, 'mean'] - main_cell.loc[shared, 'mean'])).max():.4f} F1 and "
+            f"costs every arm {abs(sens_cell.loc[shared, 'mean'] - main_cell.loc[shared, 'mean']).min():.4f}"
+            f"-{abs(sens_cell.loc[shared, 'mean'] - main_cell.loc[shared, 'mean']).max():.4f} F1 and "
             f"the chance level {main_cell['chance'].iloc[0] - sens_cell['chance'].iloc[0]:.4f}, so the "
             "ranking and the pLM-vs-homology gaps are unchanged. Maximum |delta| on `wang_bma`: "
             f"{wang_delta:.1e} (unpropagated, as designed)."

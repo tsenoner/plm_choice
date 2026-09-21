@@ -1,5 +1,9 @@
 """Walk models/<dataset>/<model>/<target>/<arm>/evaluation_results/*_metrics.txt -> one CSV row each."""
-import csv, os, re, sys
+import csv
+import os
+import re
+import sys
+
 ROOT = os.path.expanduser("~/plm_choice/models")
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/c1_strat/probe_metrics.csv")
 rows, keys = [], []

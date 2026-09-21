@@ -19,10 +19,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
-from evaluation.orphan_report import ORPHAN_PARQUET_GUARDS, ORPHAN_PER_PAIR_COLUMNS
 from evaluation.barrier_spec_base import (
     SpecBuildError,
     check_per_query_columns_drift,
@@ -32,6 +31,7 @@ from evaluation.barrier_spec_base import (
     require_grid_size,
     write_barrier_spec,
 )
+from evaluation.orphan_report import ORPHAN_PARQUET_GUARDS, ORPHAN_PER_PAIR_COLUMNS
 
 # The published orphan metric is cosine-only — the grid has no distance axis.
 DISTANCE: str = "cosine"

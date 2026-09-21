@@ -1,11 +1,12 @@
 import argparse
-import h5py
-import numpy as np
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
-from pathlib import Path
 import logging
 import warnings
+from pathlib import Path
+
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.decomposition import PCA
 
 
 def reduce_embeddings_with_pca(

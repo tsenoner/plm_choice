@@ -177,6 +177,7 @@ def test_cli_collision_returns_2_and_writes_nothing(tmp_path):
 
 def _make_real_recall(tmp_path):
     import h5py
+
     from evaluation.recall_fp_report import main as recall_main
     emb = {"P1": [0.0, 0.0], "P2": [0.1, 0.0], "P3": [5.0, 5.0], "P4": [5.1, 5.0]}
     h5 = tmp_path / "prott5.h5"
@@ -228,9 +229,9 @@ def test_cli_malformed_spec_file_returns_2(tmp_path):
 
 
 def test_cross_arm_merge_passes_real_barrier_and_attributes_failures(tmp_path):
+    from evaluation.barrier_spec_base import write_barrier_spec
     from evaluation.recall_fp_barrier_spec import build_recall_fp_barrier_spec
     from evaluation.snn_barrier_spec import build_snn_barrier_spec
-    from evaluation.barrier_spec_base import write_barrier_spec
 
     rdir = _make_real_recall(tmp_path)
     sdir = _make_real_snn_cell(tmp_path)

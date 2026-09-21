@@ -41,7 +41,6 @@ import sys
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import polars as pl
@@ -88,7 +87,7 @@ class GOTerm:
         self.id = id
         self.name = name
         self.namespace = namespace
-        self.parents: List[Tuple[str, str]] = []  # [(parent_id, relation_type), ...]
+        self.parents: list[tuple[str, str]] = []  # [(parent_id, relation_type), ...]
         self.is_obsolete = False
 
 
@@ -137,7 +136,7 @@ def download_obo(obo_path: Path) -> None:
     logger.info(f"Saved to {obo_path} ({obo_path.stat().st_size / 1e6:.1f} MB)")
 
 
-def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
+def parse_obo(obo_path: Path) -> dict[str, GOTerm]:
     """
     Parse go-basic.obo into a dict of GOTerm objects.
 
@@ -145,12 +144,12 @@ def parse_obo(obo_path: Path) -> Dict[str, GOTerm]:
     term IDs, namespaces, and parent relationships (is_a + part_of).
     We avoid goatools dependency to keep this self-contained.
     """
-    terms: Dict[str, GOTerm] = {}
+    terms: dict[str, GOTerm] = {}
     # `current_term is not None` *is* the "inside a [Term] block" flag; a second
     # boolean would only be one more thing to keep consistent with it.
-    current_term: Optional[GOTerm] = None
+    current_term: GOTerm | None = None
 
-    def _flush(term: Optional[GOTerm]) -> None:
+    def _flush(term: GOTerm | None) -> None:
         """Store a finished [Term] block, unless it is empty or obsolete."""
         if term and term.id and not term.is_obsolete:
             terms[term.id] = term
@@ -227,17 +226,17 @@ class WangSimilarity:
                     / (SV(A) + SV(B))
     """
 
-    def __init__(self, go_terms: Dict[str, GOTerm]):
+    def __init__(self, go_terms: dict[str, GOTerm]):
         self.go_terms = go_terms
         # Cache: go_id -> {ancestor_id: s_value}
-        self._s_value_cache: Dict[str, Dict[str, float]] = {}
+        self._s_value_cache: dict[str, dict[str, float]] = {}
         # Cache: (term_a, term_b) -> similarity.  The same GO term pairs recur
         # across thousands of protein pairs (e.g. GO:0005515 "protein binding"
         # appears in ~40% of SwissProt).  Caching term-pair similarity avoids
         # redundant set intersection + summation on every protein pair.
-        self._pair_cache: Dict[Tuple[str, str], float] = {}
+        self._pair_cache: dict[tuple[str, str], float] = {}
 
-    def _compute_s_values(self, term_id: str) -> Dict[str, float]:
+    def _compute_s_values(self, term_id: str) -> dict[str, float]:
         """
         Compute S-values for a term and all its ancestors (recursive with cache).
 
@@ -251,7 +250,7 @@ class WangSimilarity:
             return self._s_value_cache[term_id]
 
         # S_A(A) = 1
-        s_values: Dict[str, float] = {term_id: 1.0}
+        s_values: dict[str, float] = {term_id: 1.0}
 
         # BFS/DFS up the DAG, propagating weighted contributions
         stack = [(term_id, 1.0)]
@@ -301,8 +300,8 @@ class WangSimilarity:
 
     def protein_similarity_bma(
         self,
-        terms_a: Set[str],
-        terms_b: Set[str],
+        terms_a: set[str],
+        terms_b: set[str],
     ) -> float:
         """
         Compute Best-Match Average (BMA) similarity between two sets of GO terms.
@@ -332,9 +331,9 @@ class WangSimilarity:
 
 def load_annotations_tsv(
     annotations_path: Path,
-    go_terms: Dict[str, GOTerm],
-    evidence_codes: Optional[Set[str]] = None,
-) -> Dict[str, Dict[str, Set[str]]]:
+    go_terms: dict[str, GOTerm],
+    evidence_codes: set[str] | None = None,
+) -> dict[str, dict[str, set[str]]]:
     """
     Load protein-to-GO-term annotations from a TSV file.
 
@@ -347,13 +346,13 @@ def load_annotations_tsv(
     Returns:
         Dict mapping protein_id -> {"MFO": {GO:xxxx, ...}, "BPO": {...}, "CCO": {...}}
     """
-    annotations: Dict[str, Dict[str, Set[str]]] = defaultdict(
+    annotations: dict[str, dict[str, set[str]]] = defaultdict(
         lambda: {"MFO": set(), "BPO": set(), "CCO": set()}
     )
 
     skipped_terms = 0
     loaded_terms = 0
-    skipped_evidence: Dict[str, int] = defaultdict(int)
+    skipped_evidence: dict[str, int] = defaultdict(int)
     saw_evidence_column = False
 
     with open(annotations_path) as f:
@@ -462,10 +461,10 @@ def load_annotations_tsv(
 
 def compute_pair_similarities(
     pairs_df: pl.DataFrame,
-    annotations: Dict[str, Dict[str, Set[str]]],
+    annotations: dict[str, dict[str, set[str]]],
     wang: WangSimilarity,
-    aspects: List[str],
-) -> Dict[str, List[float]]:
+    aspects: list[str],
+) -> dict[str, list[float]]:
     """
     Compute GO Wang similarity for all protein pairs.
 
@@ -478,7 +477,7 @@ def compute_pair_similarities(
     Returns:
         Dict mapping column name -> list of similarity values
     """
-    results: Dict[str, List[float]] = {f"go_wang_{a.lower()}": [] for a in aspects}
+    results: dict[str, list[float]] = {f"go_wang_{a.lower()}": [] for a in aspects}
 
     queries = pairs_df["query"].to_list()
     targets = pairs_df["target"].to_list()

@@ -6,7 +6,6 @@ Reduces code duplication across train.py, run_experiments.py, and evaluate.py.
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 @dataclass
@@ -21,7 +20,7 @@ class ExperimentPaths:
     # Data files
     train_file: Path
     val_file: Path
-    test_file: Optional[Path]
+    test_file: Path | None
 
     # Run artifacts
     checkpoints_dir: Path
@@ -77,7 +76,7 @@ class ExperimentManager:
         )
 
     def create_experiment_paths(
-        self, project_root: Optional[Path] = None
+        self, project_root: Path | None = None
     ) -> ExperimentPaths:
         """
         Create or resolve all experiment paths.
@@ -137,7 +136,7 @@ class ExperimentManager:
             last_checkpoint=checkpoints_dir / "last.ckpt",
         )
 
-    def check_experiment_status(self) -> Tuple[str, Path]:
+    def check_experiment_status(self) -> tuple[str, Path]:
         """
         Check the status of the experiment.
 
@@ -166,8 +165,8 @@ class ExperimentManager:
             return "empty"
 
     def find_best_checkpoint(
-        self, experiment_dir: Optional[Path] = None
-    ) -> Optional[Path]:
+        self, experiment_dir: Path | None = None
+    ) -> Path | None:
         """Find the best checkpoint in the experiment directory."""
         if experiment_dir is None:
             experiment_dir = self.experiment_dir
@@ -203,8 +202,8 @@ class ExperimentManager:
             print(f"Warning: Could not create completion marker: {e}")
 
     def get_resume_checkpoint_path(
-        self, experiment_dir: Optional[Path] = None
-    ) -> Optional[Path]:
+        self, experiment_dir: Path | None = None
+    ) -> Path | None:
         """Get the checkpoint path for resuming training."""
         if experiment_dir is None:
             experiment_dir = self.experiment_dir

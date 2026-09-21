@@ -1,9 +1,11 @@
+from collections.abc import Callable
+from multiprocessing import Pool, cpu_count
+from typing import Any
+
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from typing import Dict, Optional, Callable, List, Any
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
 
 
 def _r2_ci_from_r_bounds(r_lower: float, r_upper: float) -> tuple[float, float]:
@@ -66,14 +68,14 @@ def _bootstrap_stat(
     confidence_level: float,
     stat_func: Callable[[np.ndarray, np.ndarray], tuple[float, float]],
     stat_name: str,
-    value_transform: Optional[Callable[[float], float]] = None,
+    value_transform: Callable[[float], float] | None = None,
     square_after_ci: bool = False,
     se_key_suffix: str = "_SE",
     ci_key_suffix_lower: str = "_CI_lower",
     ci_key_suffix_upper: str = "_CI_upper",
     use_parallel: bool = True,
-    seed: Optional[int] = None,
-) -> Dict[str, float]:
+    seed: int | None = None,
+) -> dict[str, float]:
     """Helper: Performs bootstrapping for a given statistic with optional parallel processing.
 
     When ``square_after_ci`` is True the resampled statistic is the signed
@@ -169,10 +171,10 @@ def _bootstrap_stat(
 def calculate_regression_metrics(
     targets: np.ndarray,
     predictions: np.ndarray,
-    n_bootstrap: Optional[int] = 1000,
+    n_bootstrap: int | None = 1000,
     confidence_level: float = 0.95,
-    seed: Optional[int] = None,
-) -> Dict[str, float]:
+    seed: int | None = None,
+) -> dict[str, float]:
     """Calculates regression metrics, optionally bootstrapping correlation stats.
 
     Pass ``seed`` to make the bootstrap SE/CIs reproducible. The Pearson R² CI
@@ -194,7 +196,7 @@ def calculate_regression_metrics(
         "Spearman",
         "Spearman_p_value",
     ]
-    bootstrap_configs: List[Dict[str, Any]] = [
+    bootstrap_configs: list[dict[str, Any]] = [
         {
             "stat_func": pearsonr,
             "stat_name": "Pearson_r2",
@@ -219,7 +221,7 @@ def calculate_regression_metrics(
 
     # Initialize metrics dict with NaNs for all keys
     all_keys = standard_keys + bootstrap_keys
-    metrics: Dict[str, float] = {k: np.nan for k in all_keys}
+    metrics: dict[str, float] = {k: np.nan for k in all_keys}
 
     # --- Handle Insufficient Data --- #
     if len(targets) < 2:

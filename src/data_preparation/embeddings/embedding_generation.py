@@ -20,42 +20,42 @@ pLM Choice paper revision.
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple, Type, Optional
+from typing import Any, Optional
 
 import h5py
-import torch
 import numpy as np
-from tqdm import tqdm
+import torch
+
+# --- Native ESM (EvolutionaryScale) Imports ---
+from esm.models.esm3 import ESM3
+from esm.models.esmc import ESMC
+from esm.sdk.api import ESMProtein, LogitsConfig, SamplingConfig
+from huggingface_hub import login as hf_login
 from pyfaidx import Fasta
+from tqdm import tqdm
 
 # --- Hugging Face Transformers Imports ---
 from transformers import (
     AutoConfig,
     AutoTokenizer,
     EsmModel,
-    T5EncoderModel,
-    T5Tokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
+    T5EncoderModel,
+    T5Tokenizer,
 )
-from huggingface_hub import login as hf_login
-
-# --- Native ESM (EvolutionaryScale) Imports ---
-from esm.models.esm3 import ESM3
-from esm.models.esmc import ESMC
-from esm.sdk.api import ESMProtein, SamplingConfig, LogitsConfig
 
 from shared.embedding_names import random_init_stem
-
 
 # --------------------------------------------------------------------------- #
 #                            MODEL CONFIGURATION
 # --------------------------------------------------------------------------- #
 # Define a type for more readable model configurations
-ModelConfig = Dict[str, Any]
+ModelConfig = dict[str, Any]
 
-MODEL_CONFIGS: Dict[str, ModelConfig] = {
+MODEL_CONFIGS: dict[str, ModelConfig] = {
     # --- ESM-1b via HuggingFace Transformers ---
     # Added so the random-init baseline has an untrained twin for the esm1b arm
     # (Track B4). Without it the baseline covered 12 of the paper's 16 arms.
@@ -202,7 +202,7 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def login_to_huggingface(token_path_str: Optional[str] = None):
+def login_to_huggingface(token_path_str: str | None = None):
     """Attempts to log in to Hugging Face Hub, optionally using a token from a specified path."""
     token = None
     token_file = None
@@ -253,7 +253,7 @@ def login_to_huggingface(token_path_str: Optional[str] = None):
         )
 
 
-def read_fasta_sequences(fasta_path: Path) -> List[Tuple[str, str]]:
+def read_fasta_sequences(fasta_path: Path) -> list[tuple[str, str]]:
     """Reads sequences from a FASTA file."""
     sequences = []
     with Fasta(str(fasta_path)) as fasta_data:
@@ -421,8 +421,8 @@ def masked_mean_pool(
 
 
 def effective_max_seq_len(
-    config: ModelConfig, requested: Optional[int]
-) -> Optional[int]:
+    config: ModelConfig, requested: int | None
+) -> int | None:
     """Reconcile ``--max_seq_len`` with the architecture's own ceiling.
 
     ESM-1b uses absolute learned position embeddings and tops out at 1022
@@ -486,7 +486,7 @@ MIN_BATCH_EFFICIENCY = 0.6
 LENGTH_SPREAD_SLACK = 16
 
 
-def length_buckets(sequences: List[str], token_budget: int) -> List[List[int]]:
+def length_buckets(sequences: list[str], token_budget: int) -> list[list[int]]:
     """Group sequence indices into batches of similar length.
 
     Two separate constraints, because the token budget alone does not express
@@ -513,8 +513,8 @@ def length_buckets(sequences: List[str], token_budget: int) -> List[List[int]]:
     # batches.
     lengths = [len(s) for s in sequences]
     order = sorted(range(len(sequences)), key=lengths.__getitem__)
-    batches: List[List[int]] = []
-    current: List[int] = []
+    batches: list[list[int]] = []
+    current: list[int] = []
     current_real = 0
     shortest = 0
 
@@ -547,7 +547,7 @@ def length_buckets(sequences: List[str], token_budget: int) -> List[List[int]]:
 # the single statement of the fact: both the batched path (which needs counts, to
 # build a mask over a right-padded row) and the single-sequence path (which slices)
 # read it, so a tokenizer correction cannot land in one and not the other.
-SPECIAL_TOKEN_TRIM: Dict[str, Tuple[int, int]] = {
+SPECIAL_TOKEN_TRIM: dict[str, tuple[int, int]] = {
     "esm_transformer": (1, 1),  # <cls> ... <eos>
     "prost_t5": (1, 1),  # <AA2fold> ... </s>
     "prot_t5": (0, 1),  # ... </s>
@@ -565,7 +565,7 @@ def require_batchable_family(family_key: str) -> None:
         )
 
 
-def _tokenize_batch(tokenizer: Any, prepared: List[str], family_key: str) -> Dict[str, Any]:
+def _tokenize_batch(tokenizer: Any, prepared: list[str], family_key: str) -> dict[str, Any]:
     """Tokenize already-preprocessed sequences for one forward pass.
 
     Shared by the batched and single-sequence paths so the Ankh quirk — it wants
@@ -593,7 +593,7 @@ def _tokenize_batch(tokenizer: Any, prepared: List[str], family_key: str) -> Dic
 def _embed_one_batch(
     model: Any,
     tokenizer: Any,
-    prepared: List[str],
+    prepared: list[str],
     family_key: str,
     device: "torch.device",
     autocast_dtype: Optional["torch.dtype"] = None,
@@ -624,12 +624,12 @@ def _embed_one_batch(
 def generate_embeddings_batched(
     model: Any,
     tokenizer: Any,
-    sequences: List[str],
+    sequences: list[str],
     family_key: str,
     device: "torch.device",
     token_budget: int = 16384,
     autocast_dtype: Optional["torch.dtype"] = None,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Per-protein embeddings for many sequences, batched by length.
 
     Equivalent to calling the single-sequence path once per sequence, but with
@@ -655,7 +655,7 @@ def generate_embeddings_batched(
     prepared = [preprocess_sequence(s, family_key) for s in sequences]
     # Bucket on the ORIGINAL residue counts: the prepared strings carry spaces
     # and prefixes whose lengths do not correspond to token counts.
-    results: List[Optional[np.ndarray]] = [None] * len(sequences)
+    results: list[np.ndarray | None] = [None] * len(sequences)
 
     for batch_idx in length_buckets(sequences, token_budget=token_budget):
         pooled = _embed_one_batch(
@@ -678,12 +678,12 @@ def generate_embeddings_batched(
 def load_model_and_tokenizer(
     model_key: str,
     config: ModelConfig,
-    weights_dir: Optional[Path],
+    weights_dir: Path | None,
     device: torch.device,
     random_init: bool = False,
     random_seed: int = 42,
-) -> Tuple[
-    Any, Optional[PreTrainedTokenizer | Any], str
+) -> tuple[
+    Any, PreTrainedTokenizer | Any | None, str
 ]:  # Model, Tokenizer (or None), FamilyKey
     """
     Loads the specified model and tokenizer.
@@ -696,14 +696,14 @@ def load_model_and_tokenizer(
 
     hf_id = config["hf_id"]
     loader = config["loader"]
-    model_class: Type[PreTrainedModel | Any] = config["model_class"]
-    tokenizer_class: Optional[Type[PreTrainedTokenizer | Any]] = config.get(
+    model_class: type[PreTrainedModel | Any] = config["model_class"]
+    tokenizer_class: type[PreTrainedTokenizer | Any] | None = config.get(
         "tokenizer_class"
     )
     tokenizer_load_kwargs = config.get("tokenizer_load_kwargs", {})
     family_key = config["family_key"]
     load_kwargs = config.get("load_kwargs", {})
-    post_load_hook: Optional[Callable[[Any], None]] = config.get("post_load_hook")
+    post_load_hook: Callable[[Any], None] | None = config.get("post_load_hook")
 
     actual_cache_dir = None
     if weights_dir:
@@ -832,7 +832,7 @@ def load_model_and_tokenizer(
 
 def generate_single_embedding(
     model: Any,
-    tokenizer: Optional[PreTrainedTokenizer | Any],
+    tokenizer: PreTrainedTokenizer | Any | None,
     sequence: str,
     family_key: str,
     embedding_type: str,  # "per_protein" or "per_residue"
@@ -936,11 +936,11 @@ FLUSH_EVERY_N_BATCHES = 100
 
 
 def _select_pending(
-    sequences_to_process: List[Tuple[str, str]],
+    sequences_to_process: list[tuple[str, str]],
     h5_file: Any,
-    max_seq_len: Optional[int],
+    max_seq_len: int | None,
     write: Callable[[str], None],
-) -> Tuple[List[str], List[str], int]:
+) -> tuple[list[str], list[str], int]:
     """Split the cohort into what still needs embedding and what does not.
 
     Shared by the batched and single-sequence loops so the three filters — and,
@@ -951,8 +951,8 @@ def _select_pending(
 
     Returns ``(headers, sequences, n_already_present)``.
     """
-    headers: List[str] = []
-    seqs: List[str] = []
+    headers: list[str] = []
+    seqs: list[str] = []
     n_present = 0
     for header, sequence in sequences_to_process:
         base_header = header.split()[0]
@@ -976,12 +976,12 @@ def _select_pending(
 def _embed_batch_with_fallback(
     model: Any,
     tokenizer: Any,
-    names: List[str],
-    prepared: List[str],
+    names: list[str],
+    prepared: list[str],
     family_key: str,
     device: torch.device,
-    autocast_dtype: Optional[torch.dtype],
-) -> List[np.ndarray]:
+    autocast_dtype: torch.dtype | None,
+) -> list[np.ndarray]:
     """Embed one batch, halving it on out-of-memory rather than dropping to one.
 
     A plain "retry each sequence alone" fallback is the 25-75x-slower path this
@@ -1020,7 +1020,7 @@ def _embed_batch_with_fallback(
             f"⚠️ batch of {len(prepared)} failed ({type(exc).__name__}: {exc}); "
             "retrying those sequences individually"
         )
-        vectors: List[np.ndarray] = []
+        vectors: list[np.ndarray] = []
         for name, seq in zip(names, prepared, strict=True):
             try:
                 vectors.append(_embed_one_batch(
@@ -1033,17 +1033,17 @@ def _embed_batch_with_fallback(
 
 
 def _process_batched(
-    sequences_to_process: List[Tuple[str, str]],
+    sequences_to_process: list[tuple[str, str]],
     model: Any,
     tokenizer: Any,
     family_key: str,
     device: torch.device,
     h5_file: Any,
-    max_seq_len: Optional[int],
+    max_seq_len: int | None,
     model_key_for_filename: str,
     token_budget: int,
-    autocast_dtype: Optional[torch.dtype],
-) -> Tuple[int, int]:
+    autocast_dtype: torch.dtype | None,
+) -> tuple[int, int]:
     """Batched variant of the per-sequence loop, with the same filtering.
 
     Returns ``(n_accounted, n_failed)`` — see :func:`process_sequences_and_save`.
@@ -1090,18 +1090,18 @@ def _process_batched(
 
 
 def process_sequences_and_save(
-    sequences_to_process: List[Tuple[str, str]],
+    sequences_to_process: list[tuple[str, str]],
     model: Any,
-    tokenizer: Optional[PreTrainedTokenizer | Any],
+    tokenizer: PreTrainedTokenizer | Any | None,
     family_key: str,
     embedding_type: str,
     device: torch.device,
     h5_output_path: Path,
-    max_seq_len: Optional[int],
+    max_seq_len: int | None,
     model_key_for_filename: str,  # Used for logging and progress bar description
     random_init: bool = False,
     token_budget: int = 0,
-    autocast_dtype: Optional[torch.dtype] = None,
+    autocast_dtype: torch.dtype | None = None,
 ):
     """
     Processes sequences, generates embeddings, and saves them to an HDF5 file.

@@ -59,7 +59,7 @@ import sys
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -86,7 +86,7 @@ class RunInfo:
     embedding: str
     model_type: str
     param: str
-    hparams: Dict[str, Any] = field(default_factory=dict)
+    hparams: dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:
         return f"RunInfo({self.model_type}/{self.param}/{self.embedding})"
@@ -138,7 +138,7 @@ class OvertrainingMetrics:
 # ---------------------------------------------------------------------------
 
 
-def _load_hparams(run_dir: Path) -> Dict[str, Any]:
+def _load_hparams(run_dir: Path) -> dict[str, Any]:
     """Load hyperparameters from the best available source in a run directory.
 
     Checks (in order): tensorboard/hparams.yaml, hparams.yaml at root,
@@ -173,7 +173,7 @@ def _load_hparams(run_dir: Path) -> Dict[str, Any]:
     return {}
 
 
-def _infer_run_metadata(run_dir: Path, hparams: Dict[str, Any]) -> Optional[RunInfo]:
+def _infer_run_metadata(run_dir: Path, hparams: dict[str, Any]) -> RunInfo | None:
     """Infer embedding, model_type, param from hparams or directory structure.
 
     Directory convention:
@@ -235,7 +235,7 @@ def _is_run_dir(path: Path) -> bool:
 
 def discover_runs(
     models_dir: Path, max_depth: int = 6
-) -> List[RunInfo]:
+) -> list[RunInfo]:
     """Recursively discover training runs under a models directory.
 
     Walks the directory tree up to max_depth levels, identifies run
@@ -258,8 +258,8 @@ def discover_runs(
         logger.error(f"Models directory not found: {models_dir}")
         return []
 
-    runs: List[RunInfo] = []
-    visited: Set[Path] = set()
+    runs: list[RunInfo] = []
+    visited: set[Path] = set()
 
     def _walk(current: Path, depth: int) -> None:
         if depth > max_depth or not current.is_dir():
@@ -297,9 +297,9 @@ def discover_runs(
 # ---------------------------------------------------------------------------
 
 
-def _find_tfevents(run_dir: Path) -> List[Path]:
+def _find_tfevents(run_dir: Path) -> list[Path]:
     """Find all TensorBoard event files in a run directory."""
-    candidates: List[Path] = []
+    candidates: list[Path] = []
 
     # Check tensorboard/ subdirectory (PL default)
     tb_dir = run_dir / "tensorboard"
@@ -319,7 +319,7 @@ def _find_tfevents(run_dir: Path) -> List[Path]:
     return sorted(candidates)
 
 
-def parse_training_curves(run_dir: Path) -> Optional[TrainingCurves]:
+def parse_training_curves(run_dir: Path) -> TrainingCurves | None:
     """Parse TensorBoard event files to extract train_loss and val_loss per step.
 
     Uses tbparse (SummaryReader) for efficient event parsing. Falls back to
@@ -442,7 +442,7 @@ def _linear_slope(values: np.ndarray) -> float:
 
 def compute_overtraining_metrics(
     run: RunInfo,
-    curves: Optional[TrainingCurves],
+    curves: TrainingCurves | None,
 ) -> OvertrainingMetrics:
     """Compute overtraining indicators from training curves and run metadata.
 
@@ -584,8 +584,8 @@ def compute_overtraining_metrics(
 
 def compute_distance_kurtosis(
     pairs_df: pl.DataFrame,
-    dist_columns: Optional[List[str]] = None,
-) -> Dict[str, Dict[str, float]]:
+    dist_columns: list[str] | None = None,
+) -> dict[str, dict[str, float]]:
     """Compute kurtosis and related stats for distance distributions per embedding.
 
     An overtrained pLM may produce overly peaked (high kurtosis) distance
@@ -614,7 +614,7 @@ def compute_distance_kurtosis(
         logger.warning("No distance columns found in pairs DataFrame")
         return {}
 
-    results: Dict[str, Dict[str, float]] = {}
+    results: dict[str, dict[str, float]] = {}
 
     for col in dist_columns:
         if col not in pairs_df.columns:
@@ -650,11 +650,11 @@ def compute_distance_kurtosis(
 
 
 def plot_loss_curves(
-    runs: List[RunInfo],
-    curves_map: Dict[str, TrainingCurves],
+    runs: list[RunInfo],
+    curves_map: dict[str, TrainingCurves],
     output_dir: Path,
     max_per_page: int = 12,
-) -> List[Path]:
+) -> list[Path]:
     """Plot train/val loss curves for discovered runs.
 
     Creates grid figures with train and val loss overlaid per run.
@@ -682,7 +682,7 @@ def plot_loss_curves(
         return []
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    saved_paths: List[Path] = []
+    saved_paths: list[Path] = []
 
     n_pages = (len(valid_runs) + max_per_page - 1) // max_per_page
 
@@ -732,7 +732,7 @@ def plot_overtraining_heatmap(
     results_df: pl.DataFrame,
     output_dir: Path,
     metric: str = "train_val_gap",
-) -> Optional[Path]:
+) -> Path | None:
     """Plot a heatmap of overtraining metrics: embedding x param, faceted by model_type.
 
     Parameters
@@ -811,9 +811,9 @@ def plot_overtraining_heatmap(
 
 
 def plot_kurtosis_bar(
-    kurtosis_results: Dict[str, Dict[str, float]],
+    kurtosis_results: dict[str, dict[str, float]],
     output_dir: Path,
-) -> Optional[Path]:
+) -> Path | None:
     """Bar chart of distance distribution kurtosis per embedding.
 
     Parameters
@@ -868,9 +868,9 @@ def plot_kurtosis_bar(
 
 def plot_overtraining_summary(
     results_df: pl.DataFrame,
-    kurtosis_results: Dict[str, Dict[str, float]],
+    kurtosis_results: dict[str, dict[str, float]],
     output_dir: Path,
-) -> List[Path]:
+) -> list[Path]:
     """Generate all overtraining diagnostic plots.
 
     Parameters
@@ -887,7 +887,7 @@ def plot_overtraining_summary(
     List[Path]
         All saved figure paths.
     """
-    saved: List[Path] = []
+    saved: list[Path] = []
 
     # Heatmap of train/val gap
     p = plot_overtraining_heatmap(results_df, output_dir, metric="train_val_gap")
@@ -917,7 +917,7 @@ def plot_overtraining_summary(
 # ---------------------------------------------------------------------------
 
 
-def metrics_to_frame(metrics_list: List[OvertrainingMetrics]) -> pl.DataFrame:
+def metrics_to_frame(metrics_list: list[OvertrainingMetrics]) -> pl.DataFrame:
     """One row per run, one column per :class:`OvertrainingMetrics` field.
 
     Derived from the dataclass rather than a hand-written key list so that adding a
@@ -927,7 +927,7 @@ def metrics_to_frame(metrics_list: List[OvertrainingMetrics]) -> pl.DataFrame:
 
 
 def aggregate_metrics(
-    metrics_list: List[OvertrainingMetrics],
+    metrics_list: list[OvertrainingMetrics],
 ) -> pl.DataFrame:
     """Aggregate per-run overtraining metrics into a summary DataFrame.
 
@@ -1007,7 +1007,7 @@ def main(args: argparse.Namespace) -> None:
 
     # ---- 2. Parse training curves ----
     logger.info("Parsing training curves from TensorBoard events...")
-    curves_map: Dict[str, TrainingCurves] = {}
+    curves_map: dict[str, TrainingCurves] = {}
     parse_failures = 0
 
     for run in trainable_runs:
@@ -1024,7 +1024,7 @@ def main(args: argparse.Namespace) -> None:
 
     # ---- 3. Compute overtraining metrics ----
     logger.info("Computing overtraining metrics...")
-    all_metrics: List[OvertrainingMetrics] = []
+    all_metrics: list[OvertrainingMetrics] = []
 
     for run in runs:
         curves = curves_map.get(str(run.path))
@@ -1043,7 +1043,7 @@ def main(args: argparse.Namespace) -> None:
     raw_df = metrics_to_frame(all_metrics)
 
     # ---- 5. Distance kurtosis (optional) ----
-    kurtosis_results: Dict[str, Dict[str, float]] = {}
+    kurtosis_results: dict[str, dict[str, float]] = {}
     if args.pairs_parquet:
         pairs_path = Path(args.pairs_parquet).resolve()
         if pairs_path.is_file():
@@ -1096,7 +1096,7 @@ def main(args: argparse.Namespace) -> None:
 
     # ---- 7. Plots ----
     logger.info("Generating diagnostic plots...")
-    saved_plots: List[Path] = []
+    saved_plots: list[Path] = []
 
     # Loss curves
     curve_plots = plot_loss_curves(runs, curves_map, output_dir / "curves")

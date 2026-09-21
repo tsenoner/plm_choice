@@ -38,7 +38,6 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import numpy as np
 import polars as pl
@@ -77,7 +76,7 @@ def fetch_enzyme_annotations(
     ec_number: str,
     fields: str = "accession,protein_name,ec,keyword,ft_domain",
     max_results: int = 5000,
-) -> List[Dict]:
+) -> list[dict]:
     """
     Fetch enzyme entries from UniProt REST API by EC number.
 
@@ -94,7 +93,7 @@ def fetch_enzyme_annotations(
     logger.info(f"Fetching UniProt entries for EC {ec_number} ...")
 
     entries = []
-    header: Optional[List[str]] = None
+    header: list[str] | None = None
     try:
         while url:
             req = urllib.request.Request(url)
@@ -144,14 +143,14 @@ def fetch_enzyme_annotations(
     return entries
 
 
-def classify_beta_lactamases(entries: List[Dict]) -> Dict[str, str]:
+def classify_beta_lactamases(entries: list[dict]) -> dict[str, str]:
     """
     Classify beta-lactamase entries into Ambler classes (A/B/C/D).
 
     Uses protein name, keywords, and domain annotations to determine class.
     Returns dict mapping accession -> class label.
     """
-    classifications: Dict[str, str] = {}
+    classifications: dict[str, str] = {}
 
     for entry in entries:
         accession = entry.get("Entry", entry.get("accession", ""))
@@ -185,14 +184,14 @@ def classify_beta_lactamases(entries: List[Dict]) -> Dict[str, str]:
 
 
 def classify_by_annotation(
-    entries: List[Dict], class_column: str = "Keywords"
-) -> Dict[str, str]:
+    entries: list[dict], class_column: str = "Keywords"
+) -> dict[str, str]:
     """
     Generic classification: group proteins by a UniProt annotation field.
 
     Uses the first keyword or domain as the class label.
     """
-    classifications: Dict[str, str] = {}
+    classifications: dict[str, str] = {}
 
     for entry in entries:
         accession = entry.get("Entry", entry.get("accession", ""))
@@ -218,9 +217,9 @@ def classify_by_annotation(
 
 def validate_hfsp(
     pairs_df: pl.DataFrame,
-    classifications: Dict[str, str],
+    classifications: dict[str, str],
     hfsp_col: str = "hfsp",
-) -> Dict:
+) -> dict:
     """
     Validate HFSP by comparing within-class vs between-class distributions.
 
@@ -264,7 +263,7 @@ def validate_hfsp(
 
     annotated_pairs = len(within_arr) + len(between_arr)
 
-    def _summary(arr: np.ndarray, prefix: str) -> Dict[str, Optional[float]]:
+    def _summary(arr: np.ndarray, prefix: str) -> dict[str, float | None]:
         """mean/std/median for one group, or Nones when the group is empty."""
         if arr.size == 0:
             return {f"{prefix}_{stat}": None for stat in ("mean", "std", "median")}

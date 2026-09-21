@@ -14,7 +14,7 @@ per-cell ``n`` separately so a capped pLM is never folded into a bare mean.
 """
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 
 class PopulationError(AssertionError):

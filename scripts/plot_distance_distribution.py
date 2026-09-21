@@ -7,12 +7,10 @@ This script generates density plots and histograms from the output of all_vs_all
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Tuple
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy.ndimage import gaussian_filter1d
-
 
 # Constants
 TARGET_BINS_FOR_VISUALIZATION = 1000
@@ -24,7 +22,7 @@ PLOT_DPI = 300
 class HistogramData:
     """Container for histogram data and metadata."""
 
-    def __init__(self, histogram: np.ndarray, bin_edges: np.ndarray, metadata: Dict):
+    def __init__(self, histogram: np.ndarray, bin_edges: np.ndarray, metadata: dict):
         self.histogram = histogram
         self.bin_edges = bin_edges
         self.bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -36,11 +34,11 @@ class HistogramData:
         return int(self.histogram.sum())
 
     @property
-    def distance_range(self) -> Tuple[float, float]:
+    def distance_range(self) -> tuple[float, float]:
         return float(self.bin_edges[0]), float(self.bin_edges[-1])
 
 
-def load_from_npz(file_path: Path) -> Tuple[np.ndarray, np.ndarray, Dict]:
+def load_from_npz(file_path: Path) -> tuple[np.ndarray, np.ndarray, dict]:
     """Load histogram data from NPZ file."""
     data = np.load(file_path)
     histogram = data["histogram"]
@@ -57,9 +55,9 @@ def load_from_npz(file_path: Path) -> Tuple[np.ndarray, np.ndarray, Dict]:
     return histogram, bin_edges, metadata
 
 
-def load_from_json(file_path: Path) -> Tuple[np.ndarray, np.ndarray, Dict]:
+def load_from_json(file_path: Path) -> tuple[np.ndarray, np.ndarray, dict]:
     """Load histogram data from JSON file."""
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         data = json.load(f)
 
     histogram = np.array(data["histogram"])
@@ -148,7 +146,7 @@ def downsample_bins(data: HistogramData, target_bins: int = TARGET_BINS_FOR_VISU
     return HistogramData(new_histogram, new_bin_edges, data.metadata)
 
 
-def compute_statistics(data: HistogramData) -> Dict:
+def compute_statistics(data: HistogramData) -> dict:
     """Compute statistical measures from histogram."""
     total = data.total_comparisons
 
@@ -178,7 +176,7 @@ def compute_statistics(data: HistogramData) -> Dict:
     }
 
 
-def normalize_data(data: HistogramData, stats: Dict) -> Tuple[HistogramData, Dict]:
+def normalize_data(data: HistogramData, stats: dict) -> tuple[HistogramData, dict]:
     """Normalize distances to [0, 1] range."""
     dist_min, dist_max = data.distance_range
 
@@ -200,7 +198,7 @@ def normalize_data(data: HistogramData, stats: Dict) -> Tuple[HistogramData, Dic
     return HistogramData(data.histogram, normalized_edges, data.metadata), normalized_stats
 
 
-def add_vertical_reference_lines(ax: plt.Axes, stats: Dict):
+def add_vertical_reference_lines(ax: plt.Axes, stats: dict):
     """Add mean and median reference lines to plot."""
     ax.axvline(
         stats["mean"],
@@ -222,7 +220,7 @@ def add_vertical_reference_lines(ax: plt.Axes, stats: Dict):
 
 
 def configure_plot_aesthetics(ax: plt.Axes, xlabel: str, ylabel: str,
-                              title: str, metadata: Dict, log_scale: bool):
+                              title: str, metadata: dict, log_scale: bool):
     """Configure plot labels, title, grid, and legend."""
     # Axis labels
     ax.set_xlabel(xlabel, fontsize=12, fontweight="bold")
@@ -245,7 +243,7 @@ def configure_plot_aesthetics(ax: plt.Axes, xlabel: str, ylabel: str,
     ax.legend(loc="upper right", fontsize=10, framealpha=0.95)
 
 
-def plot_histogram(data: HistogramData, stats: Dict, output_path: Path,
+def plot_histogram(data: HistogramData, stats: dict, output_path: Path,
                    log_scale: bool = False, normalize: bool = True):
     """Generate and save histogram plot."""
     # Prepare data
@@ -285,7 +283,7 @@ def plot_histogram(data: HistogramData, stats: Dict, output_path: Path,
     plt.close()
 
 
-def plot_density_smooth(data: HistogramData, stats: Dict, output_path: Path,
+def plot_density_smooth(data: HistogramData, stats: dict, output_path: Path,
                        log_scale: bool = False, normalize: bool = True,
                        sigma: float = DEFAULT_GAUSSIAN_SIGMA):
     """Generate and save smoothed density plot."""
@@ -329,7 +327,7 @@ def plot_density_smooth(data: HistogramData, stats: Dict, output_path: Path,
     plt.close()
 
 
-def print_statistics(stats: Dict):
+def print_statistics(stats: dict):
     """Print computed statistics to console."""
     print("\nStatistics:")
     print(f"  Mean distance: {stats['mean']:.6f}")

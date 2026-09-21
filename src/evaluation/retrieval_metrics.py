@@ -38,7 +38,6 @@ compare pLMs at different levels of biological hierarchy (fold, superfamily,
 family, EC level, etc.).
 """
 
-from typing import Dict
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -48,7 +47,7 @@ def recall_at_first_fp(
     distances: np.ndarray,
     labels: np.ndarray,
     lower_is_similar: bool = True,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute recall at the point of the first false positive.
 
     Sorts (distance, label) pairs and scans in order of increasing similarity.

@@ -1,7 +1,7 @@
+import argparse
 import gzip
 import re
 from pathlib import Path
-import argparse
 
 
 def create_sample_uniref(

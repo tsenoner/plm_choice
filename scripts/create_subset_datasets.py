@@ -5,9 +5,10 @@ This script reads the original train/val/test parquet files and creates
 smaller versions for faster experimentation.
 """
 
-import polars as pl
-from pathlib import Path
 import argparse
+from pathlib import Path
+
+import polars as pl
 
 
 def create_subset_datasets(

@@ -131,7 +131,7 @@ def test_shared_draw_vs_independent_second_draw_differs():
     # draws an INDEPENDENT second idx for the b-matrix breaks the protein pairing and
     # yields a measurably different (decorrelated) interval. We reconstruct both bootstrap
     # distributions directly and assert they differ.
-    from evaluation.stats import _induced_pair_values, _full_pair_values, spearman_rho
+    from evaluation.stats import _induced_pair_values, spearman_rho
 
     a, b = _correlated_pair(n=30, noise=0.4, seed=15)
     n = a.shape[0]

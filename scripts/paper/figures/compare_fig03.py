@@ -13,15 +13,14 @@ part of the estimator most exposed to a change of population.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import numpy as np
-import polars as pl
-
 
 # These paths were absolute to one machine. They are environment variables now, so an
 # unset one fails here by name rather than as a FileNotFoundError further down.
 import os
+from pathlib import Path
+
+import numpy as np
+import polars as pl
 
 
 def _need(var: str) -> str:

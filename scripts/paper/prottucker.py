@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # python script_name.py -i input.fasta -m model_dir --save_cath --save_embeddings
 
 import argparse
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
 
 import h5py
 import numpy as np
 import torch
 from torch import nn
-from transformers import T5EncoderModel, T5Tokenizer
 from tqdm import tqdm
+from transformers import T5EncoderModel, T5Tokenizer
 
 # Constants
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,7 +23,7 @@ class NonStandardAminoAcidError(Exception):
 
 class TuckerFNN(nn.Module):
     def __init__(self):
-        super(TuckerFNN, self).__init__()
+        super().__init__()
         self.tucker = nn.Sequential(
             nn.Linear(1024, 256),
             nn.Tanh(),
@@ -34,7 +33,7 @@ class TuckerFNN(nn.Module):
     def single_pass(self, x: torch.Tensor) -> torch.Tensor:
         return self.tucker(x)
 
-    def forward(self, X: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, X: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ancor = self.single_pass(X[:, 0, :])
         pos = self.single_pass(X[:, 1, :])
         neg = self.single_pass(X[:, 2, :])
@@ -61,14 +60,14 @@ class ProtTucker:
         model = TuckerFNN()
         return load_model(model, self.PROTTUCKER_WEIGHTS_URL, checkpoint_p)
 
-    def _read_annotation(self) -> Dict[str, str]:
+    def _read_annotation(self) -> dict[str, str]:
         label_p = self.prottucker_dir / f"{self.CATH_BASE_FILENAME}_labels.txt"
         if not label_p.is_file():
             download_file(self.CATH_LABELS_URL, label_p)
-        with open(label_p, 'r') as in_f:
+        with open(label_p) as in_f:
             return {line.strip().split(',')[0]: line.strip().split(',')[1] for line in in_f}
 
-    def _read_prottucker_embs(self) -> Tuple[List[str], torch.Tensor]:
+    def _read_prottucker_embs(self) -> tuple[list[str], torch.Tensor]:
         emb_local_p = self.prottucker_dir / f"{self.CATH_BASE_FILENAME}.npy"
         if not emb_local_p.is_file():
             download_file(self.CATH_EMBEDDINGS_URL, emb_local_p)
@@ -78,7 +77,7 @@ class ProtTucker:
         id_local_p = self.prottucker_dir / f"{self.CATH_BASE_FILENAME}.txt"
         if not id_local_p.is_file():
             download_file(self.CATH_IDS_URL, id_local_p)
-        with open(id_local_p, 'r') as in_f:
+        with open(id_local_p) as in_f:
             ids = [line.strip().split("|")[-1].split("_")[0] for line in in_f]
         return ids, embeddings.unsqueeze(dim=0)
 
@@ -87,14 +86,14 @@ class ProtTucker:
         with torch.no_grad():
             return self.model.single_pass(embeddings)
 
-    def write_embeddings(self, embeddings: torch.Tensor, ids: List[str], out_path: Path):
+    def write_embeddings(self, embeddings: torch.Tensor, ids: list[str], out_path: Path):
         """Write ProtTucker embeddings to an HDF5 file."""
         with h5py.File(out_path, 'w') as hf:
             for idx, protein_id in enumerate(ids):
                 hf.create_dataset(protein_id, data=embeddings[idx].cpu().numpy())
         print(f"ProtTucker embeddings saved to {out_path}")
 
-    def write_predictions(self, predictions: List[Tuple[str, str, float]], out_path: Path):
+    def write_predictions(self, predictions: list[tuple[str, str, float]], out_path: Path):
         with open(out_path, "w") as out_f:
             out_f.write("\n".join([f"{lookup_id}\t{cath_anno}\t{nn_dist:.3f}"
                                    for lookup_id, cath_anno, nn_dist in predictions]))
@@ -116,7 +115,7 @@ class ProtT5Embedder:
             self.tokenizer = T5Tokenizer.from_pretrained(TRANSFORMER_NAME, do_lower_case=False, cache_dir=prott5_dir, legacy=False)
             print(f"Finished loading {TRANSFORMER_NAME} in {time.time()-start:.1f}[s]")
 
-    def _process_batch(self, batch: List[Tuple[str, str, int]]) -> List[Tuple[str, torch.Tensor]]:
+    def _process_batch(self, batch: list[tuple[str, str, int]]) -> list[tuple[str, torch.Tensor]]:
         pdb_ids, seqs, seq_lens = zip(*batch)
 
         token_encoding = self.tokenizer.batch_encode_plus(seqs, add_special_tokens=True, padding='longest')
@@ -127,7 +126,7 @@ class ProtT5Embedder:
             with torch.no_grad():
                 prott5_output = self.prott5(input_ids, attention_mask=attention_mask)
         except RuntimeError:
-            print("RuntimeError for {} (L={})".format(pdb_ids, seq_lens))
+            print(f"RuntimeError for {pdb_ids} (L={seq_lens})")
             return []
 
         residue_embedding = prott5_output.last_hidden_state.detach()
@@ -136,7 +135,7 @@ class ProtT5Embedder:
         return [(pdb_id, residue_embedding[idx, :seq_len].mean(dim=0))
                 for idx, (pdb_id, seq_len) in enumerate(zip(pdb_ids, seq_lens))]
 
-    def embed_sequences(self, seq_dict: Dict[str, str], max_batch_size: int = 100, max_residues: int = 4000) -> List[Tuple[str, torch.Tensor]]:
+    def embed_sequences(self, seq_dict: dict[str, str], max_batch_size: int = 100, max_residues: int = 4000) -> list[tuple[str, torch.Tensor]]:
         self._load_model()
         sorted_seqs = sorted(seq_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
         batch = []
@@ -158,7 +157,7 @@ class ProtT5Embedder:
         print(f'Total time for generating embeddings: {exe_time:.2f} [s] ### Avg. time per protein: {exe_time/len(embeddings):.3f} [s]')
         return embeddings
 
-    def read_embeddings_from_h5(self, h5_path: Path) -> List[Tuple[str, torch.Tensor]]:
+    def read_embeddings_from_h5(self, h5_path: Path) -> list[tuple[str, torch.Tensor]]:
         """Read pre-computed ProtT5 embeddings from an HDF5 file."""
         embeddings = []
         with h5py.File(h5_path, 'r') as hf:
@@ -168,15 +167,15 @@ class ProtT5Embedder:
         print(f"Read {len(embeddings)} pre-computed embeddings from {h5_path}")
         return embeddings
 
-    def write_embeddings_to_h5(self, embeddings: List[Tuple[str, torch.Tensor]], out_path: Path):
+    def write_embeddings_to_h5(self, embeddings: list[tuple[str, torch.Tensor]], out_path: Path):
         """Write ProtT5 embeddings to an HDF5 file."""
         with h5py.File(out_path, 'w') as hf:
             for protein_id, embedding in embeddings:
                 hf.create_dataset(protein_id, data=embedding.cpu().numpy())
         print(f"ProtT5 embeddings saved to {out_path}")
 
-def eat(lookup_embs: torch.Tensor, lookup_ids: List[str], lookup_labels: Dict[str, str],
-        queries: torch.Tensor, threshold: float = None, norm: int = 2) -> List[Tuple[str, str, float]]:
+def eat(lookup_embs: torch.Tensor, lookup_ids: list[str], lookup_labels: dict[str, str],
+        queries: torch.Tensor, threshold: float = None, norm: int = 2) -> list[tuple[str, str, float]]:
     pdist = torch.cdist(lookup_embs, queries.unsqueeze(dim=0), p=norm).squeeze(dim=0)
     nn_dists, nn_idxs = torch.topk(pdist, 1, largest=False, dim=0)
     predictions = []
@@ -193,8 +192,8 @@ def eat(lookup_embs: torch.Tensor, lookup_ids: List[str], lookup_labels: Dict[st
     return predictions
 
 def download_file(url: str, local_path: Path):
-    from urllib import request
     import shutil
+    from urllib import request
 
     if not local_path.parent.is_dir():
         local_path.parent.mkdir(parents=True)
@@ -210,7 +209,7 @@ def load_model(model: nn.Module, weights_link: str, checkpoint_p: Path, state_di
     model.load_state_dict(state[state_dict])
     return model.eval().half().to(DEVICE)
 
-def read_fasta(fasta_path: Path) -> Dict[str, str]:
+def read_fasta(fasta_path: Path) -> dict[str, str]:
     """Read a FASTA file and return a dictionary of sequences."""
     valid_aa = set("ACDEFGHIKLMNPQRSTVWYX")
     translation_table = str.maketrans("BZJ", "XXX")
@@ -235,7 +234,7 @@ def read_fasta(fasta_path: Path) -> Dict[str, str]:
             raise NonStandardAminoAcidError(f"Non-standard amino acid(s) {', '.join(invalid_aa)} found in sequence {seq_id}")
         return seq
 
-    with open(fasta_path, 'r') as fasta_file:
+    with open(fasta_path) as fasta_file:
         sequences = {seq_id: validate_seq(seq, seq_id) for seq_id, seq in parse_fasta(fasta_file)}
 
     print(f"Read {len(sequences)} sequences from {fasta_path}")

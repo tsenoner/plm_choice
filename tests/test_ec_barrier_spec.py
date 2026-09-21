@@ -1,8 +1,9 @@
 import json
+
 import pytest
 
-from evaluation.ec_barrier_spec import build_ec_barrier_spec
 from evaluation.barrier_spec_base import SpecBuildError
+from evaluation.ec_barrier_spec import build_ec_barrier_spec
 
 
 def _sidecar(d, plm, distance, n_pairs=10):

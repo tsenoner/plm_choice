@@ -23,8 +23,15 @@ an isinstance() check opens every object and takes longer than the whole rest of
 the job on GPFS, so names are fetched by INDEX -- 1000 lookups, not 542,238.
 """
 from __future__ import annotations
-import argparse, glob, json, os, sys
-import h5py, numpy as np
+
+import argparse
+import glob
+import json
+import os
+import sys
+
+import h5py
+import numpy as np
 
 CENTRED_FAIL, CENTRED_WARN = 0.90, 0.50
 PR_FAIL, PR_WARN = 5.0, 10.0
