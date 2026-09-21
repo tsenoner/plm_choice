@@ -78,19 +78,27 @@ class EmbeddingComparisonVisualizer:
 
     def __init__(
         self,
-        data_path: Union[str, Path],
-        output_dir: Union[str, Path],
+        data_path: Optional[Union[str, Path]] = None,
+        output_dir: Union[str, Path] = Path("out/embedding_comparison"),
         sample_size: Optional[int] = None,
         font_scale: float = 1.0,
+        columns: Optional[List[str]] = None,
     ):
         """
         Initialize the visualizer.
 
         Args:
-            data_path: Path to CSV file or pandas DataFrame containing the data
+            data_path: Path to CSV/Parquet file containing the per-pair distance data.
+                May be None when the statistics have already been computed elsewhere
+                and only the drawing is done here — see ``columns``.
             output_dir: Directory where output files will be saved
             sample_size: Optional limit on number of rows to process
             font_scale: Scaling factor for all font sizes
+            columns: Arm names (without the ``dist_`` prefix) to draw, used instead of
+                reading them off a dataframe. This is what makes it possible to draw
+                the fingerprint from a cluster reduction of the full 75.8M-pair
+                cohort: that table is 11.6 GB of parquet and never comes home, so the
+                laptop holds the 14x14 matrices and nothing else.
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -98,11 +106,41 @@ class EmbeddingComparisonVisualizer:
         self.font_scale = font_scale
 
         # Load and process data
-        self.df = self._load_data(data_path)
-        self.dist_cols = self._identify_distance_columns()
+        if data_path is None:
+            if not columns:
+                raise ValueError(
+                    "Either data_path or columns must be given: without one of them "
+                    "there is nothing to draw and no way to know what the axes are."
+                )
+            self.df = None
+            self.dist_cols = self._sort_dist_cols(
+                [c if c.startswith("dist_") else f"dist_{c}" for c in columns]
+            )
+            logger.info(
+                "No per-pair data loaded; drawing %d precomputed arms: %s",
+                len(self.dist_cols),
+                ", ".join(c.replace("dist_", "") for c in self.dist_cols),
+            )
+        else:
+            self.df = self._load_data(data_path)
+            self.dist_cols = self._identify_distance_columns()
 
         # Set up matplotlib styling
         self._setup_plotting_style()
+
+    @staticmethod
+    def _sort_dist_cols(dist_cols: List[str]) -> List[str]:
+        """Order arms by family, then size within family — the figure's row order."""
+
+        def sort_key(col: str) -> tuple:
+            embedding_name = col.replace("dist_", "").lower()
+            return (
+                EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown"),
+                PLM_SIZES.get(embedding_name, 0),
+                embedding_name,
+            )
+
+        return sorted(dist_cols, key=sort_key)
 
     def _load_data(self, data_path: Union[str, Path]) -> pl.DataFrame:
         """Load data from various sources, returning polars DataFrame."""
@@ -162,17 +200,7 @@ class EmbeddingComparisonVisualizer:
             )
 
         # Sort by PLM family, then by size within family (same as create_performance_summary_plots.py)
-        def get_sort_key(col: str) -> tuple:
-            embedding_name = col.replace("dist_", "").lower()
-            family = EMBEDDING_FAMILY_MAP.get(embedding_name, "Unknown")
-            plm_size = PLM_SIZES.get(embedding_name, 0)
-            return (
-                family,
-                plm_size,
-                embedding_name,
-            )  # Sort by family, then size, then name
-
-        dist_cols = sorted(dist_cols, key=get_sort_key)
+        dist_cols = self._sort_dist_cols(dist_cols)
 
         if not dist_cols:
             raise ValueError(
@@ -2316,8 +2344,25 @@ def main():
     parser.add_argument(
         "--data_path",
         type=Path,
-        required=True,
-        help="Path to CSV file containing the embedding distance data.",
+        default=None,
+        help="Path to the CSV/Parquet of per-pair embedding distances. Not needed "
+        "with --precomputed, which draws statistics computed elsewhere.",
+    )
+    parser.add_argument(
+        "--precomputed",
+        type=Path,
+        default=None,
+        help="JSON holding {columns, correlations, distances} already computed — the "
+        "output of scripts/fingerprint_full_reduce.py over the full cohort. Draws the "
+        "combined fingerprint straight from it, with no caching: the cache "
+        "fingerprint describes a dataframe this path deliberately never loads.",
+    )
+    parser.add_argument(
+        "--precomputed_output",
+        type=Path,
+        default=None,
+        help="Where to write the figure in --precomputed mode "
+        "(default: <output_dir>/combined_wasserstein_correlation.png).",
     )
     parser.add_argument(
         "--output_dir",
@@ -2368,6 +2413,53 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # --- Draw from statistics computed elsewhere ------------------------------
+    if args.precomputed is not None:
+        payload = json.loads(Path(args.precomputed).read_text())
+        for key in ("columns", "correlations", "distances"):
+            if key not in payload:
+                raise ValueError(f"{args.precomputed} has no '{key}'")
+
+        visualizer = EmbeddingComparisonVisualizer(
+            output_dir=args.output_dir,
+            font_scale=args.font_scale,
+            columns=payload["columns"],
+        )
+        # Reorder the matrices into the figure's family-then-size row order rather
+        # than trusting whatever order the producer wrote. A silently transposed or
+        # permuted matrix still draws a plausible-looking figure.
+        order = [
+            payload["columns"].index(c.replace("dist_", ""))
+            for c in visualizer.dist_cols
+        ]
+        cols = [payload["columns"][i] for i in order]
+        corr = np.asarray(payload["correlations"], dtype=float)[np.ix_(order, order)]
+        wass = np.asarray(payload["distances"], dtype=float)[np.ix_(order, order)]
+
+        meta = payload.get("metadata", {})
+        logger.info(
+            "Precomputed fingerprint: %d arms over %s pairs (%s)",
+            len(cols),
+            f"{meta.get('n_pairs_used', 'unknown'):,}"
+            if isinstance(meta.get("n_pairs_used"), int)
+            else "unknown",
+            meta.get("population", "population not recorded"),
+        )
+
+        out_path = args.precomputed_output or (
+            args.output_dir / "combined_wasserstein_correlation.png"
+        )
+        visualizer.plot_combined_wasserstein_correlation(
+            wasserstein_data={"distances": wass.tolist(), "columns": cols},
+            correlation_data={"correlations": corr.tolist(), "columns": cols},
+            save_path=out_path,
+        )
+        logger.info(f"=== Precomputed fingerprint written to {out_path} ===")
+        return
+
+    if args.data_path is None:
+        parser.error("--data_path is required unless --precomputed is given")
 
     # Create visualizer and generate visualizations
     visualizer = EmbeddingComparisonVisualizer(
