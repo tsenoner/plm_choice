@@ -9,11 +9,12 @@ code concatenates), it never labelled the 128-wide concatenation, and its input
 dimensions ("128 / 1024 / 2560") were an arbitrary three of the eleven native widths
 actually used. A schematic of a network should be derived from the network.
 
-So every layer width printed here is read off a live ``FNNPredictor`` at draw time (see
-``_facts``). If ``src/training/models.py`` changes, this figure changes with it, or it
-fails loudly. The one number *not* derived that way is the input range n = 128…2,560,
-which comes from the ``NATIVE_DIMS`` literal below: the arms' embedding widths are a
-property of the arms, not of the probe, so the model has nothing to say about them.
+So every layer width *and every activation* printed here is read off a live
+``FNNPredictor`` at draw time (see ``_facts``). If ``src/training/models.py`` changes,
+this figure changes with it, or it fails loudly. The one number *not* derived that way is
+the input range n = 128…2,560, which comes from the ``NATIVE_DIMS`` literal below: an
+input width is a property of the arm (or of the PCA setting), not of the probe, so the
+model has nothing to say about it.
 
 What the drawing may say
 ------------------------
@@ -73,14 +74,18 @@ from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 from training.models import FNNPredictor
 
 # --- the facts, read off the model -------------------------------------------------
-# Native per-protein embedding widths of the fifteen arms (Table S1). The probe is also
-# run on 128-dimensional PCA features, which is why 128 is both the minimum and the PCA
-# setting.
+# The eleven distinct widths the probe is run at. All but one are native per-protein
+# embedding widths of the fifteen arms; 128 is NOT native to any arm -- it is the width of
+# the 128-dimensional PCA features the probe is additionally run on, so the minimum here
+# is a PCA setting rather than an arm's width. (Hence "n = 128…2,560" in the drawing is
+# the range of inputs the probe sees, not the range of native widths.)
 #
-# NOTE: unlike the layer widths and parameter counts, this tuple is a literal that
-# models.py cannot contradict -- _facts()'s guards check the layer structure, not this.
-# It is checked by hand against the Embedding-dim column of Table S1
-# (90.supplementary.md), whose distinct values are exactly these eleven.
+# NOTE: unlike the layer widths, activations and parameter counts, this tuple is a literal
+# that models.py cannot contradict -- _facts()'s guards check the layer structure, not
+# this. It is checked by hand against the Embedding-dim column of Table S1
+# (90.supplementary.md), which lives in the private manuscript repo: there is no
+# embedding-dimension table in this repo, so a reader working from the public tree cannot
+# re-derive these eleven values here.
 NATIVE_DIMS = (128, 320, 480, 640, 768, 960, 1024, 1152, 1280, 1536, 2560)
 
 # train.py --hidden_size default; scripts/lrz/probe_grid.sbatch never overrides it.
@@ -89,8 +94,32 @@ HIDDEN_SIZE = 64
 TARGETS = ("PIDE", "TM-score", "HFSP")
 
 
+def _activations(seq) -> list[str]:
+    """Name the activation following each Linear in ``seq``, in order.
+
+    The drawing prints an activation under every layer box, so those strings have to come
+    off the model like the widths do. Guarding the layer *count* is not enough: swap every
+    nn.ReLU for an nn.GELU, or append a squashing function after the last Linear, and the
+    count, the widths and the concat width are all untouched -- the guards in ``_facts``
+    pass while every activation the figure prints turns false. A Linear that is last, or
+    is followed by another Linear, has no activation; anything else is named by its class.
+    """
+    mods = list(seq)
+    names = []
+    for i, m in enumerate(mods):
+        if not hasattr(m, "in_features"):  # this file's idiom for "is a Linear"
+            continue
+        after = mods[i + 1] if i + 1 < len(mods) else None
+        names.append(
+            "no activation"
+            if after is None or hasattr(after, "in_features")
+            else type(after).__name__
+        )
+    return names
+
+
 def _facts() -> dict:
-    """Read the layer widths and parameter counts off a live model.
+    """Read the layer widths, activations and parameter counts off a live model.
 
     Nothing in the drawing is allowed to be a literal that the code could contradict.
     The parameter counts are not drawn any more -- they live in the caption -- but they
@@ -119,6 +148,8 @@ def _facts() -> dict:
         "proj_out": shared[0].out_features,
         "concat": combined[0].in_features,
         "widths": [ly.out_features for ly in combined],  # 64, 32, 1
+        "shared_act": _activations(probe.individual_layers)[0],  # ReLU
+        "trunk_acts": _activations(probe.combined_layers),  # ReLU, ReLU, no activation
         "per_dim": HIDDEN_SIZE,  # params grow as hidden_size * n
         "fixed": sum(p.numel() for p in probe.combined_layers.parameters())
         + HIDDEN_SIZE,  # trunk + the shared layer's bias
@@ -232,6 +263,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     f = _facts()
     proj, concat = f["proj_out"], f["concat"]
     w1, w2, w3 = f["widths"]
+    a1, a2, a3 = f["trunk_acts"]
     half = proj * UNITS_PER_DIM
 
     SANS = ["Arial", "Helvetica", "DejaVu Sans"]
@@ -252,6 +284,10 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     plt.rcParams["ps.fonttype"] = 42
     # Keep SVG text as text rather than outlines, so the vector copy is editable.
     plt.rcParams["svg.fonttype"] = "none"
+    # A fixed salt, so the SVG's internal clip-path and marker ids are derived from the
+    # content instead of from a per-run random number. Without it two runs of this script
+    # emit different ids for the same drawing.
+    plt.rcParams["svg.hashsalt"] = "figS02"
     fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN))
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, X_MAX)
@@ -282,8 +318,11 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     # output can be labelled y-hat_t and needs no gloss of its own. NOTE: Arial has no
     # U+2208, so the set symbol is the one glyph in the figure that comes from DejaVu Sans
     # (checked: Helvetica, Verdana and Tahoma lack it too; Arial Unicode MS has it but is
-    # not on every machine). It is a symbol, not a letterform, so the mismatch does not
-    # read the way a whole word in a second face would.
+    # not on every machine). Because this run is italic, the substituted glyph comes from
+    # DejaVu Sans *Oblique* -- the emitted PDF embeds Arial-ItalicMT, ArialMT and
+    # DejaVuSans-Oblique -- so it slants with the rest of the line rather than standing
+    # upright. It is a symbol, not a letterform, so the mismatch does not read the way a
+    # whole word in a second face would.
     ax.text(PROBE_X + PROBE_W / 2, REGION_TOP + 1.5,
             f"trained probe — one per target t ∈ {{{', '.join(TARGETS)}}}",
             ha="center", va="bottom",
@@ -321,7 +360,7 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
 
     # ---- the shared projection: one box per lane, tied ---------------------------
     for y in (LANE_A_Y, LANE_B_Y):
-        _layer(ax, X_SHARED, y, f"n → {proj}", "ReLU", w=W_SHARED)
+        _layer(ax, X_SHARED, y, f"n → {proj}", f["shared_act"], w=W_SHARED)
     tie_x = X_SHARED + W_SHARED / 2
     for y0, y1 in (
         (LANE_A_Y - H_LAYER / 2, TRUNK_Y + 3.0),
@@ -347,11 +386,11 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
 
     # ---- the trunk: three boxes, three arrows ------------------------------------
     _arrow(ax, X_CONCAT + W_CONCAT, TRUNK_Y, X_T1, TRUNK_Y)
-    _layer(ax, X_T1, TRUNK_Y, f"{concat} → {w1}", "ReLU")
+    _layer(ax, X_T1, TRUNK_Y, f"{concat} → {w1}", a1)
     _arrow(ax, X_T1 + W_LAYER, TRUNK_Y, X_T2, TRUNK_Y)
-    _layer(ax, X_T2, TRUNK_Y, f"{w1} → {w2}", "ReLU")
+    _layer(ax, X_T2, TRUNK_Y, f"{w1} → {w2}", a2)
     _arrow(ax, X_T2 + W_LAYER, TRUNK_Y, X_T3, TRUNK_Y)
-    _layer(ax, X_T3, TRUNK_Y, f"{w2} → {w3}", "no activation")
+    _layer(ax, X_T3, TRUNK_Y, f"{w2} → {w3}", a3)
     _arrow(ax, X_T3 + W_LAYER, TRUNK_Y, X_YHAT - 1.5, TRUNK_Y)
     ax.text(X_YHAT, TRUNK_Y, "$\\hat{y}_t$", ha="left", va="center",
             fontsize=10, color=INK, zorder=6)
@@ -383,9 +422,19 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
             ha="center", va="center", fontsize=FS_NOTE, color=MUTED,
             style="italic", zorder=5)
 
+    # Drop the wall clock from both vector formats. matplotlib stamps the PDF with a
+    # /CreationDate and the SVG with a <dc:date>, so two runs a few seconds apart produced
+    # different bytes for the PDF and the SVG while the PNG stayed stable -- which made
+    # scripts/reproduce.sh's "byte-stable figures" true of the raster only, and false of
+    # exactly the two formats the manuscript ships as the editable copies. Nothing about
+    # the drawing changes; only the metadata the drawing does not need.
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for ext, kw in (("png", {"dpi": dpi}), ("pdf", {}), ("svg", {})):
+    for ext, kw in (
+        ("png", {"dpi": dpi}),
+        ("pdf", {"metadata": {"CreationDate": None}}),
+        ("svg", {"metadata": {"Date": None}}),
+    ):
         path = out_dir / f"{stem}.{ext}"
         fig.savefig(path, **kw)
         written.append(path)
