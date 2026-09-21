@@ -38,6 +38,15 @@ from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
+from shared.embedding_names import is_iid_random_baseline
+from visualization.plm_constants import (
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_DISPLAY_NAMES,
+    EMBEDDING_FAMILY_COLOR_MAP,
+    EMBEDDING_FAMILY_MAP,
+    PLM_SIZES,
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -53,14 +62,6 @@ CACHE_SCHEMA_VERSION = 2
 
 # --- Project Constants & Configuration ---
 # Shared with create_performance_summary_plots.py — see visualization/plm_constants.py.
-from shared.embedding_names import is_iid_random_baseline
-from visualization.plm_constants import (
-    EMBEDDING_COLOR_MAP,
-    EMBEDDING_DISPLAY_NAMES,
-    EMBEDDING_FAMILY_COLOR_MAP,
-    EMBEDDING_FAMILY_MAP,
-    PLM_SIZES,
-)
 
 
 def _nice_tick_step(span: float) -> float:
@@ -1156,7 +1157,7 @@ class EmbeddingComparisonVisualizer:
         """Add annotations to Wasserstein heatmap with optimized text colors."""
         colormap = plt.colormaps[cmap]
 
-        with tqdm(total=n * n, desc="Adding Wasserstein annotations") as pbar:
+        with tqdm(total=n * n, desc="Adding Wasserstein annotations"):
             for i in range(n):
                 for j in range(n):
                     if not np.isnan(distances[i, j]):
@@ -2456,7 +2457,7 @@ class EmbeddingComparisonVisualizer:
 
         # Calculate positions with overlap avoidance
         positions = []
-        for i, (x, y, label, color) in enumerate(peak_data):
+        for x, y, label, color in peak_data:
             base_text_y = y + 0.05 * y
 
             # Check for overlaps with previous labels
@@ -2977,13 +2978,10 @@ class EmbeddingComparisonVisualizer:
 
         # Calculate margins to keep grid square
         left_margin = 0.08
-        right_margin = 0.02
         top_margin = 0.08
         bottom_margin = 0.08
 
         # Available space for grid + spacing + colorbar
-        available_width = 1 - left_margin - right_margin
-        available_height = 1 - top_margin - bottom_margin
 
         # Fraction of figure width for grid, spacing, and colorbar
         grid_frac = grid_size / fig_width
@@ -3013,7 +3011,7 @@ class EmbeddingComparisonVisualizer:
 
         with tqdm(total=n * n, desc="Creating combined plot") as pbar:
             for i, col1 in enumerate(dist_cols):
-                for j, col2 in enumerate(dist_cols):
+                for j, _col2 in enumerate(dist_cols):
                     ax = axes[i, j]
 
                     # Remove all ticks and spines for cleaner look
@@ -3046,7 +3044,7 @@ class EmbeddingComparisonVisualizer:
                         if not np.isnan(wasserstein_distances[i, j]):
                             wasserstein_val = wasserstein_distances[i, j]
                             # Create a heatmap cell with proper extent
-                            im = ax.imshow(
+                            ax.imshow(
                                 [[wasserstein_val]],
                                 cmap="Blues",
                                 vmin=0,
@@ -3086,7 +3084,7 @@ class EmbeddingComparisonVisualizer:
                         if not np.isnan(correlations[i, j]):
                             correlation_val = correlations[i, j]
                             # Create a heatmap cell with proper extent
-                            im = ax.imshow(
+                            ax.imshow(
                                 [[correlation_val]],
                                 cmap=CORR_DIVERGING_CMAP,
                                 vmin=-corr_vlim,
@@ -3507,10 +3505,10 @@ def main():
                 if isinstance(compute_func, list):
                     # Handle combined plot with multiple compute functions
                     data_list = []
-                    for i, (func, cache_file) in enumerate(
-                        zip(compute_func, cache_file)
+                    for i, (func, cache_name) in enumerate(
+                        zip(compute_func, cache_file, strict=True)
                     ):
-                        cache_path = cache_dir / cache_file
+                        cache_path = cache_dir / cache_name
                         data = visualizer._load_cached_data(
                             cache_path, args.force_recompute
                         )

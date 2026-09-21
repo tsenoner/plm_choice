@@ -848,7 +848,7 @@ def plot_kurtosis_bar(
     ax.grid(axis="y", alpha=0.3)
 
     # Annotate values
-    for bar, val in zip(bars, kurtosis_vals):
+    for bar, val in zip(bars, kurtosis_vals, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.1,

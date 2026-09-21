@@ -80,7 +80,7 @@ def main() -> int:
     nn_dir = np.full(n, -1, dtype=np.int64)
     nn_dir[q_s[starts]] = t_s[starts]
 
-    directed_pairs = {(int(a), int(b)) for a, b in zip(q, t)}
+    directed_pairs = {(int(a), int(b)) for a, b in zip(q, t, strict=True)}
     unordered = {(min(p), max(p)) for p in directed_pairs}
     both_ways = sum(1 for a, b in unordered if (a, b) in directed_pairs and (b, a) in directed_pairs)
 

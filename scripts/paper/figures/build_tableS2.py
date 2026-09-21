@@ -126,7 +126,7 @@ def build() -> tuple[str, dict[tuple[str, str, str], str]]:
             )
             best = ranked[0][1] if len(ranked) > 0 else None
             second = ranked[1][1] if len(ranked) > 1 else None
-            for lbl, arm in ROWS:
+            for _lbl, arm in ROWS:
                 v = vals.get((target, mt, arm))
                 if v is None:
                     cells[(target, mt, arm)] = DASH

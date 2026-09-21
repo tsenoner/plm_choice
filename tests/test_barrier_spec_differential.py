@@ -20,7 +20,8 @@ from evaluation.snn_report import SNN_PER_QUERY_COLUMNS
 # ---- recall-fp fixtures -------------------------------------------------------
 def _recall_sidecar(d, plm, rep, *, levels=("fold", "superfamily"), n_pos=4,
                     population_n=4, per_query_columns=None, level_paths=None):
-    d = Path(d); d.mkdir(parents=True, exist_ok=True)
+    d = Path(d)
+    d.mkdir(parents=True, exist_ok=True)
     block = {}
     for lvl in levels:
         info = {

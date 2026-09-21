@@ -95,7 +95,7 @@ def score_orphan_pairs(
     p1 = pairs["p1"].astype(str).to_numpy()
     p2 = pairs["p2"].astype(str).to_numpy()
     keep = np.fromiter(
-        ((a in pos and b in pos) for a, b in zip(p1, p2)),
+        ((a in pos and b in pos) for a, b in zip(p1, p2, strict=True)),
         dtype=bool,
         count=len(pairs),
     )

@@ -159,11 +159,14 @@ def build_snn_barrier_spec(
                         "b": manifest.get("population_n_b"),
                     }
 
-                # manifest is captured directly: emit_cell calls this synchronously
-                # within the same iteration, so there is no late-binding concern.
-                def _path_rows():
-                    rows = manifest.get("n_common") if use_expected_rows else None
-                    return manifest["path"], rows
+                # `_mf=manifest` freezes the loop variable at definition time (Python
+                # binds closure names late). emit_cell calls this synchronously within the
+                # same iteration, so nothing depended on it -- but the default makes that
+                # guarantee structural rather than a comment, and get_path_rows is typed
+                # Callable[[], ...] and called with no arguments, so callers cannot see it.
+                def _path_rows(_mf=manifest):
+                    rows = _mf.get("n_common") if use_expected_rows else None
+                    return _mf["path"], rows
 
                 art, recon = emit_cell(
                     label, covered=covered, get_path_rows=_path_rows,

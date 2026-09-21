@@ -116,7 +116,7 @@ class ProtT5Embedder:
             print(f"Finished loading {TRANSFORMER_NAME} in {time.time()-start:.1f}[s]")
 
     def _process_batch(self, batch: list[tuple[str, str, int]]) -> list[tuple[str, torch.Tensor]]:
-        pdb_ids, seqs, seq_lens = zip(*batch)
+        pdb_ids, seqs, seq_lens = zip(*batch, strict=True)
 
         token_encoding = self.tokenizer.batch_encode_plus(seqs, add_special_tokens=True, padding='longest')
         input_ids = torch.tensor(token_encoding['input_ids']).to(DEVICE)
@@ -133,7 +133,7 @@ class ProtT5Embedder:
         residue_embedding = residue_embedding * attention_mask.unsqueeze(dim=-1)
 
         return [(pdb_id, residue_embedding[idx, :seq_len].mean(dim=0))
-                for idx, (pdb_id, seq_len) in enumerate(zip(pdb_ids, seq_lens))]
+                for idx, (pdb_id, seq_len) in enumerate(zip(pdb_ids, seq_lens, strict=True))]
 
     def embed_sequences(self, seq_dict: dict[str, str], max_batch_size: int = 100, max_residues: int = 4000) -> list[tuple[str, torch.Tensor]]:
         self._load_model()
@@ -274,7 +274,7 @@ def main():
         print(f"Computed ProtT5 embeddings saved to {prott5_embeddings_path}")
 
     print("Applying ProtTucker model...")
-    protein_ids, protein_embeddings = zip(*embeddings)
+    protein_ids, protein_embeddings = zip(*embeddings, strict=True)
     protein_embeddings = torch.stack(protein_embeddings)
     prottucker_embeddings = prottucker.predict(protein_embeddings)
 

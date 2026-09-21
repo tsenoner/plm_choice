@@ -126,7 +126,7 @@ def test_filename_stem_has_population_tag_and_level_no_distance(tmp_path):
     # I3: distance is separated by out_dir; the stem carries population_tag + level.
     fasta = _clean_fasta(tmp_path)
     out = tmp_path / "euclidean"
-    manifest = aac_floor_report(
+    aac_floor_report(
         fasta, _clean_labels(), out,
         expected_ids=["P1", "P2", "P3", "P4"],
         distance="euclidean", population_tag="full319",

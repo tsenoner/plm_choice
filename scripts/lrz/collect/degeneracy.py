@@ -112,15 +112,23 @@ def stats(X: np.ndarray):
 
 def verdict(s):
     why = []
-    if s["cen_mean"] >= CENTRED_FAIL: why.append(f"centred cosine {s['cen_mean']:.3f} >= {CENTRED_FAIL}")
-    if s["pr"] <= PR_FAIL: why.append(f"participation ratio {s['pr']:.2f} <= {PR_FAIL}")
-    if s["nonfinite"]: why.append(f"{s['nonfinite']} non-finite vectors")
-    if s["zero_norm"]: why.append(f"{s['zero_norm']} zero-norm vectors")
-    if s["distinct"] < 0.5 * s["n"]: why.append(f"only {s['distinct']}/{s['n']} distinct")
-    if why: return "FAIL", "; ".join(why)
+    if s["cen_mean"] >= CENTRED_FAIL:
+        why.append(f"centred cosine {s['cen_mean']:.3f} >= {CENTRED_FAIL}")
+    if s["pr"] <= PR_FAIL:
+        why.append(f"participation ratio {s['pr']:.2f} <= {PR_FAIL}")
+    if s["nonfinite"]:
+        why.append(f"{s['nonfinite']} non-finite vectors")
+    if s["zero_norm"]:
+        why.append(f"{s['zero_norm']} zero-norm vectors")
+    if s["distinct"] < 0.5 * s["n"]:
+        why.append(f"only {s['distinct']}/{s['n']} distinct")
+    if why:
+        return "FAIL", "; ".join(why)
     warn = []
-    if s["cen_mean"] >= CENTRED_WARN: warn.append(f"centred cosine {s['cen_mean']:.3f}")
-    if s["pr"] <= PR_WARN: warn.append(f"PR {s['pr']:.2f}")
+    if s["cen_mean"] >= CENTRED_WARN:
+        warn.append(f"centred cosine {s['cen_mean']:.3f}")
+    if s["pr"] <= PR_WARN:
+        warn.append(f"PR {s['pr']:.2f}")
     return ("WARN", "; ".join(warn)) if warn else ("PASS", "")
 
 
@@ -140,21 +148,28 @@ def main():
         name = os.path.basename(p).replace(".h5", "")
         try:
             X, total = sample(p, a.n, a.seed)
-            s = stats(X); s["keys"] = total
-            v, why = verdict(s); s["verdict"], s["why"] = v, why
+            s = stats(X)
+            s["keys"] = total
+            v, why = verdict(s)
+            s["verdict"], s["why"] = v, why
             flags = []
-            if s['nonfinite']: flags.append(f"nonfinite={s['nonfinite']}")
-            if s['zero_norm']: flags.append(f"zeronorm={s['zero_norm']}")
-            if s['distinct'] < s['n']: flags.append(f"distinct={s['distinct']}/{s['n']}")
+            if s['nonfinite']:
+                flags.append(f"nonfinite={s['nonfinite']}")
+            if s['zero_norm']:
+                flags.append(f"zeronorm={s['zero_norm']}")
+            if s['distinct'] < s['n']:
+                flags.append(f"distinct={s['distinct']}/{s['n']}")
             print(f"{name:<32}{total:>9,}{s['d']:>6}{s['raw_mean']:>8.4f}"
                   f"{s['cen_mean']:>9.4f}{s['pr']:>8.2f}{s['ctrl_mean']:>8.4f}  {v}"
                   + (f"  ({why})" if why else "")
                   + (f"  [{', '.join(flags)}]" if flags else ""), flush=True)
             out[name] = s
-            if v == "FAIL" or (v == "WARN" and worst == "PASS"): worst = v
+            if v == "FAIL" or (v == "WARN" and worst == "PASS"):
+                worst = v
         except Exception as e:
             print(f"{name:<32}  ERROR {type(e).__name__}: {e}", flush=True)
-            out[name] = {"verdict": "ERROR", "why": str(e)}; worst = "FAIL"
+            out[name] = {"verdict": "ERROR", "why": str(e)}
+            worst = "FAIL"
     print("-" * 96)
     print(f"OVERALL: {worst}   (gate: centred cosine >= {CENTRED_FAIL} or PR <= {PR_FAIL} => FAIL)")
     if a.json:

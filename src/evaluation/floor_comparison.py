@@ -285,7 +285,7 @@ def apply_holm_family(
     rejected, adjusted = holm_bonferroni(p_values, alpha=alpha)
 
     verdicts = []
-    for m, rej, padj in zip(records, rejected, adjusted):
+    for m, rej, padj in zip(records, rejected, adjusted, strict=True):
         verdicts.append(
             {
                 "plm": m["plm"],

@@ -125,7 +125,7 @@ def load_and_filter_new_proteins(file_path):
     filter_strings = ["Evidence at protein level", "Evidence at transcript level"]
     filtered_df = df[df["Protein_existence"].isin(filter_strings)]
     print(f"Found {len(filtered_df)} proteins with specified existence levels.")
-    return dict(zip(filtered_df["Entry"], filtered_df["Sequence"]))
+    return dict(zip(filtered_df["Entry"], filtered_df["Sequence"], strict=True))
 
 
 def get_cluster_ids_from_db(db_path):

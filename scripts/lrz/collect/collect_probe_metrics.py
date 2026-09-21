@@ -28,5 +28,7 @@ for dataset in sorted(os.listdir(ROOT)):
                     rows.append(r)
                     keys += [k for k in r if k not in keys]
 with open(out, "w", newline="") as fh:
-    w = csv.DictWriter(fh, fieldnames=keys); w.writeheader(); w.writerows(rows)
+    w = csv.DictWriter(fh, fieldnames=keys)
+    w.writeheader()
+    w.writerows(rows)
 print(f"{len(rows)} rows -> {out}")

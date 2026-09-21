@@ -56,7 +56,7 @@ def test_hfsp_matches_mahlich_across_all_three_branches():
     )
     out = _compute_hfsp(df)
     for fident, length, got in zip(
-        out["fident"], out["ungapped_len"], out["hfsp"]
+        out["fident"], out["ungapped_len"], out["hfsp"], strict=True
     ):
         expected = _mahlich_hfsp(fident, length)
         assert math.isclose(got, expected, rel_tol=0, abs_tol=1e-4), (

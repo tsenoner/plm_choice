@@ -1,6 +1,12 @@
+import pandas as pd
 import pytest
 
-from evaluation.ec_hierarchy import ec_distance, ec_distance_set
+from evaluation.ec_hierarchy import (
+    correlate_embedding_distance_with_ec,
+    ec_distance,
+    ec_distance_matrix_set,
+    ec_distance_set,
+)
 
 
 def test_min_agg_is_share_any_function():
@@ -43,12 +49,7 @@ def test_empty_set_raises():
         ec_distance_set(frozenset(), frozenset({"1.1.1.1"}), agg="min")
 
 
-import pandas as pd
 
-from evaluation.ec_hierarchy import (
-    correlate_embedding_distance_with_ec,
-    ec_distance_matrix_set,
-)
 
 
 def test_ec_distance_matrix_set_is_long_lexicographic():

@@ -24,7 +24,7 @@ def _frozen_pivot(long_df: pd.DataFrame, ids: list[str], value_col: str) -> np.n
     pos = {pid: i for i, pid in enumerate(ids)}
     n = len(ids)
     mat = np.zeros((n, n), dtype=float)
-    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col]):
+    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col], strict=True):
         i, j = pos[a], pos[b]
         mat[i, j] = mat[j, i] = float(v)
     return mat

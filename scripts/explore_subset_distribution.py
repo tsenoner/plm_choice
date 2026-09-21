@@ -760,15 +760,14 @@ def create_cumulative_plots(output_dir, results):
         plm_name = Path(filename).stem
         metrics_path = output_path / plm_name / "reference_metrics.json"
 
-        # Try to load the actual reference distances if available
-        ref_distances = None
+        # The raw reference distances are not saved in this JSON, so the load only
+        # confirms the convergence file parses; the distribution below is built from
+        # reference_metrics.json instead.
         try:
-            # First try to load the raw reference distances (if saved)
             ref_data_path = output_path / plm_name / "convergence_results.json"
             with open(ref_data_path) as f:
-                conv_data = json.load(f)
-            # Reference distances aren't saved in JSON, so we'll use metrics to create approximate distribution
-        except:
+                json.load(f)
+        except Exception:
             pass
 
         try:
@@ -901,7 +900,7 @@ def create_cumulative_plots(output_dir, results):
                 f.write(
                     f"{plm_name:<15} {metrics['mean']:<10.4f} {metrics['std']:<10.4f} {metrics['median']:<10.4f}\n"
                 )
-            except:
+            except Exception:
                 f.write(f"{plm_name:<15} {'Error':<10} {'Error':<10} {'Error':<10}\n")
 
     print(f"Cumulative plots saved to: {cumulative_dir}")

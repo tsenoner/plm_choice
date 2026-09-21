@@ -10,6 +10,14 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+from visualization.plm_constants import (
+    EMBEDDING_COLOR_MAP,
+    EMBEDDING_FAMILY_COLOR_MAP,
+    EMBEDDING_FAMILY_MAP,
+    PLM_SIZES,
+    human_readable_number,
+)
+
 # --- Logging Configuration ---
 # Default level will be set in main() based on verbose flag
 log = logging.getLogger(__name__)
@@ -34,13 +42,6 @@ PLOT_CONFIG = {
 # --- Project Constants & Configuration ---
 # Sizes, families and colours are shared with pairwise_embedding_comparison.py;
 # a divergence would draw the same model in two colours across figures.
-from visualization.plm_constants import (
-    EMBEDDING_COLOR_MAP,
-    EMBEDDING_FAMILY_COLOR_MAP,
-    EMBEDDING_FAMILY_MAP,
-    PLM_SIZES,
-    human_readable_number,
-)
 
 # Marker map for model types
 MODEL_MARKER_MAP: dict[str, str] = {

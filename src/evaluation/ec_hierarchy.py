@@ -46,7 +46,7 @@ def ec_distance(ec_a: str, ec_b: str) -> int:
     fb = _split_ec(ec_b)
 
     matched_depth = 0
-    for x, y in zip(fa, fb):
+    for x, y in zip(fa, fb, strict=True):
         if x == "-" or y == "-" or x == "" or y == "":
             matched_depth += 1
             continue

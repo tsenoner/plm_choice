@@ -52,7 +52,7 @@ def _headline_records(pairs: pd.DataFrame) -> list[tuple[str, str, bool]]:
     _require_columns(pairs)
     recs = [
         (str(a), str(b), bool(s))
-        for a, b, s in zip(pairs["p1"], pairs["p2"], pairs["sibling"])
+        for a, b, s in zip(pairs["p1"], pairs["p2"], pairs["sibling"], strict=True)
     ]
     recs.sort(key=lambda r: (r[0], r[1]))
     return recs

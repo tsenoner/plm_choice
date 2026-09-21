@@ -224,7 +224,7 @@ def freeze_canonical_set(
             "n_missing": len(missing),
             "cap_aa": cap_aa,
             "missing_ids": missing,
-            "missing_all_over_cap": bool(missing) and all(l > cap_aa for l in missing_lens),
+            "missing_all_over_cap": bool(missing) and all(n > cap_aa for n in missing_lens),
             "missing_len_min": min(missing_lens) if missing_lens else None,
             "missing_len_max": max(missing_lens) if missing_lens else None,
             # Co-PI decision (NEW-3); validated against ESM1B_PAIRED_POLICIES.

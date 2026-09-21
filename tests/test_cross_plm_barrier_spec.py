@@ -39,7 +39,7 @@ def _write_parquet(path: Path, n_rows: int, cols=CROSS_PLM_PER_PAIR_COLUMNS):
 
 
 def _write_cell(d: Path, a, b, rep, dist, *, n_pairs=15, parquet=True,
-                per_pair_columns=list(CROSS_PLM_PER_PAIR_COLUMNS), population=(6, 6)):
+                per_pair_columns=tuple(CROSS_PLM_PER_PAIR_COLUMNS), population=(6, 6)):
     """Write a (parquet + sidecar) cross-pLM cell the way the CLI does."""
     parquet_path = d / f"cross_plm_{a}__{b}_{rep}_{dist}.parquet"
     if parquet:

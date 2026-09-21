@@ -8,13 +8,18 @@ predicate, and atomic-write the per-query parquet.
 """
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
+
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
 
 from evaluation.analysis_barrier import ArtifactSpec, check_artifact
 from evaluation.population import PopulationError
-from evaluation.recall_fp_report import recall_fp_report
+from evaluation.recall_fp_report import _recall_ci, main, recall_fp_report
 
 
 def _db():
@@ -221,12 +226,8 @@ def test_recall_fp_report_rejects_nonfinite_embeddings(tmp_path):
 # sidecar JSON (recall_fp_report itself deliberately does NOT write the sidecar —
 # the spec-builder reads it). Exit-code contract mirrors the other DAG mains:
 # 0 = ok, 1 = data failure (population drift), 2 = operator/config fault.
-import json
-from pathlib import Path
 
-import h5py
 
-from evaluation.recall_fp_report import main
 
 
 def _write_h5(path, embeddings):
@@ -504,9 +505,7 @@ def test_cli_multidomain_set_intersection_through_bridge(tmp_path):
 
 
 # ── BCa CIs on mean recall@first-FP ─────────────────────────────────────────────
-import math
 
-from evaluation.recall_fp_report import _recall_ci
 
 
 def test_recall_ci_brackets_mean_and_is_reproducible():

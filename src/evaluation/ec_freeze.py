@@ -25,7 +25,7 @@ def _canonical_records(labels: pd.DataFrame) -> list[tuple[str, list[str]]]:
         raise KeyError("labels must have columns protein_id and ec_set")
     recs = [
         (str(pid), sorted(str(e) for e in ec_set))
-        for pid, ec_set in zip(labels["protein_id"], labels["ec_set"])
+        for pid, ec_set in zip(labels["protein_id"], labels["ec_set"], strict=True)
         if ec_set  # non-empty EC set == EC-positive
     ]
     recs.sort(key=lambda r: r[0])

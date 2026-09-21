@@ -756,7 +756,7 @@ class ProteinAnalysisPipeline:
         # Create the combined figure
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
-        for idx, (filename, panel) in enumerate(zip(plot_paths, panel_labels)):
+        for idx, (filename, panel) in enumerate(zip(plot_paths, panel_labels, strict=True)):
             row, col = divmod(idx, 3)
             ax = axes[row, col]
 

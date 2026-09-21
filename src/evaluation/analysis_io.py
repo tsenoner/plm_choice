@@ -118,7 +118,7 @@ def pairwise_distance_long(
     matrix = np.stack([np.asarray(embeddings[pid], dtype=np.float32) for pid in ids])
     dmat = cdist(matrix, matrix, metric=_DISTANCE_METRIC_MAP[distance])
     iu, ju = np.triu_indices(len(ids), k=1)  # upper triangle, no diagonal
-    records = [(ids[i], ids[j], float(dmat[i, j])) for i, j in zip(iu, ju)]
+    records = [(ids[i], ids[j], float(dmat[i, j])) for i, j in zip(iu, ju, strict=True)]
     return pd.DataFrame(records, columns=["a", "b", "dist"])
 
 
@@ -134,7 +134,7 @@ def _pivot_long_to_matrix(long_df: pd.DataFrame, ids: list[str], value_col: str)
     pos = {pid: i for i, pid in enumerate(ids)}
     n = len(ids)
     mat = np.zeros((n, n), dtype=float)
-    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col]):
+    for a, b, v in zip(long_df["a"], long_df["b"], long_df[value_col], strict=True):
         i, j = pos[a], pos[b]
         mat[i, j] = mat[j, i] = float(v)
     return mat

@@ -230,7 +230,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
     quartile_cols = ["q25", "median", "q75", "IQR"]
     titles = ["Q25", "Median", "Q75", "IQR"]
 
-    for idx, (col, title) in enumerate(zip(quartile_cols, titles)):
+    for idx, (col, title) in enumerate(zip(quartile_cols, titles, strict=True)):
         ax = axes[idx]
 
         ax.scatter(
@@ -301,7 +301,7 @@ def create_visualizations(df, metrics, quartile_metrics, output_dir):
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
     axes = axes.flatten()
 
-    for idx, (col, title) in enumerate(zip(quartile_cols, titles)):
+    for idx, (col, title) in enumerate(zip(quartile_cols, titles, strict=True)):
         ax = axes[idx]
 
         ax.scatter(

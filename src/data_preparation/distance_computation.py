@@ -390,7 +390,7 @@ def validate_inputs(
             f"Loaded Parquet with {len(df)} rows and columns: {list(df.columns)}"
         )
     except Exception as e:
-        raise ValueError(f"Error reading Parquet file: {e}")
+        raise ValueError(f"Error reading Parquet file: {e}") from e
 
     # Check for required columns
     required_cols = ["query", "target"]

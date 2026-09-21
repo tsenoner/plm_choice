@@ -121,7 +121,7 @@ def fetch_enzyme_annotations(
                 for line in data_lines:
                     parts = line.split("\t")
                     if len(parts) >= len(header):
-                        entry = dict(zip(header, parts))
+                        entry = dict(zip(header, parts, strict=False))
                         entries.append(entry)
 
                 # Check for pagination (Link header)

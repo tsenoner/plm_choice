@@ -302,7 +302,7 @@ def test_multi_level_uses_positive_predicate_builder():
     )
 
     def builder(lab, level):
-        lk = dict(zip(lab["protein_id"], lab[level]))
+        lk = dict(zip(lab["protein_id"], lab[level], strict=True))
         return lambda q, t: len(lk[q] & lk[t]) > 0
 
     out = recall_at_first_fp_multi_level(
