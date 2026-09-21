@@ -277,7 +277,15 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
             linestyle=(0, (4, 3)), linewidth=0.8, zorder=1,
         )
     )
-    ax.text(PROBE_X + PROBE_W / 2, REGION_TOP + 1.5, "trained probe — one per target",
+    # This header does three jobs at once: it names the region, states that there is one
+    # network per target rather than one network with three heads, and binds t -- so the
+    # output can be labelled y-hat_t and needs no gloss of its own. NOTE: Arial has no
+    # U+2208, so the set symbol is the one glyph in the figure that comes from DejaVu Sans
+    # (checked: Helvetica, Verdana and Tahoma lack it too; Arial Unicode MS has it but is
+    # not on every machine). It is a symbol, not a letterform, so the mismatch does not
+    # read the way a whole word in a second face would.
+    ax.text(PROBE_X + PROBE_W / 2, REGION_TOP + 1.5,
+            f"trained probe — one per target t ∈ {{{', '.join(TARGETS)}}}",
             ha="center", va="bottom",
             fontsize=FS_NOTE, color=MUTED, style="italic")
 
@@ -343,14 +351,8 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     _arrow(ax, X_T2 + W_LAYER, TRUNK_Y, X_T3, TRUNK_Y)
     _layer(ax, X_T3, TRUNK_Y, f"{w2} → {w3}", "no activation")
     _arrow(ax, X_T3 + W_LAYER, TRUNK_Y, X_YHAT - 1.5, TRUNK_Y)
-    ax.text(X_YHAT, TRUNK_Y, "$\\hat{y}$", ha="left", va="center",
+    ax.text(X_YHAT, TRUNK_Y, "$\\hat{y}_t$", ha="left", va="center",
             fontsize=10, color=INK, zorder=6)
-    # One line, not two. Broken after "TM-score" the list stopped reading as three
-    # alternatives and started reading as a stanza; the header carries "one per target",
-    # so the "or" only has to separate, not explain.
-    ax.text(X_YHAT - 9.0, TRUNK_Y - H_LAYER / 2 - 2.5,
-            "PIDE, TM-score or HFSP", ha="center", va="top",
-            fontsize=FS_NOTE, color=MUTED, zorder=6)
 
     # ---- the training-free Euclidean read-out, off the same frozen embeddings ----
     # It forks forward, down the gutter between the frozen band and the trained box,
