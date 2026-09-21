@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
           f"mean {ce['mean']:+.4f}, sd {ce['sd']:.4f}, range [{ce['min']:+.4f}, {ce['max']:+.4f}]")
     for n_prot in args.allvsall_sizes:
         vals = [r["clean|esm1b"] for r in allvsall if r["n_proteins"] == n_prot]
-        print(f"clean|esm1b over all-vs-all of {n_prot} proteins: {['%+.4f' % v for v in vals]}")
+        print(f"clean|esm1b over all-vs-all of {n_prot} proteins: {[f'{v:+.4f}' for v in vals]}")
     return 0
 
 

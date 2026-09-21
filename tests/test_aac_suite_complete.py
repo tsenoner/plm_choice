@@ -28,7 +28,7 @@ def _count_test_items(mod) -> int:
     # Methods on Test* classes defined in this module
     for cls_name, cls_obj in inspect.getmembers(mod, inspect.isclass):
         if cls_name.startswith("Test") and cls_obj.__module__ == mod.__name__:
-            for meth_name, meth_obj in inspect.getmembers(cls_obj, inspect.isfunction):
+            for meth_name, _meth_obj in inspect.getmembers(cls_obj, inspect.isfunction):
                 if meth_name.startswith("test_"):
                     count += 1
     return count

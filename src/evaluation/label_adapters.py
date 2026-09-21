@@ -46,7 +46,7 @@ def parse_ec_from_protein_names(
         are omitted — caller computes coverage as ``len(result) / len(df)``.
     """
     records: list[tuple[str, str]] = []
-    for pid, name in zip(df[id_col], df[name_col]):
+    for pid, name in zip(df[id_col], df[name_col], strict=True):
         if not isinstance(name, str):
             continue
         m = _EC_RE.search(name)
@@ -132,7 +132,7 @@ def parse_cath_from_gene3d(
                 f"have {list(df.columns)}"
             )
     records: list[tuple[str, frozenset[str], frozenset[str], None]] = []
-    for pid, value in zip(df[id_col], df[gene3d_col]):
+    for pid, value in zip(df[id_col], df[gene3d_col], strict=True):
         if not isinstance(pid, str) or not pid.strip():
             continue
         parsed = _parse_gene3d_field(value)
@@ -194,7 +194,7 @@ def make_cath_is_positive_fn(labels: pd.DataFrame, level: str):
         raise KeyError(
             f"level {level!r} not in labels columns {list(labels.columns)}"
         )
-    lookup = dict(zip(labels["protein_id"], labels[level]))
+    lookup = dict(zip(labels["protein_id"], labels[level], strict=True))
 
     def is_positive(query_id: str, target_id: str) -> bool:
         q = lookup.get(query_id)

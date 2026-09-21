@@ -347,7 +347,6 @@ def test_cli_writes_spec_and_returns_0(tmp_path):
 
 def test_cli_empty_population_tags_returns_2(tmp_path):
     """Empty --population-tags → exit 2 (operator fault)."""
-    out = tmp_path / "spec.json"
     # argparse nargs="+" requires at least one value; simulate by passing the builder directly
     with pytest.raises(SpecBuildError):
         build_aac_floor_barrier_spec(tmp_path, population_tags=[], levels=["fold"])

@@ -1,13 +1,19 @@
 import json
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
 
 from evaluation.ec_report import (
+    PopulationError,
+    _build_matrices,
+    ec_correlation_report,
     ec_dist_histogram,
     stratify_by_class,
+    stratify_by_superfamily,
 )
+from evaluation.ec_report import main as ec_main
 
 
 def _pairs():
@@ -55,7 +61,6 @@ def test_stratify_returns_real_stratum_tau_b():
     assert np.isnan(out["tau_b_across"])               # empty stratum -> NaN, not 0
 
 
-from evaluation.ec_report import stratify_by_superfamily
 
 
 def test_superfamily_within_across_and_nonhomologous_restriction():
@@ -78,7 +83,6 @@ def test_superfamily_within_across_and_nonhomologous_restriction():
     assert out["n_nonhomologous"] == 2
 
 
-from evaluation.ec_report import PopulationError, _build_matrices
 
 
 def test_build_matrices_aligned_and_symmetric():
@@ -114,7 +118,6 @@ def test_build_matrices_population_drift_raises():
                         distance="euclidean", ec_set_agg="min", allow_capped=False)
 
 
-from evaluation.ec_report import ec_correlation_report
 
 
 def _monotone_cohort(n=24, seed=0):
@@ -156,9 +159,7 @@ def test_report_writes_parquet_and_returns_manifest(tmp_path):
     assert "path" in manifest
 
 
-import h5py
 
-from evaluation.ec_report import main as ec_main
 
 
 def _write_h5(path, emb):
@@ -174,8 +175,10 @@ def _write_freeze(path, ids):
 
 def test_cli_exit0_writes_sidecar(tmp_path, capsys):
     emb, ec_labels, ids = _monotone_cohort()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"
+    _write_freeze(freeze, ids)
     tsv = tmp_path / "labels.tsv"
     # Build a UniProt-style TSV the CLI's parse_ec reads.
     pd.DataFrame({
@@ -206,8 +209,10 @@ def test_cli_exit2_on_missing_input(tmp_path):
 def test_cli_exit1_on_population_drift(tmp_path):
     emb, ec_labels, ids = _monotone_cohort()
     del emb[ids[0]]  # drop a frozen id from the embeddings
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"
+    _write_freeze(freeze, ids)
     tsv = tmp_path / "labels.tsv"
     pd.DataFrame({"Entry": ids,
                   "Protein names": [f"enzyme (EC {list(s)[0]})" for s in ec_labels["ec_set"]]
@@ -221,8 +226,10 @@ def test_cli_exit2_on_malformed_freeze(tmp_path):
     # A freeze with an empty 'ids' list -> load_frozen_ids raises ValueError -> exit 2
     # (the ValueError arm of the exit-code matrix, distinct from the I/O FileNotFound arm).
     emb, ec_labels, ids = _monotone_cohort()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    bad_freeze = tmp_path / "bad.json"; bad_freeze.write_text(json.dumps({"ids": []}))
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    bad_freeze = tmp_path / "bad.json"
+    bad_freeze.write_text(json.dumps({"ids": []}))
     tsv = tmp_path / "labels.tsv"
     pd.DataFrame({"Entry": ids,
                   "Protein names": [f"enzyme (EC {list(s)[0]})" for s in ec_labels["ec_set"]]
@@ -236,8 +243,10 @@ def test_cli_with_ec_col_and_superfamily_populates_strata(tmp_path):
     # Integration: the structured --ec-col path AND the --superfamily-source homology
     # control are both reachable from the CLI and populate the manifest strata (D8 + D9).
     emb, ec_labels, ids = _monotone_cohort()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "ec_freeze.json"; _write_freeze(freeze, ids)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "ec_freeze.json"
+    _write_freeze(freeze, ids)
     # Structured EC column (not the name regex).
     tsv = tmp_path / "labels.tsv"
     pd.DataFrame({"Entry": ids,

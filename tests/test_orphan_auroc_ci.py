@@ -239,7 +239,6 @@ def _separable_fixture(n_orphans=20, seed=0):
 
 def test_perfect_separation_auroc_one_ci_sane():
     # sibling cos all strictly above non-sibling cos -> point AUROC 1.0
-    rng = np.random.default_rng(1)
     ids = [f"O{i}" for i in range(20)]
     rows = []
     for i in range(19):
@@ -392,7 +391,7 @@ def test_incremental_jackknife_is_fast_at_scale():
         rows.append((ids[i], ids[i + 1], rng.normal(), 0.5, 0.5, is_sib))
     # a few hubs to make some orphans high-degree
     for h in (0, 1, 2):
-        for j in range(50):
+        for _ in range(50):
             t = int(rng.integers(0, n))
             if t != h:
                 rows.append((ids[h], ids[t], rng.normal(), 0.5, 0.5, bool(rng.random() < 0.3)))

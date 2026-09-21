@@ -126,8 +126,8 @@ def test_i4_negative_lower_bound_not_clipped(tmp_path):
     # pLM clearly below AAC, with spread so the bootstrap is non-degenerate.
     plm_vals = np.clip(0.2 + 0.05 * rng.standard_normal(len(ids)), 0, 1)
     aac_vals = np.clip(0.8 + 0.05 * rng.standard_normal(len(ids)), 0, 1)
-    plm = _write_per_query(tmp_path / "plm.parquet", dict(zip(ids, plm_vals)))
-    aac = _write_per_query(tmp_path / "aac.parquet", dict(zip(ids, aac_vals)))
+    plm = _write_per_query(tmp_path / "plm.parquet", dict(zip(ids, plm_vals, strict=True)))
+    aac = _write_per_query(tmp_path / "aac.parquet", dict(zip(ids, aac_vals, strict=True)))
     m = floor_comparison_report(
         plm, aac, tmp_path / "out",
         plm="esm2", distance="euclidean", level="fold", n_boot=2000, seed=42,

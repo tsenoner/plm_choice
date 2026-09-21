@@ -214,7 +214,7 @@ def analyse(path: Path, n: int, seed: int, fasta: Path | None, label: str) -> di
             f"{rep['n_nonfinite']}/{X.shape[0]} sampled vectors contain NaN/Inf"
         )
     X = X[finite_rows]
-    ids = [i for i, keep in zip(ids, finite_rows) if keep]
+    ids = [i for i, keep in zip(ids, finite_rows, strict=True) if keep]
     if X.shape[0] < 10:
         rep["fatal"].append("fewer than 10 usable vectors; nothing to measure")
         rep["verdict"] = "FAIL"

@@ -168,7 +168,7 @@ def plot_grid_for_param(
     axes = np.atleast_2d(axes)
     flat_axes = axes.flat
 
-    for ax, npz in zip(flat_axes, npz_files):
+    for ax, npz in zip(flat_axes, npz_files, strict=False):
         data = np.load(npz)
         preds = data["predictions"].astype(float)
         targets = data["targets"].astype(float)

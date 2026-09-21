@@ -35,7 +35,7 @@ class SpecBuildError(Exception):
     """A barrier spec cannot be built (operator/config fault -> exit 2)."""
 
 
-def dedup(seq: Sequence[_T]) -> list[_T]:
+def dedup[T](seq: Sequence[T]) -> list[T]:
     """Order-preserving de-duplication (so a duplicated grid axis can't mask a gap).
 
     Works on any hashable elements (pLM-name strings and (plm_a, plm_b) tuples).

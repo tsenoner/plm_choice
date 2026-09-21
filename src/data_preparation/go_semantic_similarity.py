@@ -319,7 +319,7 @@ class WangSimilarity:
         matrix = [[self.term_similarity(ta, tb) for tb in terms_b] for ta in terms_a]
 
         forward_sum = sum(max(row) for row in matrix)
-        backward_sum = sum(max(col) for col in zip(*matrix))
+        backward_sum = sum(max(col) for col in zip(*matrix, strict=True))
 
         return (forward_sum + backward_sum) / (len(terms_a) + len(terms_b))
 

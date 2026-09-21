@@ -87,7 +87,7 @@ def stratify_by_superfamily(pairs: pd.DataFrame, superfamily: dict) -> dict:
             return None  # unknown -> excluded from both strata
         return len(sa & sb) > 0
 
-    rel = [_intersects(a, b) for a, b in zip(pairs["a"], pairs["b"])]
+    rel = [_intersects(a, b) for a, b in zip(pairs["a"], pairs["b"], strict=True)]
     rel = pd.Series(rel, index=pairs.index)
     within = rel == True  # noqa: E712 (explicit True, not NaN/None)
     across = rel == False  # noqa: E712
@@ -311,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.superfamily_source:
             from evaluation.label_adapters import load_cath_labels
             cath = load_cath_labels(args.superfamily_source)
-            superfamily = dict(zip(cath["protein_id"], cath["superfamily"]))
+            superfamily = dict(zip(cath["protein_id"], cath["superfamily"], strict=True))
         manifest = ec_correlation_report(
             embeddings, ec_labels, args.out_dir,
             plm=args.plm, distance=args.distance, statistic=args.statistic,

@@ -143,7 +143,7 @@ def load_organism_mapping(
     mapping: dict[str, int] = dict(
         zip(
             mapping_df["protein_id"].to_list(),
-            mapping_df["organism_id"].to_list(),
+            mapping_df["organism_id"].to_list(), strict=True,
         )
     )
 

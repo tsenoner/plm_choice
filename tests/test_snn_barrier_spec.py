@@ -33,7 +33,7 @@ def _write_parquet(path: Path, n_rows: int, cols=SNN_PER_QUERY_COLUMNS):
 
 
 def _write_cell(d: Path, a, b, rep, dist, *, n_common=6, parquet=True,
-                per_query_columns=list(SNN_PER_QUERY_COLUMNS), population=(6, 6)):
+                per_query_columns=tuple(SNN_PER_QUERY_COLUMNS), population=(6, 6)):
     """Write a (parquet + sidecar) cell the way the SNN CLI does."""
     parquet_path = d / f"snn_{a}__{b}_{rep}_{dist}.parquet"
     if parquet:

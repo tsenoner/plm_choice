@@ -197,7 +197,7 @@ def assemble_agreement_matrices(
             records = [
                 {"a": a, "b": b, "perm_p": p,
                  "adjusted_p": float(adj), "rejected": bool(rej)}
-                for (a, b, p), adj, rej in zip(surviving, adjusted, rejected)
+                for (a, b, p), adj, rej in zip(surviving, adjusted, rejected, strict=True)
             ]
             families[label] = {
                 "n_present": len(entries),

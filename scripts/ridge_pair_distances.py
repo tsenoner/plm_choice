@@ -117,7 +117,7 @@ def pair_distances(
     mis-pairs 5.9M distances if it ever does not, and the parquet this writes is
     attached to the pair table positionally.
     """
-    lut = dict(zip(present, range(len(present))))
+    lut = dict(zip(present, range(len(present)), strict=True))
     qi = (
         pairs["query"]
         .replace_strict(lut, default=-1, return_dtype=pl.Int64)

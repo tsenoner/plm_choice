@@ -108,7 +108,7 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
     except Exception as e:
         raise ValueError(
             f"Error reading {file_path}. Ensure 'query', 'target', and '{param_name}' columns exist. Original error: {e}"
-        )
+        ) from e
 
     initial_rows = df.height
     df = df.drop_nulls(subset=[param_name])
@@ -124,7 +124,7 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
     except Exception as e:
         raise OSError(
             f"Error opening or reading HDF5 file {hdf_file}. Original error: {e}"
-        )
+        ) from e
 
     # Restrict to the cohort shared by every embedding arm. Without this each arm
     # keeps whatever proteins its own HDF5 happens to contain, and since a pair is

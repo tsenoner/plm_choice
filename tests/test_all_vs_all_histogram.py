@@ -60,7 +60,7 @@ def test_histogram_is_identical_across_batch_sizes(all_vs_all, embeddings):
         )[0]
         for bs in BATCH_SIZES
     ]
-    for bs, histogram in zip(BATCH_SIZES[1:], histograms[1:]):
+    for bs, histogram in zip(BATCH_SIZES[1:], histograms[1:], strict=True):
         assert np.array_equal(histogram, histograms[0]), (
             f"batch_size={bs} produced a different histogram — --batch-size is "
             f"documented as a memory knob and must not change the result"

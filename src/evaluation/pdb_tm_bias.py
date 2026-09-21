@@ -42,9 +42,9 @@ def _inner_join_pairs(left: pd.DataFrame, right: pd.DataFrame, value_cols: tuple
     pairs are symmetric. We do not symmetrise here because the upstream
     distance-computation step already emits canonical pairs.
     """
-    l = left.rename(columns={value_cols[0]: "_lv"})[["a", "b", "_lv"]]
-    r = right.rename(columns={value_cols[1]: "_rv"})[["a", "b", "_rv"]]
-    return l.merge(r, on=["a", "b"], how="inner")
+    lf = left.rename(columns={value_cols[0]: "_lv"})[["a", "b", "_lv"]]
+    rf = right.rename(columns={value_cols[1]: "_rv"})[["a", "b", "_rv"]]
+    return lf.merge(rf, on=["a", "b"], how="inner")
 
 
 def paired_tm_delta(

@@ -50,7 +50,7 @@ def _stack_embeddings(
     if level not in labels.columns:
         raise KeyError(f"level={level!r} not in labels columns {list(labels.columns)}")
 
-    label_lookup = dict(zip(labels["protein_id"], labels[level]))
+    label_lookup = dict(zip(labels["protein_id"], labels[level], strict=True))
     ids = [pid for pid in embeddings if pid in label_lookup]
     if len(ids) < 2:
         raise ValueError(

@@ -137,8 +137,10 @@ def test_provenance_warns_when_cap_marker_present(tmp_path):
     emb, pairs, ids = _clean_monotone()
     h5 = tmp_path / "toyplm.h5"
     _write_h5(h5, emb, root_attrs={"max_length_cap": 1024})
-    freeze = tmp_path / "freeze.json"; _write_freeze(freeze, ids)
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ids)
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     with pytest.warns(UserWarning, match="max_length_cap"):
         rc = orphan_main([
             "--plm", "toyplm", "--emb-h5", str(h5), "--pairs", str(pairs_tsv),
@@ -152,8 +154,10 @@ def test_provenance_silent_when_marker_absent(tmp_path):
     emb, pairs, ids = _clean_monotone()
     h5 = tmp_path / "toyplm.h5"
     _write_h5(h5, emb)  # NO root attrs -> marker absent
-    freeze = tmp_path / "freeze.json"; _write_freeze(freeze, ids)
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ids)
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any warning becomes an error
         rc = orphan_main([
@@ -202,9 +206,12 @@ def test_truncated_vs_uncapped_changes_auroc(tmp_path):
 # ── CLI 3-exit-code battery ──────────────────────────────────────────────────────────────
 def test_cli_exit0_writes_sidecar(tmp_path):
     emb, pairs, ids = _clean_monotone()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "freeze.json"; _write_freeze(freeze, ids)
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ids)
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     rc = orphan_main([
         "--plm", "toyplm", "--emb-h5", str(h5), "--pairs", str(pairs_tsv),
         "--freeze", str(freeze), "--out-dir", str(tmp_path),
@@ -234,9 +241,12 @@ def test_cli_exit2_on_missing_input(tmp_path):
 
 def test_cli_exit2_on_malformed_freeze(tmp_path):
     emb, pairs, ids = _clean_monotone()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    bad_freeze = tmp_path / "bad.json"; bad_freeze.write_text(json.dumps({"ids": []}))
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    bad_freeze = tmp_path / "bad.json"
+    bad_freeze.write_text(json.dumps({"ids": []}))
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     rc = orphan_main([
         "--plm", "toyplm", "--emb-h5", str(h5), "--pairs", str(pairs_tsv),
         "--freeze", str(bad_freeze), "--out-dir", str(tmp_path),
@@ -247,9 +257,12 @@ def test_cli_exit2_on_malformed_freeze(tmp_path):
 def test_cli_exit1_on_population_drift(tmp_path):
     emb, pairs, ids = _clean_monotone()
     del emb[ids[0]]  # drop a frozen id from the embeddings
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "freeze.json"; _write_freeze(freeze, ids)
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ids)
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     rc = orphan_main([
         "--plm", "toyplm", "--emb-h5", str(h5), "--pairs", str(pairs_tsv),
         "--freeze", str(freeze), "--out-dir", str(tmp_path),
@@ -262,9 +275,12 @@ def test_cli_parquet_honours_guards(tmp_path):
     from evaluation.analysis_barrier import ArtifactSpec, check_artifact
 
     emb, pairs, ids = _clean_monotone()
-    h5 = tmp_path / "toyplm.h5"; _write_h5(h5, emb)
-    freeze = tmp_path / "freeze.json"; _write_freeze(freeze, ids)
-    pairs_tsv = tmp_path / "pairs.tsv"; _write_pairs_tsv(pairs_tsv, pairs)
+    h5 = tmp_path / "toyplm.h5"
+    _write_h5(h5, emb)
+    freeze = tmp_path / "freeze.json"
+    _write_freeze(freeze, ids)
+    pairs_tsv = tmp_path / "pairs.tsv"
+    _write_pairs_tsv(pairs_tsv, pairs)
     rc = orphan_main([
         "--plm", "toyplm", "--emb-h5", str(h5), "--pairs", str(pairs_tsv),
         "--freeze", str(freeze), "--out-dir", str(tmp_path),

@@ -604,9 +604,9 @@ def grid_test(
         if canonical.empty:
             continue
         rejected, p_adj = correct(canonical["p_raw"].to_numpy(), alpha=alpha)
-        pair_to_padj = dict(zip(canonical["_pair_key"], p_adj))
-        pair_to_rej = dict(zip(canonical["_pair_key"], rejected))
-        for idx, key in zip(group_df.index, group_df["_pair_key"]):
+        pair_to_padj = dict(zip(canonical["_pair_key"], p_adj, strict=True))
+        pair_to_rej = dict(zip(canonical["_pair_key"], rejected, strict=True))
+        for idx, key in zip(group_df.index, group_df["_pair_key"], strict=True):
             out.at[idx, "p_adj"] = pair_to_padj[key]
             out.at[idx, "significant"] = bool(pair_to_rej[key])
 

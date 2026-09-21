@@ -193,7 +193,7 @@ def aac_floor_report(
         "per_query_columns": list(PER_QUERY_COLUMNS),
         "levels": {},
     }
-    for level, level_seed in zip(levels, level_seeds):
+    for level, level_seed in zip(levels, level_seeds, strict=True):
         is_pos = make_cath_is_positive_fn(labels, level)
         result = recall_at_first_fp(
             embeddings,

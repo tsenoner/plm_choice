@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 from scipy.stats import kendalltau
 
-from evaluation.stats import kendall_tau_b
+from evaluation.stats import (
+    _induced_pair_values,
+    correlation_permutation_null,
+    correlation_vertex_bca_ci,
+    kendall_tau_b,
+)
 
 
 def test_matches_scipy_variant_b():
@@ -24,7 +29,6 @@ def test_constant_margin_returns_nan():
     assert np.isnan(kendall_tau_b(x, y))
 
 
-from evaluation.stats import _induced_pair_values
 
 
 def test_induced_pairs_full_index_is_all_upper_triangle():
@@ -50,7 +54,6 @@ def test_induced_pairs_drops_self_pairs_and_keeps_multiplicity():
     assert e.tolist() == [4.0, 4.0]
 
 
-from evaluation.stats import correlation_vertex_bca_ci
 
 
 def _monotone_matrices(n=40, seed=0):
@@ -211,14 +214,16 @@ def test_vertex_bca_coverage_is_near_nominal(model):
     )
 
 
-from evaluation.stats import correlation_permutation_null
 
 
 def test_permutation_null_centers_near_zero_and_p_high_for_noise():
     rng = np.random.default_rng(5)
     n = 30
-    dist = rng.random((n, n)); dist = (dist + dist.T) / 2; np.fill_diagonal(dist, 0)
-    ec = rng.integers(0, 5, (n, n)).astype(float); ec = np.triu(ec) + np.triu(ec, 1).T
+    dist = rng.random((n, n))
+    dist = (dist + dist.T) / 2
+    np.fill_diagonal(dist, 0)
+    ec = rng.integers(0, 5, (n, n)).astype(float)
+    ec = np.triu(ec) + np.triu(ec, 1).T
     np.fill_diagonal(ec, 0)
     null_vals, p = correlation_permutation_null(
         dist, ec, statistic="tau_b", n_perm=200, seed=1)

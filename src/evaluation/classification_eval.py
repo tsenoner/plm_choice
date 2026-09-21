@@ -249,7 +249,7 @@ def load_classifications_from_parquet(
         valid = df.filter(pl.col(col).is_not_null()).select([id_col, col])
         protein_classes = dict(zip(
             valid[id_col].to_list(),
-            valid[col].cast(pl.Utf8).to_list(),
+            valid[col].cast(pl.Utf8).to_list(), strict=True,
         ))
 
         n_classes = len(set(protein_classes.values()))

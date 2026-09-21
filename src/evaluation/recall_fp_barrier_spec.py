@@ -162,10 +162,11 @@ def build_recall_fp_barrier_spec(
                 covered = manifest is not None and level in manifest["levels"]
                 canonical = _canonical_parquet(sidecar_dir, plm, rep, level)
 
-                # `_lvl=level` freezes the loop var at definition time (Python binds
-                # closure names late); `manifest` is stable across the level loop.
-                def _path_rows(_lvl=level):
-                    info = manifest["levels"][_lvl]
+                # `_lvl=level` and `_mf=manifest` freeze the loop variables at
+                # definition time (Python binds closure names late). `manifest` was already
+                # stable across the level loop; binding it makes that structural.
+                def _path_rows(_lvl=level, _mf=manifest):
+                    info = _mf["levels"][_lvl]
                     rows = info.get("n_queries_with_positives") if use_expected_rows else None
                     return info["path"], rows
 

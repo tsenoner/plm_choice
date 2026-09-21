@@ -592,8 +592,9 @@ def _write_ca_pdb(rows, out_pdb: Path) -> int:
     with open(out_pdb, "w") as fh:
         for i, (comp, x, y, z, occ, b, el) in enumerate(rows, start=1):
             fh.write(
-                "ATOM  %5d  CA  %3s A%4d    %8.3f%8.3f%8.3f%6.2f%6.2f          %2s\n"
-                % (i, comp[:3], i, x, y, z, occ, b, el[:2].rjust(2))
+                f"ATOM  {i:>5d}  CA  {comp[:3]:>3} A{i:>4d}    "
+                f"{x:>8.3f}{y:>8.3f}{z:>8.3f}{occ:>6.2f}{b:>6.2f}"
+                f"          {el[:2].rjust(2):>2}\n"
             )
         fh.write("TER\nEND\n")
     return len(rows)
