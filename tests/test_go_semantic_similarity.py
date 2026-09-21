@@ -17,9 +17,11 @@ import pytest
 
 from data_preparation.go_semantic_similarity import (
     AUTHOR_EVIDENCE,
+    CAFA_CORE6,
     ELECTRONIC_EVIDENCE,
     EXPERIMENTAL_EVIDENCE,
     GOTerm,
+    build_parser,
     load_annotations_tsv,
     parse_obo,
 )
@@ -112,6 +114,58 @@ def test_high_throughput_codes_count_as_experimental():
     """HTP/HDA/HMP/HGI/HEP were added to GO in 2017 and are experimental."""
     for code in ("HTP", "HDA", "HMP", "HGI", "HEP"):
         assert code in EXPERIMENTAL_EVIDENCE
+
+
+# ── the CAFA core-6 default ───────────────────────────────────────────────────
+# The GO arm's ground truth is the six codes the CAFA assessments score against.
+# The default moved here from the 11-code EXPERIMENTAL_EVIDENCE; a silent revert
+# would change every GO number in the paper without failing anything else, so the
+# set and the CLI default are both pinned.
+
+
+def test_cafa_core6_is_exactly_the_six_assessment_codes():
+    assert set(CAFA_CORE6) == {"EXP", "IDA", "IPI", "IMP", "IGI", "IEP"}
+
+
+def test_cafa_core6_is_the_cli_default():
+    parser = build_parser()
+    assert parser.get_default("evidence_codes") == sorted(CAFA_CORE6)
+    args = parser.parse_args(
+        ["--annotations", "a.tsv", "--pairs_parquet", "p.parquet", "--output_parquet", "o.parquet"]
+    )
+    assert args.evidence_codes == sorted(CAFA_CORE6)
+
+
+def test_cafa_core6_is_a_subset_of_the_experimental_set():
+    """Narrower, not different: every core-6 code is still an experimental one."""
+    assert CAFA_CORE6 <= EXPERIMENTAL_EVIDENCE
+    assert "IEA" not in CAFA_CORE6
+    for code in ("HTP", "HDA", "HMP", "HGI", "HEP"):
+        assert code not in CAFA_CORE6
+
+
+def test_experimental_evidence_is_still_the_eleven_code_set():
+    """Kept for callers that pinned it — changing the default must not edit it."""
+    assert len(EXPERIMENTAL_EVIDENCE) == 11
+
+
+def test_core6_filter_drops_high_throughput_annotations(tmp_path):
+    path = tmp_path / "annotations.tsv"
+    path.write_text(
+        "P00001\tGO:0004672\tF\tIDA\n"
+        "P00001\tGO:0005515\tF\tHDA\n"
+    )
+    annotations = load_annotations_tsv(path, GO_TERMS, evidence_codes=set(CAFA_CORE6))
+    assert annotations["P00001"]["MFO"] == {"GO:0004672"}
+
+
+def test_a_header_row_is_not_an_annotation(tmp_path):
+    """``export_go_annotations`` writes a header; it used to be read as a row whose
+    evidence code was the literal string ``EVIDENCE``."""
+    path = tmp_path / "annotations.tsv"
+    path.write_text("protein_id\tGO_term\taspect\tevidence\nP00001\tGO:0004672\tF\tIDA\n")
+    annotations = load_annotations_tsv(path, GO_TERMS, evidence_codes=set(CAFA_CORE6))
+    assert set(annotations) == {"P00001"}
 
 
 def test_four_column_tsv_supports_filtering(tmp_path):
