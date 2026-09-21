@@ -177,6 +177,14 @@ def main() -> int:
             f"identical mask has {identical.size:,} rows, distances have {n_rows:,}"
         )
 
+    if identical.dtype != np.bool_:
+        # `~` on an integer array is a bitwise NOT (-1, -2, ...), and raw[arm][keep] then
+        # silently becomes integer fancy-indexing over 75.8M rows: every cell computed on
+        # the wrong pairs, exit code 0. The length check above does not catch it.
+        raise TypeError(
+            f"identical mask must be boolean, got {identical.dtype}. "
+            "Check the dtype written by scripts/ridge_identical_pairs.py."
+        )
     keep = ~identical
     n_identical = int(identical.sum())
     per_arm_nan = {}
@@ -273,9 +281,16 @@ def main() -> int:
 
     # The two files the shipped plotter's cache loader understands, so the figure can
     # also be drawn by the normal --visualizations combined path.
+    #
+    # ci_lower/ci_upper are NaN, not the point estimate. This reduction computes no
+    # interval -- bootstrapping 75.8M pairs is not what it is for -- and writing rho into
+    # both bounds renders as "0.87 [0.87, 0.87]" wherever show_ci is on: a precision claim
+    # that was never measured. NaN is what the shipped producer writes when it has no
+    # interval, and it draws as nothing.
+    nan_like = np.full_like(rho, np.nan, dtype=float)
     (args.out_dir / "correlation_data.json").write_text(
         json.dumps({"correlations": rho.tolist(),
-                    "ci_lower": rho.tolist(), "ci_upper": rho.tolist(),
+                    "ci_lower": nan_like.tolist(), "ci_upper": nan_like.tolist(),
                     "columns": arms, "metadata": meta})
     )
     (args.out_dir / "wasserstein_data.json").write_text(

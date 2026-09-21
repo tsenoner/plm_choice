@@ -10,6 +10,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+from shared.embedding_names import is_iid_random_baseline
 from visualization.plm_constants import (
     EMBEDDING_COLOR_MAP,
     EMBEDDING_FAMILY_COLOR_MAP,
@@ -407,8 +408,14 @@ def _add_trendlines(
         valid_group = group.dropna(subset=["PLM Size", "X Pos", y_metric])
 
         # The i.i.d. Gaussian control has no parameter count, so it cannot sit on a
-        # size trend (and log10(0) is undefined).
-        valid_group = valid_group[valid_group["PLM Size"] > 0]
+        # size trend (and log10(0) is undefined). Asked through the shared predicate,
+        # not by re-deriving it as "PLM Size > 0": that works only because
+        # PLM_SIZES["random_1024"] happens to be 0, so any other zero-parameter control
+        # would rejoin every trendline silently. embedding_names says why it is one
+        # predicate: "so that a fix lands once instead of needing to be found in every copy".
+        valid_group = valid_group[
+            ~valid_group["Embedding"].astype(str).map(is_iid_random_baseline)
+        ]
 
         if len(valid_group) < 2:
             log.debug(f"Skipping trendline for {model_type}: insufficient data points")
@@ -489,7 +496,14 @@ def _mark_missing_cells(
     the grid is still running it reads as a much smaller study. A grey column plus an
     "n/a" tells the reader the cell is missing rather than small.
     """
-    present = set(
+    # Per read-out, not pooled. An arm with a euclidean value but no fnn cell is present
+    # in the panel and absent from one series; pooling counts it as present, so neither
+    # the shading nor the "n/a" appears and the missing marker reads as a hidden point --
+    # the exact misreading this function exists to prevent.
+    present = set.intersection(*(
+        set(sub.dropna(subset=[y_metric])["Embedding"].astype(str))
+        for _, sub in data.groupby("Model Type")
+    )) if "Model Type" in data.columns else set(
         data.dropna(subset=[y_metric])["Embedding"].astype(str)
     )
     missing = [

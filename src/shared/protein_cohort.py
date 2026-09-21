@@ -135,6 +135,20 @@ def restrict_to_cohort(
     )
 
 
+@functools.cache
+def _freeze_intersection_all() -> int | None:
+    """``intersection_all`` from the committed freeze, parsed once.
+
+    cohort_size runs once per split per arm and was re-reading and re-parsing the whole
+    freeze -- all 14,010 excluded ids -- to read one integer. load_excluded_proteins
+    beside it already caches; this is the same trick for the other half.
+    """
+    freeze = _default_freeze_path()
+    if not freeze.exists():
+        return None
+    return json.loads(freeze.read_text()).get("intersection_all")
+
+
 def cohort_size(*, warn_if_not: int | None = None, label: str = "") -> int | None:
     """The number of proteins the committed freeze says every arm should hold.
 
@@ -151,10 +165,7 @@ def cohort_size(*, warn_if_not: int | None = None, label: str = "") -> int | Non
     silent is how a stale arm gets published at rank #10. Returns the expected size,
     or ``None`` when no freeze is committed.
     """
-    freeze = _default_freeze_path()
-    if not freeze.exists():
-        return None
-    expected = json.loads(freeze.read_text()).get("intersection_all")
+    expected = _freeze_intersection_all()
     if expected is not None and warn_if_not is not None and warn_if_not != expected:
         delta = warn_if_not - expected
         print(

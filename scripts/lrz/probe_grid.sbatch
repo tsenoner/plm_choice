@@ -145,15 +145,25 @@ for cfg in exp.glob("wandb/*/files/config.yaml"):
     if changed:
         cfg.write_text(yaml.safe_dump(c)); print(f"repointed {cfg}")
 PYEOF
+    # Record the DURABLE paths, not $DATA. $DATA may be /dev/shm or $TMPDIR, which the
+    # EXIT trap deletes and which does not exist on any other node -- exactly the dangling
+    # path the wandb repointing above exists to undo. evaluate.py and
+    # overtraining_analysis._load_hparams both read this file on later runs.
     cat > "$exp/hparams.yaml" <<EOF
 model_type: $model
 param_name: $PARAM
-embedding_file: $DATA/embeddings/$ARM.h5
-data_dir: $DATA/sets
+embedding_file: $SRC/embeddings/$ARM.h5
+data_dir: $SRC/sets
 batch_size: 1024
 seed: 42
 dataset: $DATASET
 EOF
+    # evaluate.py catches its own exceptions and exits 0, so success is asserted on the
+    # metrics file. That assertion only means anything if the file cannot be a previous
+    # run's -- and the documented rerun path ("training already complete, going straight
+    # to evaluation") is exactly where a stale one sits. Remove it first, so a failed
+    # evaluation cannot report ok with numbers from another dataset.
+    rm -f "$exp"/evaluation_results/*_metrics.txt
     $PY src/evaluation/evaluate.py --run_dir "$exp" --n_bootstrap 1000 --force_recompute
     if ! ls "$exp"/evaluation_results/*_metrics.txt >/dev/null 2>&1; then
         echo "[$model] evaluation produced no metrics file"; return 1
