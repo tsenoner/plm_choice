@@ -21,7 +21,7 @@ src/
 │   ├── merge_parquet_columns.py  # Merge new target columns into the splits
 │   ├── go_semantic_similarity.py # GO Wang similarity (C1)
 │   ├── brenda_hfsp_validation.py # HFSP vs curated enzyme classes (C1)
-│   ├── pdb_tmscore.py            # SIFTS → RCSB → TMalign experimental TM-scores
+│   ├── pdb_tmscore.py            # SIFTS → RCSB → US-align experimental TM-scores (B6)
 │   ├── ecod_homology_pairs.py    # Per-ECOD-group distance densities (C2)
 │   ├── organism_landscape.py     # Distance distributions by organism group
 │   ├── run_mmseqs_all_vs_all.sh  # Sequence similarity search
@@ -40,7 +40,8 @@ src/
 │   ├── recall_fp.py             # ⭐ CANONICAL recall-at-first-FP (+ barrier spec)
 │   ├── retrieval_metrics.py     # Flat-vector retrieval metrics — NOT canonical
 │   ├── classification_eval.py   # AUROC + recall@1FP per hierarchy level
-│   └── overtraining_analysis.py # Probe-capacity diagnostics
+│   ├── overtraining_analysis.py # Probe-capacity diagnostics
+│   └── analyze_experimental_tm.py # alntmscore vs experimental TM (B6 / R2.2)
 │
 ├── visualization/                 # All plotting and analysis
 │   ├── plm_constants.py         # ⭐ Shared pLM sizes, families, colours, labels

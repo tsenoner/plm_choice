@@ -289,3 +289,18 @@ def overtraining(ctx: typer.Context) -> None:
     run_module_main(
         "evaluation.overtraining_analysis", ctx.args, prog="plm evaluate overtraining"
     )
+
+
+@_passthrough(
+    "experimental-tm",
+    panel=_REPORTS,
+    help_="B6/R2.2: alntmscore vs EXPERIMENTAL TM from the pdb_tmscore parquet.",
+)
+def experimental_tm(ctx: typer.Context) -> None:
+    from plm_choice.bridge import run_module_main
+
+    run_module_main(
+        "evaluation.analyze_experimental_tm",
+        ctx.args,
+        prog="plm evaluate experimental-tm",
+    )

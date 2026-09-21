@@ -296,16 +296,38 @@ step_3_ec_distances() {
 
 TMSCORE_OUTPUT="${OUTPUT_DIR}/test_with_tmscore_exp.parquet"
 
+# Structure cache, resume checkpoint and attrition funnel for step 4. Under
+# /out/ (gitignored) because the mmCIF cache runs to tens of GB.
+TMSCORE_WORK="${OUTPUT_DIR}/pdb_tmscore_work"
+
 step_4_pdb_tmscore() {
-    # 4a: Compute experimental TM-scores on test pairs
+    # 4a: Compute experimental TM-scores on test pairs.
+    #
+    # pdb_tmscore.py was rewritten on 2026-09-18 (task B6) and its CLI changed
+    # with it: --pdb_cache_dir and --sifts_mapping are gone, --work_dir and
+    # --entry_sifts are required. Residue-level SIFTS (--chain_sifts) and the
+    # wwPDB method/resolution index (--entries_idx) download themselves into
+    # <work_dir>/cache when not passed. This block was left on the old flags by
+    # that commit, which made step 4 exit 2 in argparse instead of running.
     echo "  [4a] Computing PDB experimental TM-scores on test.parquet..."
-    echo "  (This step downloads PDB structures and runs TMalign — may take hours)"
+    echo "  (Downloads PDB structures and runs US-align — may take hours)"
+    echo "  (Needs a USalign binary on PATH — https://zhanggroup.org/US-align/)"
     uv run python src/data_preparation/pdb_tmscore.py \
         --pairs_parquet "${ANNOT_PAIRS}" \
         --output_parquet "${TMSCORE_OUTPUT}" \
-        --pdb_cache_dir "${REFERENCE_DIR}/pdb_cache" \
-        --sifts_mapping "${REFERENCE_DIR}/sifts/uniprot_pdb.tsv" \
+        --work_dir "${TMSCORE_WORK}" \
+        --entry_sifts "${REFERENCE_DIR}/sifts/uniprot_pdb.tsv" \
         --max_workers 4
+
+    # 4b: The B6 / R2.2 comparison. This is the only code path in the repo that
+    # produces the manuscript numbers, so it runs with the run rather than by
+    # hand. --cath is omitted on purpose: cath-b-newest-all.gz has no downloader
+    # here, and without it the CATH stratification is simply skipped.
+    echo "  [4b] Comparing experimental TM against alntmscore..."
+    uv run python src/evaluation/analyze_experimental_tm.py \
+        --parquet "${TMSCORE_OUTPUT}" \
+        --attrition "${TMSCORE_WORK}/attrition.json" \
+        --results_dir "${TMSCORE_WORK}"
 
     print_merge_hint "${TMSCORE_OUTPUT}" "tmscore_exp"
 }

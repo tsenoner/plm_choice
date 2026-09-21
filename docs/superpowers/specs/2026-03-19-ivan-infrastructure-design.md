@@ -94,6 +94,20 @@ These don't have a clean `from_config()` path. We'll handle this by:
 
 ## 3. PDB Experimental TM-Score Pipeline
 
+> **SUPERSEDED 2026-09-18 (task B6). Kept verbatim as the record of what was
+> planned; `src/data_preparation/pdb_tmscore.py`'s module docstring describes what
+> actually runs.** What changed: **US-align**, not TMalign — TMalign is not
+> installed on the target machine, and neither binary is pip-managed or fetched by
+> `scripts/download_reference_data.sh`. The CLI below no longer exists:
+> `--pdb_cache_dir`, `--sifts_mapping` and `--tmalign_path` are gone; `--work_dir`,
+> `--entry_sifts`, `--chain_sifts`, `--entries_idx` and `--usalign_path` replace
+> them. Chain mapping is **residue-level** SIFTS (`pdb_chain_uniprot.tsv.gz`), not
+> the entry-level `uniprot_pdb.tsv` alone. The method allowlist and the resolution
+> cutoff are applied for real, in `select_representative_chain`. The headline
+> score is normalised by the **longer** chain, `min(TM1, TM2)`, with shorter-chain
+> and length-weighted variants reported alongside — not "normalized by shorter
+> chain" as stated below.
+
 ### What
 A script that curates a subset of PDB experimental structures and computes pairwise TM-scores as ground truth for structural similarity. This validates whether predicted-structure-based TM-scores (currently used as `alntmscore`) introduce systematic bias.
 

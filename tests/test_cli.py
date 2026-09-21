@@ -199,6 +199,7 @@ RUNPY_COMMANDS = [
     ("data", "novel-2024", "data_preparation.novel_2024.identify_novel_dissimilar_proteins"),
     ("evaluate", "classification", "evaluation.classification_eval"),
     ("evaluate", "overtraining", "evaluation.overtraining_analysis"),
+    ("evaluate", "experimental-tm", "evaluation.analyze_experimental_tm"),
     ("evaluate", "run", "evaluation.evaluate"),
     ("evaluate", "run-many", "evaluation.evaluate_multiple"),
     ("evaluate", "infer-pairs", "evaluation.infer_pairs"),
