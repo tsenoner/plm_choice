@@ -5,14 +5,15 @@ Merges functionality from extract_uniref_clusters.py and convert_to_efficient_fo
 to avoid intermediate JSON files.
 """
 
-import gzip
 import argparse
+import gzip
 import json
-import sqlite3
 import re
-from tqdm import tqdm
-from pathlib import Path
+import sqlite3
 import time
+from pathlib import Path
+
+from tqdm import tqdm
 
 # Binary regex patterns for maximum speed (from extract_uniref_clusters.py)
 ENTRY_PATTERN = re.compile(rb'<entry [^>]*id="([^"]+)"[^>]*>(.*?)</entry>', re.DOTALL)
@@ -194,7 +195,7 @@ def parse_uniref_xml_to_sqlite(
     except sqlite3.Error as e:
         print(f"SQLite error occurred: {e}")
         return -1
-    except IOError as e:
+    except OSError as e:
         print(f"I/O error: {e}")
         return -1
     except Exception as e:

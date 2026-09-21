@@ -21,16 +21,15 @@ from __future__ import annotations
 
 import argparse
 import json
+
+# These paths were absolute to one machine. They are environment variables now, so an
+# unset one fails here by name rather than as a FileNotFoundError further down.
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-
-# These paths were absolute to one machine. They are environment variables now, so an
-# unset one fails here by name rather than as a FileNotFoundError further down.
-import os
 
 
 def _need(var: str) -> str:

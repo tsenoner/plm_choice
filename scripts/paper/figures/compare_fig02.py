@@ -12,14 +12,12 @@ itself a property of the population and moves between the two.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import polars as pl
-
-
 # These paths were absolute to one machine. They are environment variables now, so an
 # unset one fails here by name rather than as a FileNotFoundError further down.
 import os
+from pathlib import Path
+
+import polars as pl
 
 
 def _need(var: str) -> str:

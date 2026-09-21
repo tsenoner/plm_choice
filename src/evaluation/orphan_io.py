@@ -36,7 +36,7 @@ def _open_text(path: Path):
     """Open a plain or gzip-compressed text file (sniff by suffix)."""
     if str(path).endswith(".gz"):
         return gzip.open(path, "rt")
-    return open(path, "rt")
+    return open(path)
 
 
 def load_orphan_pairs(

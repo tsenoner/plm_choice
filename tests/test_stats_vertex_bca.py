@@ -138,7 +138,6 @@ def test_negative_correlation_interval_on_correct_side():
     assert lo <= point <= hi
 
 
-from evaluation.stats import kendall_tau_b
 
 
 def _coverage_population(model: str, rng):

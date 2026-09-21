@@ -5,12 +5,13 @@ Ensures no similar sequences/structures appear in different splits to prevent da
 Uses MMseqs2 for sequence clustering or FoldSeek for structure clustering with hardcoded parameters.
 """
 
-import os
-import sys
-import subprocess
 import argparse
+import os
+import subprocess
+import sys
 from collections import defaultdict
 from pathlib import Path
+
 import polars as pl
 
 
@@ -161,7 +162,7 @@ class DatasetSplitter:
         """Parse cluster TSV file and return cluster information."""
         clusters = defaultdict(list)
 
-        with open(cluster_tsv_path, "r") as f:
+        with open(cluster_tsv_path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -318,7 +319,7 @@ class DatasetSplitter:
         splits = {}
         for split_name in ["train", "val", "test"]:
             items_file = self.split_dir / f"{split_name}_{self.item_type}.txt"
-            with open(items_file, "r") as f:
+            with open(items_file) as f:
                 splits[split_name] = set(line.strip() for line in f)
 
         # Split the dataset
@@ -344,7 +345,7 @@ class DatasetSplitter:
 
         # Find pairs between different splits
         inter_pairs = df.filter(
-            (
+            
                 # Train-Val pairs
                 ((pl.col("query").is_in(all_train)) & (pl.col("target").is_in(all_val)))
                 | (
@@ -368,7 +369,7 @@ class DatasetSplitter:
                     (pl.col("query").is_in(all_test))
                     & (pl.col("target").is_in(all_val))
                 )
-            )
+            
         )
 
         if inter_pairs.height > 0:

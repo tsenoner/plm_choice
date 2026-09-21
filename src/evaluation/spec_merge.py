@@ -21,13 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from evaluation.barrier_spec_base import SpecBuildError, write_barrier_spec
 
 
-def merge_specs(specs: Sequence[dict], *, names: "Sequence[str] | None" = None) -> dict:
+def merge_specs(specs: Sequence[dict], *, names: Sequence[str] | None = None) -> dict:
     """Fold per-arm specs into one ``{"artifacts": [...], "_meta": {...}}`` payload.
 
     Parameters
@@ -129,7 +129,7 @@ def merge_specs(specs: Sequence[dict], *, names: "Sequence[str] | None" = None) 
     }
 
 
-def main(argv: "Sequence[str] | None" = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="spec_merge",
         description="Merge per-arm barrier specs into one barrier_spec.json.",

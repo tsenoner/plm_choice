@@ -30,10 +30,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
-from evaluation.cross_plm_report import CROSS_PLM_PARQUET_GUARDS, CROSS_PLM_PER_PAIR_COLUMNS
 from evaluation.barrier_spec_base import (
     SpecBuildError,
     check_per_query_columns_drift,
@@ -43,6 +42,7 @@ from evaluation.barrier_spec_base import (
     require_grid_size,
     write_barrier_spec,
 )
+from evaluation.cross_plm_report import CROSS_PLM_PARQUET_GUARDS, CROSS_PLM_PER_PAIR_COLUMNS
 
 # 3-element by design (cloned from snn_barrier_spec, NOT ec_barrier_spec) — a 2-element default
 # would silently drop the manhattan column.

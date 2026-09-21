@@ -122,7 +122,7 @@ def _load_and_filter_data(file_path, hdf_file, param_name):
         with h5py.File(hdf_file, "r") as hdf:
             valid_keys = set(hdf.keys())
     except Exception as e:
-        raise IOError(
+        raise OSError(
             f"Error opening or reading HDF5 file {hdf_file}. Original error: {e}"
         )
 

@@ -1,11 +1,12 @@
 import argparse
-import h5py
 import json
-import matplotlib.pyplot as plt
-import numpy as np
 import sys
 import warnings
 from pathlib import Path
+
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 from scipy import stats
 from scipy.stats import wasserstein_distance
 from tqdm import tqdm
@@ -546,7 +547,7 @@ def create_cumulative_plots(output_dir, results):
         results_path = output_path / plm_name / "convergence_results.json"
 
         try:
-            with open(results_path, "r") as f:
+            with open(results_path) as f:
                 data = json.load(f)
                 all_data[plm_name] = data
 
@@ -710,7 +711,7 @@ def create_cumulative_plots(output_dir, results):
         metrics_path = output_path / plm_name / "reference_metrics.json"
 
         try:
-            with open(metrics_path, "r") as f:
+            with open(metrics_path) as f:
                 metrics = json.load(f)
 
             # Create a simple bar chart of key statistics
@@ -764,14 +765,14 @@ def create_cumulative_plots(output_dir, results):
         try:
             # First try to load the raw reference distances (if saved)
             ref_data_path = output_path / plm_name / "convergence_results.json"
-            with open(ref_data_path, "r") as f:
+            with open(ref_data_path) as f:
                 conv_data = json.load(f)
             # Reference distances aren't saved in JSON, so we'll use metrics to create approximate distribution
         except:
             pass
 
         try:
-            with open(metrics_path, "r") as f:
+            with open(metrics_path) as f:
                 metrics = json.load(f)
 
             # Create a representative distribution using the statistics
@@ -822,7 +823,7 @@ def create_cumulative_plots(output_dir, results):
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
             )
 
-        except Exception as e:
+        except Exception:
             # Handle missing data
             axes[i].text(
                 0.5,
@@ -895,7 +896,7 @@ def create_cumulative_plots(output_dir, results):
             metrics_path = output_path / plm_name / "reference_metrics.json"
 
             try:
-                with open(metrics_path, "r") as mf:
+                with open(metrics_path) as mf:
                     metrics = json.load(mf)
                 f.write(
                     f"{plm_name:<15} {metrics['mean']:<10.4f} {metrics['std']:<10.4f} {metrics['median']:<10.4f}\n"

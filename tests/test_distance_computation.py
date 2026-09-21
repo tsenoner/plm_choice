@@ -20,7 +20,6 @@ from data_preparation.distance_computation import (
     pairwise_distance,
 )
 
-
 # ---------------------------------------------------------------------------
 # pairwise_distance — the pure metric kernel
 # ---------------------------------------------------------------------------

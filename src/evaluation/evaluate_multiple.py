@@ -1,7 +1,7 @@
 import argparse
-from pathlib import Path
-import subprocess
 import os
+import subprocess
+from pathlib import Path
 
 # Maximum depth to search for run directories from the input_path.
 # Example: models/sprot_train (0) / fnn (1) / fident (2) / prott5 (3) / timestamp (4)

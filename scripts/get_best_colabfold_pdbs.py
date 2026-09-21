@@ -1,5 +1,4 @@
 # !/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on: Mon 17 Oct 2022 19:40:19
 Description: extract best predicted PDB models from ColabFold output
@@ -12,7 +11,6 @@ import argparse
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional
 
 
 def setup_arguments() -> argparse.Namespace:
@@ -39,7 +37,7 @@ def setup_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def get_fasta_headers(fasta_file: Path) -> List[str]:
+def get_fasta_headers(fasta_file: Path) -> list[str]:
     """Read a FASTA file and return a list of its headers."""
     headers = []
     with fasta_file.open("r") as f:
@@ -64,7 +62,7 @@ def extract_rank1_models(
     from_dir: Path,
     pdb_dir: Path,
     json_dir: Path,
-    fasta_headers: Optional[List[str]] = None,
+    fasta_headers: list[str] | None = None,
 ) -> None:
     """Copy rank_1 PDB and JSON files, renaming them with the protein header."""
     for directory in [pdb_dir, json_dir]:
@@ -106,7 +104,7 @@ def main() -> None:
         print(f"Error: 'predictions' directory not found in {colabfold_dir}")
         return
 
-    fasta_headers: Optional[List[str]] = None
+    fasta_headers: list[str] | None = None
     if fasta_file:
         try:
             fasta_headers = get_fasta_headers(fasta_file)

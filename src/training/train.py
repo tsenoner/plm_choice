@@ -7,21 +7,21 @@ python train.py --model_type fnn --embedding_file path/to/embeddings.h5 --data_d
 
 import argparse
 from pathlib import Path
-from typing import Tuple, Type
+
 import pytorch_lightning as pl
 import torch
+import wandb
+import yaml
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
-import wandb
-import yaml
 
 from shared.datasets import create_single_loader, get_embedding_size
 from shared.experiment_manager import ExperimentManager, ExperimentPaths
 from training.models import (
     FNNPredictor,
-    LinearRegressionPredictor,
     LinearDistancePredictor,
+    LinearRegressionPredictor,
 )
 
 
@@ -42,7 +42,7 @@ def prepare_data(
     train_file: Path,
     val_file: Path,
     num_workers: int,
-) -> Tuple[int, DataLoader, DataLoader]:
+) -> tuple[int, DataLoader, DataLoader]:
     """Load train/val datasets and return embedding size and dataloaders."""
     print("Preparing train and validation data loaders...")
     embedding_size = get_embedding_size(str(embeddings_file))
@@ -68,7 +68,7 @@ def prepare_data(
 
 
 def train_model(
-    model_class: Type[pl.LightningModule],
+    model_class: type[pl.LightningModule],
     model_kwargs: dict,
     trainer_kwargs: dict,
     paths: ExperimentPaths,
@@ -78,7 +78,7 @@ def train_model(
     wandb_project: str = "which-plm",
     wandb_entity: str = None,
     resume_from_checkpoint: bool = False,
-) -> Tuple[str, WandbLogger, float]:
+) -> tuple[str, WandbLogger, float]:
     """Configure and run the PyTorch Lightning training loop for a given model."""
     print(f"Configuring model ({model_class.__name__}) and trainer...")
 
@@ -127,7 +127,7 @@ def train_model(
 
     if resume_from_checkpoint and wandb_id_file.exists():
         try:
-            with open(wandb_id_file, "r") as f:
+            with open(wandb_id_file) as f:
                 wandb_run_id = f.read().strip()
             print(f"Resuming wandb run with ID: {wandb_run_id}")
         except Exception as e:

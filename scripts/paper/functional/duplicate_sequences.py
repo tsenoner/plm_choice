@@ -13,15 +13,14 @@ Writes ``duplicate_sequences.json``; SUMMARY.md quotes it rather than a typed nu
 from __future__ import annotations
 
 import json
-from collections import defaultdict
-from pathlib import Path
-
-import pandas as pd
-
 
 # These paths were absolute to one machine. They are environment variables now, so an
 # unset one fails here by name rather than as a FileNotFoundError further down.
 import os
+from collections import defaultdict
+from pathlib import Path
+
+import pandas as pd
 
 
 def _need(var: str) -> str:

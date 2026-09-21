@@ -23,7 +23,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -54,7 +53,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _sort_embeddings_by_size(embeddings: List[str]) -> List[str]:
+def _sort_embeddings_by_size(embeddings: list[str]) -> list[str]:
     """Return embedding names sorted by model parameter count (ascending)."""
     return sorted(
         embeddings,
@@ -73,7 +72,7 @@ def _get_bar_color(embedding: str) -> str:
     return EMBEDDING_COLOR_MAP.get(key, "#808080")
 
 
-def _embedding_tick_labels(embeddings: List[str]) -> List[str]:
+def _embedding_tick_labels(embeddings: list[str]) -> list[str]:
     """Label each pLM the way the other figures do, annotated with its size."""
     labels = []
     for emb in embeddings:
@@ -100,7 +99,7 @@ def plot_metric_bars(
     title: str,
     filename_stem: str,
     legend_loc: str,
-    baseline: Optional[float] = None,
+    baseline: float | None = None,
 ) -> None:
     """Grouped bar chart: x = pLM (sorted by size), y = ``value_col``, hue = level.
 

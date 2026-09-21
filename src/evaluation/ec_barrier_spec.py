@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
-from evaluation.ec_report import EC_PARQUET_GUARDS, EC_PER_PAIR_COLUMNS
 from evaluation.barrier_spec_base import (
     SpecBuildError,
     check_per_query_columns_drift,
@@ -28,6 +27,7 @@ from evaluation.barrier_spec_base import (
     require_grid_size,
     write_barrier_spec,
 )
+from evaluation.ec_report import EC_PARQUET_GUARDS, EC_PER_PAIR_COLUMNS
 
 # NOTE (2026-07-29): this is the ONLY spec-builder with a 2-element distance
 # axis — snn_barrier_spec, cross_plm_barrier_spec and cross_plm_matrix all use

@@ -39,8 +39,8 @@ import itertools
 import json
 import sys
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 SCHEMA_VERSION = 1
 
@@ -68,7 +68,7 @@ def parse_fasta(path: Path | str) -> list[tuple[str, str]]:
     records: list[tuple[str, str]] = []
     cur_id: str | None = None
     cur_seq: list[str] = []
-    with open(path, "r") as fh:
+    with open(path) as fh:
         for lineno, raw in enumerate(fh, 1):
             line = raw.rstrip("\r\n")
             if line.startswith(">"):
@@ -113,7 +113,7 @@ def canonical_content_sha256(records: Iterable[tuple[str, str]]) -> str:
     items.sort(key=lambda t: t[0])
     h = hashlib.sha256()
     for pid, seq in items:
-        h.update(f"{pid}\t{seq}\n".encode("utf-8"))
+        h.update(f"{pid}\t{seq}\n".encode())
     return h.hexdigest()
 
 

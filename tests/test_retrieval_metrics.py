@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
-from evaluation.retrieval_metrics import recall_at_first_fp, auroc_at_level
+
+from evaluation.retrieval_metrics import auroc_at_level, recall_at_first_fp
+
 
 def test_recall_at_first_fp_perfect():
     distances = np.array([0.1, 0.2, 0.3, 0.8, 0.9])

@@ -48,7 +48,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -84,7 +83,7 @@ class AllVsAllEmbeddingAnalyzer:
         self,
         embeddings_dir: Path,
         output_dir: Path,
-        max_proteins: Optional[int] = None,
+        max_proteins: int | None = None,
         chunk_size: int = 100,
         precision: int = 4,
     ):
@@ -114,7 +113,7 @@ class AllVsAllEmbeddingAnalyzer:
         self.embedding_info = self._get_embedding_info()
         self.protein_universe = self._discover_protein_universe()
 
-    def _discover_embedding_files(self) -> List[Path]:
+    def _discover_embedding_files(self) -> list[Path]:
         """Find all H5 embedding files in the directory."""
         embedding_files = list(self.embeddings_dir.glob("*.h5"))
         if not embedding_files:
@@ -126,7 +125,7 @@ class AllVsAllEmbeddingAnalyzer:
 
         return sorted(embedding_files)
 
-    def _get_embedding_info(self) -> Dict[str, Dict]:
+    def _get_embedding_info(self) -> dict[str, dict]:
         """Get information about each embedding file (dimensions, protein count)."""
         embedding_info = {}
 
@@ -166,7 +165,7 @@ class AllVsAllEmbeddingAnalyzer:
 
         return embedding_info
 
-    def _discover_protein_universe(self) -> List[str]:
+    def _discover_protein_universe(self) -> list[str]:
         """
         Discover the universe of proteins across all embedding files.
 
@@ -217,8 +216,8 @@ class AllVsAllEmbeddingAnalyzer:
         return protein_list
 
     def _load_embedding_for_proteins(
-        self, embedding_file: Path, protein_ids: List[str]
-    ) -> Dict[str, np.ndarray]:
+        self, embedding_file: Path, protein_ids: list[str]
+    ) -> dict[str, np.ndarray]:
         """
         Load embeddings for specific proteins from an H5 file.
 
@@ -243,8 +242,8 @@ class AllVsAllEmbeddingAnalyzer:
         return embeddings
 
     def _compute_distance_chunk(
-        self, protein_chunk: List[str], all_embeddings: Dict[str, np.ndarray]
-    ) -> List[Tuple[str, str, float]]:
+        self, protein_chunk: list[str], all_embeddings: dict[str, np.ndarray]
+    ) -> list[tuple[str, str, float]]:
         """
         Compute distances for a chunk of proteins against all other proteins using vectorized operations.
 
@@ -444,7 +443,7 @@ class AllVsAllEmbeddingAnalyzer:
         logger.info(f"All-vs-all distance computation complete: {output_file}")
         return result_df
 
-    def generate_visualization_cache_files(self, df: pl.DataFrame) -> Dict[str, Path]:
+    def generate_visualization_cache_files(self, df: pl.DataFrame) -> dict[str, Path]:
         """
         Generate all cache files needed for pairwise embedding comparison visualization.
 
@@ -529,8 +528,8 @@ class AllVsAllEmbeddingAnalyzer:
         return cache_files
 
     def _generate_hexbin_cache(
-        self, df: pl.DataFrame, dist_cols: List[str], gridsize: int = 50
-    ) -> Dict:
+        self, df: pl.DataFrame, dist_cols: list[str], gridsize: int = 50
+    ) -> dict:
         """Generate hexbin data cache for distance comparisons."""
         hexbin_data = {
             "metadata": {
@@ -576,8 +575,8 @@ class AllVsAllEmbeddingAnalyzer:
         return hexbin_data
 
     def _generate_correlation_cache(
-        self, df: pl.DataFrame, dist_cols: List[str]
-    ) -> Dict:
+        self, df: pl.DataFrame, dist_cols: list[str]
+    ) -> dict:
         """Generate correlation data cache with confidence intervals."""
         n = len(dist_cols)
         correlations = np.full((n, n), np.nan)
@@ -618,8 +617,8 @@ class AllVsAllEmbeddingAnalyzer:
         }
 
     def _generate_wasserstein_cache(
-        self, df: pl.DataFrame, dist_cols: List[str]
-    ) -> Dict:
+        self, df: pl.DataFrame, dist_cols: list[str]
+    ) -> dict:
         """Generate Wasserstein distance data cache."""
         n = len(dist_cols)
         distances = np.zeros((n, n))
@@ -649,7 +648,7 @@ class AllVsAllEmbeddingAnalyzer:
 
     def _compute_wasserstein_pair(
         self, df: pl.DataFrame, col1: str, col2: str
-    ) -> Tuple[float, int]:
+    ) -> tuple[float, int]:
         """Compute Wasserstein distance between two columns."""
         mask = ~(df[col1].is_nan() | df[col2].is_nan())
         valid_df = df.filter(mask)
@@ -690,8 +689,8 @@ class AllVsAllEmbeddingAnalyzer:
         return scaler.fit_transform(x_clean.reshape(-1, 1)).ravel()
 
     def _generate_distribution_cache(
-        self, df: pl.DataFrame, dist_cols: List[str], normalize: bool = False
-    ) -> Dict:
+        self, df: pl.DataFrame, dist_cols: list[str], normalize: bool = False
+    ) -> dict:
         """Generate distribution data cache for plotting."""
         distribution_data = {"metadata": {"normalized": normalize}, "distributions": {}}
 
@@ -735,7 +734,7 @@ class AllVsAllEmbeddingAnalyzer:
 
         return distribution_data
 
-    def _save_json_data(self, data: Dict, save_path: Path, description: str):
+    def _save_json_data(self, data: dict, save_path: Path, description: str):
         """Helper method to save JSON data with consistent logging."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
         with open(save_path, "w") as f:
@@ -746,7 +745,7 @@ class AllVsAllEmbeddingAnalyzer:
         self,
         resume: bool = False,
         generate_cache: bool = True,
-    ) -> Dict[str, Path]:
+    ) -> dict[str, Path]:
         """
         Run the complete all-vs-all analysis pipeline.
 

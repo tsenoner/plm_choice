@@ -84,7 +84,7 @@ def ec_distance_matrix(ec_labels: pd.DataFrame) -> pd.DataFrame:
 
 
 def ec_distance_set(
-    ec_set_a: "frozenset[str]", ec_set_b: "frozenset[str]", *, agg: str = "min"
+    ec_set_a: frozenset[str], ec_set_b: frozenset[str], *, agg: str = "min"
 ) -> float:
     """Set-valued EC distance for multifunctional enzymes.
 
@@ -115,7 +115,7 @@ def ec_distance_set(
     raise ValueError(f"unknown agg={agg!r}; choose min/mean/hausdorff")
 
 
-def ec_distance_matrix_set(ec_labels: "pd.DataFrame", *, agg: str = "min") -> "pd.DataFrame":
+def ec_distance_matrix_set(ec_labels: pd.DataFrame, *, agg: str = "min") -> pd.DataFrame:
     """Long-form ``[a, b, ec_dist]`` over set-valued EC labels.
 
     ``ec_labels`` has columns ``protein_id`` and ``ec_set`` (a frozenset of EC

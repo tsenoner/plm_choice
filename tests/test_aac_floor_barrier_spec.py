@@ -19,14 +19,12 @@ import pandas as pd
 import pytest
 
 from evaluation.aac_floor_barrier_spec import (
-    DEFAULT_LEVELS,
     DEFAULT_POPULATION_TAGS,
     build_aac_floor_barrier_spec,
     main,
 )
 from evaluation.barrier_spec_base import SpecBuildError
-from evaluation.recall_fp_report import PARQUET_GUARDS, PER_QUERY_COLUMNS
-
+from evaluation.recall_fp_report import PER_QUERY_COLUMNS
 
 # ── fixture helpers ──────────────────────────────────────────────────────────
 
@@ -306,7 +304,7 @@ def test_malformed_sidecar_level_no_path_raises(tmp_path):
 
 def test_built_spec_passes_real_barrier_on_good_cell(tmp_path):
     """The spec produced by the builder actually passes the real analysis_barrier."""
-    from evaluation.analysis_barrier import run_barrier, _spec_from_dict
+    from evaluation.analysis_barrier import _spec_from_dict, run_barrier
     _write_cell(tmp_path, "full319", n_queries=5)
     spec = build_aac_floor_barrier_spec(
         tmp_path, population_tags=["full319"], levels=["fold"]
@@ -317,7 +315,7 @@ def test_built_spec_passes_real_barrier_on_good_cell(tmp_path):
 
 def test_built_spec_catches_truncated_parquet(tmp_path):
     """expected_rows guard: a parquet truncated after spec-build fails the real barrier."""
-    from evaluation.analysis_barrier import run_barrier, _spec_from_dict
+    from evaluation.analysis_barrier import _spec_from_dict, run_barrier
     parquets, _ = _write_cell(tmp_path, "full319", n_queries=6)
     spec = build_aac_floor_barrier_spec(
         tmp_path, population_tags=["full319"], levels=["fold"]

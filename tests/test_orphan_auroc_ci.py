@@ -330,9 +330,7 @@ def test_zero_sibling_draws_counted_and_handled():
     rows.append((ids[2], ids[3], 0.85, 0.5, 0.5, True))
     for a in range(n):
         for b in range(a + 1, n):
-            if rng.random() < 0.4 and not (
-                (a, b) in {(0, 1), (2, 3)}
-            ):
+            if rng.random() < 0.4 and (a, b) not in {(0, 1), (2, 3)}:
                 rows.append((ids[a], ids[b], rng.normal(scale=0.3), 0.5, 0.5, False))
     out = orphan_auroc_vertex_bca_ci(_pp(rows), n_boot=400, alpha=0.1, seed=13)
     assert out["n_boot_undefined"] >= 1  # at least one draw lost a class

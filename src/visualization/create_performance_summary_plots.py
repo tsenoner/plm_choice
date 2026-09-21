@@ -1,13 +1,13 @@
-import re
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-from pathlib import Path
 import argparse
 import logging
+import re
+from pathlib import Path
+
 import matplotlib.lines as mlines
-from typing import Dict, List, Optional
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 from scipy import stats
 
 # --- Logging Configuration ---
@@ -43,7 +43,7 @@ from visualization.plm_constants import (
 )
 
 # Marker map for model types
-MODEL_MARKER_MAP: Dict[str, str] = {
+MODEL_MARKER_MAP: dict[str, str] = {
     "fnn": "o",  # Circle
     "linear": "s",  # Square
     "linear_distance": "^",  # Triangle up
@@ -54,7 +54,7 @@ MODEL_MARKER_MAP: Dict[str, str] = {
 # HFSP carries no "Function -" prefix on purpose: it is derived from an alignment and
 # tracks sequence identity (r = 0.920), so labelling its panel "Function" would assert
 # exactly what the paper argues against. The Discussion calls it a sequence panel.
-PARAMETER_TITLES: Dict[str, str] = {
+PARAMETER_TITLES: dict[str, str] = {
     "fident": "Sequence - PIDE",
     "alntmscore": "Structure - TM-score",
     "hfsp": "HFSP",
@@ -62,7 +62,7 @@ PARAMETER_TITLES: Dict[str, str] = {
 
 
 # --- Data Parsing ---
-def parse_metrics_file(filepath: Path) -> Dict[str, float]:
+def parse_metrics_file(filepath: Path) -> dict[str, float]:
     """Parses a metrics file to extract key performance metrics.
 
     Args:
@@ -209,7 +209,7 @@ _CSV_METRIC_COLUMNS = {
 }
 
 
-def load_metrics_csv(csv_path: Path, dataset: Optional[str] = None) -> pd.DataFrame:
+def load_metrics_csv(csv_path: Path, dataset: str | None = None) -> pd.DataFrame:
     """Load the probe grid from one long-format ``probe_metrics.csv``.
 
     ``load_results_data`` walks a tree of ``*_metrics.txt`` produced by a local
@@ -292,7 +292,7 @@ def load_metrics_csv(csv_path: Path, dataset: Optional[str] = None) -> pd.DataFr
 
 # --- Plotting Helpers ---
 def _add_error_bars(
-    ax: plt.Axes, data: pd.DataFrame, y_metric: str, se_metric: Optional[str]
+    ax: plt.Axes, data: pd.DataFrame, y_metric: str, se_metric: str | None
 ):
     """Adds error bars for a given metric to the plot axes.
 
@@ -360,7 +360,7 @@ def _add_trendlines(
     ax: plt.Axes,
     data: pd.DataFrame,
     y_metric: str,
-    category_order: List[str],
+    category_order: list[str],
     parameter: str,
 ):
     """Adds straight trendlines for each model type based on PLM size vs metric.
@@ -479,7 +479,7 @@ def _add_trendlines(
 
 
 def _mark_missing_cells(
-    ax: plt.Axes, data: pd.DataFrame, y_metric: str, category_order: List[str]
+    ax: plt.Axes, data: pd.DataFrame, y_metric: str, category_order: list[str]
 ):
     """Shade the tick of every model whose cell does not exist in this panel.
 
@@ -564,7 +564,7 @@ def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
     )
 
 
-def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.legend:
+def _create_model_type_legend(fig: plt.Figure, model_types: list[str]) -> plt.legend:
     """Creates and returns the model type legend (markers).
 
     Args:
@@ -608,7 +608,7 @@ def _create_model_type_legend(fig: plt.Figure, model_types: List[str]) -> plt.le
 def generate_metric_plot(
     df: pd.DataFrame,
     y_metric: str,
-    se_metric: Optional[str],
+    se_metric: str | None,
     output_file: Path,
     delta_mode: bool = False,
 ):

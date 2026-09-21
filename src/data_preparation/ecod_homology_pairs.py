@@ -51,7 +51,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -89,7 +88,7 @@ LEVEL_COLORS = {
 # --------------------------------------------------------------------------- #
 
 
-def parse_ecod_domains(path: Path) -> Dict[str, Dict[str, str]]:
+def parse_ecod_domains(path: Path) -> dict[str, dict[str, str]]:
     """
     Parse the ECOD domain definitions file and build a UniProt-to-classification map.
 
@@ -126,7 +125,7 @@ def parse_ecod_domains(path: Path) -> Dict[str, Dict[str, str]]:
         {arch, x_group, h_group, t_group, f_group}, each a string label.
     """
     # Accumulate all domains per UniProt ID, then pick the best
-    domains_by_uniprot: Dict[str, List[Dict[str, str]]] = {}
+    domains_by_uniprot: dict[str, list[dict[str, str]]] = {}
 
     skipped = 0
     loaded = 0
@@ -175,7 +174,7 @@ def parse_ecod_domains(path: Path) -> Dict[str, Dict[str, str]]:
 
     # For each protein, pick the domain with the most specific classification.
     # Specificity = number of non-empty, non-"UNCLASSIFIED" hierarchy levels.
-    ecod_map: Dict[str, Dict[str, str]] = {}
+    ecod_map: dict[str, dict[str, str]] = {}
 
     for unp_acc, domain_list in domains_by_uniprot.items():
         best_domain = max(domain_list, key=_domain_specificity)
@@ -199,7 +198,7 @@ def parse_ecod_domains(path: Path) -> Dict[str, Dict[str, str]]:
     return ecod_map
 
 
-def _domain_specificity(domain: Dict[str, str]) -> int:
+def _domain_specificity(domain: dict[str, str]) -> int:
     """Score a domain by how many hierarchy levels are meaningfully classified."""
     return sum(1 for level in ECOD_LEVELS if _is_classified(domain[level]))
 
@@ -221,7 +220,7 @@ def _is_classified(label: str) -> bool:
 def masks_from_annotation(
     annotated_df: pl.DataFrame,
     level: str,
-) -> Tuple[np.ndarray, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray, int]:
     """
     Read the same-group / different-group masks for one ECOD level off the
     annotated pairs frame.
@@ -347,7 +346,7 @@ def plot_density_comparison(
 
 def plot_level_overlay(
     distances: np.ndarray,
-    masks_by_level: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    masks_by_level: dict[str, tuple[np.ndarray, np.ndarray]],
     dist_col: str,
     output_path: Path,
     n_points: int = 500,
@@ -446,7 +445,7 @@ def compute_separation_stats(
     distances: np.ndarray,
     same_mask: np.ndarray,
     diff_mask: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Compute summary statistics for the separation between same-group and
     different-group embedding distance distributions.
@@ -507,7 +506,7 @@ def compute_separation_stats(
 
 def build_annotated_parquet(
     pairs_df: pl.DataFrame,
-    ecod_map: Dict[str, Dict[str, str]],
+    ecod_map: dict[str, dict[str, str]],
     output_path: Path,
 ) -> pl.DataFrame:
     """
@@ -675,7 +674,7 @@ def main():
     # --- Compute masks for all levels ---
     # The annotated frame already carries ecod_{level}_same for every level, so the
     # masks are a read of that column rather than a second pass over the pair table.
-    masks_by_level: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    masks_by_level: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for level in args.levels:
         same_mask, diff_mask, n_annotated = masks_from_annotation(annotated_df, level)
@@ -686,7 +685,7 @@ def main():
         )
 
     # --- Generate plots and stats for each distance column ---
-    all_stats: List[Dict] = []
+    all_stats: list[dict] = []
 
     for dist_col in args.distance_columns:
         logger.info(f"\nProcessing distance column: {dist_col}")

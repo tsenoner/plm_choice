@@ -21,7 +21,8 @@ Edge cases (locked here so the figure pipeline can rely on them)
 """
 from __future__ import annotations
 
-from typing import Callable, Literal
+from collections.abc import Callable
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -97,7 +98,7 @@ def recall_at_first_fp(
     distance: DistanceName = "cosine",
     level: LevelName = "fold",
     per_query: bool = True,
-    is_positive_fn: "Callable[[str, str], bool] | None" = None,
+    is_positive_fn: Callable[[str, str], bool] | None = None,
 ) -> dict:
     """Per-query recall-at-first-FP at a single CATH level.
 
@@ -194,7 +195,7 @@ def recall_at_first_fp_multi_level(
     embeddings: dict[str, np.ndarray],
     labels: pd.DataFrame,
     distance: DistanceName = "cosine",
-    is_positive_fn_builder: "Callable[[pd.DataFrame, str], Callable[[str, str], bool]] | None" = None,
+    is_positive_fn_builder: Callable[[pd.DataFrame, str], Callable[[str, str], bool]] | None = None,
 ) -> dict[str, dict]:
     """Run :func:`recall_at_first_fp` at all three CATH levels.
 

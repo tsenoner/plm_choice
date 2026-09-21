@@ -1,6 +1,7 @@
 import json
-import pandas as pd
 import sqlite3
+
+import pandas as pd
 
 # Define file paths
 NEW_PROTEINS_FILE = "data/2024_new_proteins/2024_newSeqs_pe12.tsv"

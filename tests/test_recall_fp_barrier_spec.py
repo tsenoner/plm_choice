@@ -32,7 +32,6 @@ from evaluation.recall_fp_barrier_spec import (
 )
 from evaluation.recall_fp_report import PARQUET_GUARDS, PER_QUERY_COLUMNS
 
-
 _OMIT = object()  # sentinel: omit per_query_columns entirely (older-sidecar back-compat)
 
 

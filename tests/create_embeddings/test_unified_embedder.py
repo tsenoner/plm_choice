@@ -1,11 +1,9 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import h5py
 import pytest
-
 
 # Define project root and script paths relative to this test file
 TEST_DIR = Path(__file__).parent
@@ -83,9 +81,9 @@ def run_script(
     model_key: str,
     output_path: Path,
     embedding_type: str = "per_protein",
-    max_seq_len: Optional[int] = None,
-    weights_dir: Optional[Path] = None,
-    token_path: Optional[Path] = None,
+    max_seq_len: int | None = None,
+    weights_dir: Path | None = None,
+    token_path: Path | None = None,
 ):
     """Helper function to run the unified_embedder.py script."""
     command = [

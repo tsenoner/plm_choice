@@ -22,9 +22,10 @@ Summary of baselines:
 """
 
 import argparse
+import os
+
 import h5py
 import numpy as np
-import os
 
 
 def generate_random_embeddings(template_h5_path, output_dir, dimensions):

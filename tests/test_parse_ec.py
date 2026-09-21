@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 
 from evaluation.label_adapters import parse_ec, parse_ec_from_protein_names
 

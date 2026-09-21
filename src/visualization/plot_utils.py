@@ -1,18 +1,17 @@
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LogNorm
 from scipy import stats
 from scipy.optimize import curve_fit
-from matplotlib.colors import LogNorm
 
 
 def plot_true_vs_predicted(
     targets: np.ndarray,
     predictions: np.ndarray,
     output_file: Path,
-    metrics: Optional[dict[str, float]] = None,
+    metrics: dict[str, float] | None = None,
     title: str = "True vs Predicted",
 ):
     """Generates a scatter plot of true vs predicted values."""

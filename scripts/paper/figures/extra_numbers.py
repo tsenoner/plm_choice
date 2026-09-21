@@ -12,16 +12,14 @@ each averaged over one arm too few. Nothing here is hard-coded from the old run.
 
 from __future__ import annotations
 
+# These paths were absolute to one machine. They are environment variables now, so an
+# unset one fails here by name rather than as a FileNotFoundError further down.
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 from scipy.stats import spearmanr
-
-
-# These paths were absolute to one machine. They are environment variables now, so an
-# unset one fails here by name rather than as a FileNotFoundError further down.
-import os
 
 
 def _need(var: str) -> str:

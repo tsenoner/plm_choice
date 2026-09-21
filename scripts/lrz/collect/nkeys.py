@@ -1,4 +1,9 @@
-import h5py, os, glob, sys
+import glob
+import os
+import sys
+
+import h5py
+
 names = {542238: "FULL 542,238", 542237: "full-1", 540881: "2000-cap 540,881", 526871: "1022-cap 526,871"}
 for p in sorted(glob.glob(os.path.join(sys.argv[1], "*.h5"))):
     with h5py.File(p, "r") as f:

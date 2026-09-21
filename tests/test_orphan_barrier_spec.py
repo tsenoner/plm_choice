@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from evaluation.orphan_barrier_spec import build_orphan_barrier_spec
 from evaluation.barrier_spec_base import SpecBuildError
+from evaluation.orphan_barrier_spec import build_orphan_barrier_spec
 
 
 def _sidecar(d, plm, distance="cosine", n_pairs=10):

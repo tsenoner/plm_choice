@@ -10,9 +10,10 @@ This script:
 5. Saves the ranking table
 """
 
-import pandas as pd
 import argparse
 from pathlib import Path
+
+import pandas as pd
 
 
 def rank_plms_by_performance(csv_path: Path, output_path: Path = None):
@@ -87,7 +88,7 @@ def rank_plms_by_performance(csv_path: Path, output_path: Path = None):
     # Save to CSV
     result.to_csv(output_path, index=False)
     print(f"Ranking saved to: {output_path}")
-    print(f"\nTop 5 PLMs:")
+    print("\nTop 5 PLMs:")
     print(
         result[["Final_Rank", "Embedding", "Average_Rank"]]
         .head(5)

@@ -1,8 +1,9 @@
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import math
 import argparse
+import math
 from pathlib import Path
+
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
 
 
 def create_grid_plots(input_path_str: str, output_dir_str: str):

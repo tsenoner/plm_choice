@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evaluation.analysis_barrier import run_barrier, _spec_from_dict
+from evaluation.analysis_barrier import _spec_from_dict, run_barrier
 from evaluation.snn_barrier_spec import (
     SpecBuildError,
     build_snn_barrier_spec,

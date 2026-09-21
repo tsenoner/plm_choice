@@ -19,7 +19,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
-import pytest
 
 from evaluation.analysis_barrier import (
     ArtifactSpec,

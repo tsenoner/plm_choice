@@ -7,14 +7,15 @@ This script explores whether there's a relationship between model performance
 (Q25, median, Q75).
 """
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-from scipy import stats
 import argparse
 import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from visualization.plm_constants import EMBEDDING_DISPLAY_NAMES  # noqa: E402
@@ -197,14 +198,14 @@ def analyze_performance_quartile_correlation(
             )
 
     # Summary statistics
-    print(f"\nBest performing models (Rank 1-3):")
+    print("\nBest performing models (Rank 1-3):")
     top3 = merged_df.nsmallest(3, "Average_Rank")
     for _, row in top3.iterrows():
         print(
             f"  {row['Embedding']:15s}: median={row['median']:.3f}, IQR={row['IQR']:.3f}"
         )
 
-    print(f"\nWorst performing models (Bottom 3, excluding random):")
+    print("\nWorst performing models (Bottom 3, excluding random):")
     bottom3 = merged_df[merged_df["Embedding"] != "random_1024"].nlargest(
         3, "Average_Rank"
     )

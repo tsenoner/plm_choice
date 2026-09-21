@@ -11,7 +11,6 @@ degenerate-honest BCa CI on the per-query Jaccard, and atomic-write the parquet.
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 import h5py

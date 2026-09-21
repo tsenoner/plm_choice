@@ -2,10 +2,11 @@
 
 import argparse
 from pathlib import Path
-import polars as pl
+
 import matplotlib.pyplot as plt
-from matplotlib_venn import venn2
 import numpy as np
+import polars as pl
+from matplotlib_venn import venn2
 
 
 def load_data_file(file_path):

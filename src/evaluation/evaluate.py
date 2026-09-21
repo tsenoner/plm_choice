@@ -1,35 +1,37 @@
 import argparse
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Any
+
 import numpy as np
-import torch
-from torch.utils.data import DataLoader
-import yaml
 import pytorch_lightning as pl
-from tqdm import tqdm
+import torch
 import wandb
+import yaml
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from evaluation.metrics import calculate_regression_metrics
 
 # Project specific imports
 from shared.datasets import create_single_loader
 from shared.experiment_manager import ExperimentManager
-from evaluation.metrics import calculate_regression_metrics
+from shared.helpers import get_device
 from training.models import (
     FNNPredictor,
-    LinearRegressionPredictor,
     LinearDistancePredictor,
+    LinearRegressionPredictor,
 )
 from visualization.plot_utils import plot_true_vs_predicted
-from shared.helpers import get_device
 
 
 # --- Computation and Caching Helpers ---
 def _compute_and_save_predictions_targets(
     model_type: str, experiment_dir: Path, test_loader: DataLoader, save_path: Path
-) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Computes predictions/targets via inference or baseline and saves them."""
     print("Computing predictions and targets...")
-    predictions: Optional[np.ndarray] = None
-    targets: Optional[np.ndarray] = None
+    predictions: np.ndarray | None = None
+    targets: np.ndarray | None = None
 
     if model_type in ["fnn", "linear", "linear_distance"]:
         # Find best checkpoint directly
@@ -94,9 +96,9 @@ def _get_predictions_targets(
     force_recompute: bool,
     model_type: str,
     experiment_dir: Path,
-    hparams: Dict[str, Any],  # Needed for DataLoader if recomputing
+    hparams: dict[str, Any],  # Needed for DataLoader if recomputing
     test_data_path: Path,  # Needed for DataLoader if recomputing
-) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Gets predictions and targets, using cache or computing/saving as needed."""
     if not force_recompute and preds_targets_path.is_file():
         print(f"Attempting to load predictions and targets from: {preds_targets_path}")
@@ -136,7 +138,7 @@ def _compute_and_save_metrics(
     save_path: Path,
     checkpoint_name: str,
     test_set_name: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Computes metrics and saves them to a file."""
     print("Calculating metrics...")
     metrics = calculate_regression_metrics(
@@ -178,13 +180,13 @@ def _get_metrics(
     n_bootstrap: int,
     checkpoint_name: str,
     test_set_name: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Gets metrics, using cache or computing/saving as needed."""
     if not force_recompute and metrics_path.is_file():
         print(f"Attempting to load metrics from: {metrics_path}")
         metrics = {}
         try:
-            with open(metrics_path, "r") as f:
+            with open(metrics_path) as f:
                 for line in f:
                     if line.startswith("#") or ":" not in line:
                         continue
@@ -225,7 +227,7 @@ def _get_metrics(
 # --- Data Loading and Model Helpers ---
 
 
-def _prepare_dataloader(hparams: Dict[str, Any], test_data_path: Path) -> DataLoader:
+def _prepare_dataloader(hparams: dict[str, Any], test_data_path: Path) -> DataLoader:
     """Prepares the DataLoader using resolved paths and hparams."""
     # Simplified: assumes embeddings_file exists (or fails here)
     embeddings_file = hparams["embedding_file"]
@@ -257,7 +259,7 @@ def load_model_from_checkpoint(
     return model
 
 
-def load_hparams_from_wandb(experiment_dir: Path) -> Dict[str, Any]:
+def load_hparams_from_wandb(experiment_dir: Path) -> dict[str, Any]:
     """Load hyperparameters from wandb's config.yaml file."""
     wandb_dir = experiment_dir / "wandb"
 
@@ -288,7 +290,7 @@ def load_hparams_from_wandb(experiment_dir: Path) -> Dict[str, Any]:
     config_file = max(config_files, key=lambda f: f.stat().st_mtime)
 
     print(f"Loading hyperparameters from wandb config: {config_file}")
-    with open(config_file, "r") as f:
+    with open(config_file) as f:
         config = yaml.safe_load(f)
 
     # Convert wandb config format to expected format
@@ -310,13 +312,13 @@ def load_hparams_from_wandb(experiment_dir: Path) -> Dict[str, Any]:
     return hparams
 
 
-def load_hparams_from_local(experiment_dir: Path) -> Dict[str, Any]:
+def load_hparams_from_local(experiment_dir: Path) -> dict[str, Any]:
     """Fallback: Load hyperparameters from local hparams.yaml file."""
     hparams_file = experiment_dir / "hparams.yaml"
     if not hparams_file.is_file():
         raise FileNotFoundError(f"hparams.yaml not found at {hparams_file}")
     print(f"Loading hyperparameters from local file: {hparams_file}")
-    with open(hparams_file, "r") as f:
+    with open(hparams_file) as f:
         hparams = yaml.safe_load(f)
 
     required = ["model_type", "param_name", "embedding_file", "data_dir", "batch_size"]
@@ -332,7 +334,7 @@ def load_hparams_from_local(experiment_dir: Path) -> Dict[str, Any]:
     return hparams
 
 
-def load_hparams(experiment_dir: Path) -> Dict[str, Any]:
+def load_hparams(experiment_dir: Path) -> dict[str, Any]:
     """Load hyperparameters from wandb config files."""
     try:
         return load_hparams_from_wandb(experiment_dir)
@@ -345,7 +347,7 @@ def load_hparams(experiment_dir: Path) -> Dict[str, Any]:
 
 def run_inference(
     model: pl.LightningModule, test_loader: DataLoader
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Run inference on the test set with parallel processing."""
     print("Running inference...")
     device = get_device()
@@ -380,7 +382,7 @@ def run_inference(
     return torch.cat(preds).numpy().flatten(), torch.cat(tgts).numpy().flatten()
 
 
-def run_euclidean_distance(test_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+def run_euclidean_distance(test_loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
     """Calculate Euclidean distance baseline."""
     print("Calculating Euclidean distances...")
     dists, tgts = [], []
@@ -398,8 +400,8 @@ def run_euclidean_distance(test_loader: DataLoader) -> Tuple[np.ndarray, np.ndar
 
 def log_evaluation_to_wandb(
     experiment_dir: Path,
-    hparams: Dict[str, Any],
-    metrics: Dict[str, Any],
+    hparams: dict[str, Any],
+    metrics: dict[str, Any],
     plot_path: Path,
     test_set_name: str,
 ):
@@ -409,7 +411,7 @@ def log_evaluation_to_wandb(
         print("Warning: wandb_run_id.txt not found. Cannot log to wandb.")
         return
 
-    with open(wandb_run_id_file, "r") as f:
+    with open(wandb_run_id_file) as f:
         wandb_run_id = f.read().strip()
 
     if not wandb_run_id:

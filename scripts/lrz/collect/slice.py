@@ -1,4 +1,9 @@
-import json, h5py, numpy as np, os, sys
+import json
+import os
+import sys
+
+import h5py
+
 D="/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2/plm_choice_data/data/processed/sprot_pre2024/embeddings_cohort2k"
 ids=json.load(open(os.path.expanduser("~/c1_strat/ec_strat_freeze.json")))["ids"]
 out=os.path.expanduser("~/c1_strat/slices"); os.makedirs(out, exist_ok=True)

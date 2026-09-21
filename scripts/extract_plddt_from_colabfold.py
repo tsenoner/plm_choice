@@ -13,8 +13,9 @@ Author: Tobias Senoner
 """
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
+
 from tqdm import tqdm
 
 
@@ -31,7 +32,7 @@ def extract_plddt_from_pdb(pdb_file: Path) -> tuple[str, int, list[float]]:
     protein_id = pdb_file.stem  # Filename without extension
     plddt_scores = []
 
-    with open(pdb_file, "r") as f:
+    with open(pdb_file) as f:
         for line in f:
             # Only process ATOM records for CA (alpha carbon) atoms to avoid duplicates
             if line.startswith("ATOM") and line[12:16].strip() == "CA":

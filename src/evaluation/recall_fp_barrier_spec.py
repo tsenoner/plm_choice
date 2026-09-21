@@ -40,10 +40,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
-from evaluation.recall_fp_report import DEFAULT_LEVELS, PARQUET_GUARDS, PER_QUERY_COLUMNS
 # Shared base helpers. SpecBuildError + write_barrier_spec are also part of this
 # module's public surface (tests import them from here).
 from evaluation.barrier_spec_base import (
@@ -55,6 +54,7 @@ from evaluation.barrier_spec_base import (
     require_grid_size,
     write_barrier_spec,
 )
+from evaluation.recall_fp_report import DEFAULT_LEVELS, PARQUET_GUARDS, PER_QUERY_COLUMNS
 
 
 def _sidecar_path(sidecar_dir: Path, plm: str, rep: str) -> Path:
