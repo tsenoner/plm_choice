@@ -99,8 +99,27 @@ from evaluation.stats import kendall_tau_b
 M8_COLUMNS: tuple[str, ...] = ("query", "target", "fident", "evalue", "alnlen", "qcov", "tcov")
 #: UniProt export column names of the EC label TSV (the EC v2 cohort's ``ec_labels_v2.tsv``).
 EC_ID_COLUMN, EC_LABEL_COLUMN = "Entry", "EC number"
-#: Column names of the GO label TSV written by ``data_preparation.export_go_annotations``.
+#: Column names of the GO label TSV written by ``scripts/build_go_cohort.py``.
 GO_ID_COLUMN, GO_LABEL_COLUMN = "protein_id", "GO_term"
+#: The raw ``export_go_annotations`` dump carries the SAME two required columns but every
+#: evidence code, IEA included, and it sits one directory away from the cohort labels in the
+#: run layout. Reading it here would publish GO numbers built on homology-transferred labels
+#: — the contamination the evidence filter exists to prevent — and nothing else would notice,
+#: because the extra columns are ignored and the freeze check still passes. So the column
+#: that distinguishes the two files is refused rather than ignored.
+GO_EVIDENCE_COLUMN = "evidence"
+
+#: Every file a complete report writes into ``--out-dir``. The out-dir is documented as
+#: reused across runs, so a name this run does not produce is removed rather than left
+#: behind from the previous one (see the staged writeback).
+REPORT_OUTPUTS: tuple[str, ...] = (
+    "summary.csv",
+    "paired_differences.csv",
+    "per_query.parquet",
+    "per_query_baseline.parquet",
+    "tau_b.csv",
+    "manifest.json",
+)
 
 #: EC transfer scores, deepest first. A protein may carry several EC numbers; a level
 #: counts as matched if ANY pair of the two proteins' EC numbers agrees to that depth —
@@ -219,11 +238,19 @@ def load_ec_labels(path: Path | str, ids: Sequence[str]) -> list[frozenset[str]]
 
 
 def read_go_annotations(path: Path | str) -> dict[str, set[str]]:
-    """``protein_id -> {GO term}`` from the 2+-column export TSV (extra columns ignored)."""
+    """``protein_id -> {GO term}`` from the cohort label TSV (extra columns ignored)."""
     frame = pl.read_csv(path, separator="\t", has_header=True, infer_schema_length=0)
     for column in (GO_ID_COLUMN, GO_LABEL_COLUMN):
         if column not in frame.columns:
             raise TransferInputError(f"{path}: GO label TSV needs a {column!r} column")
+    if GO_EVIDENCE_COLUMN in frame.columns:
+        raise TransferInputError(
+            f"{path}: this is the raw export_go_annotations dump (it has an "
+            f"{GO_EVIDENCE_COLUMN!r} column), not the cohort's evidence-filtered labels. "
+            "Its rows carry every evidence code including IEA, and this module does not "
+            "filter them, so the run would publish GO numbers built on homology-transferred "
+            "annotations. Pass go_mf_labels.tsv from scripts/build_go_cohort.py instead."
+        )
     raw: dict[str, set[str]] = defaultdict(set)
     for pid, term in zip(frame[GO_ID_COLUMN], frame[GO_LABEL_COLUMN], strict=True):
         raw[pid].add(term)
@@ -386,6 +413,19 @@ def hbi_neighbours(
     # tie-break chain. The first row of each group is that query's neighbour.
     order = np.lexsort((cols, secondary, primary, rows))
     rows, cols, primary, secondary = rows[order], cols[order], primary[order], secondary[order]
+    # An all-vs-all search reports the same alignment under both of its proteins, so after
+    # symmetrisation ONE neighbour can appear twice for the same query — normally with an
+    # identical fident and E-value. Counting both would report a tie where there is only one
+    # candidate, which is the opposite of what ``tied`` claims to mean. Keeping the first
+    # entry of each (query, neighbour) in this order keeps its BEST one, so nn and value do
+    # not move; two co-leading entries of one neighbour are always adjacent here (they agree
+    # on the primary and the secondary key, so only their shared col separates them from the
+    # rest of the group), which is why adjacency is enough. hbi_baselines dedupes the same
+    # pairs for the same reason.
+    distinct = np.ones(rows.size, dtype=bool)
+    distinct[1:] = (rows[1:] != rows[:-1]) | (cols[1:] != cols[:-1])
+    rows, cols = rows[distinct], cols[distinct]
+    primary, secondary = primary[distinct], secondary[distinct]
     starts = np.ones(rows.size, dtype=bool)
     starts[1:] = rows[1:] != rows[:-1]
     first = np.flatnonzero(starts)
@@ -1301,6 +1341,15 @@ def run_transfer_report(
     }
     try:
         (staging / "manifest.json").write_text(json.dumps(json_safe(manifest), indent=2) + "\n")
+        # Moving the staged files in only ADDS or REPLACES, so an output the PREVIOUS run
+        # wrote into this reused out-dir and this one did not would survive next to a
+        # manifest that does not list it. For tau_b.csv that is exactly the misreading
+        # --no-tau exists to prevent: a stale file reads as "tau-b ran over every pair and
+        # found nothing". Only this module's own output names are ever removed.
+        produced = {path.name for path in staging.iterdir()}
+        for name in REPORT_OUTPUTS:
+            if name not in produced:
+                (out_dir / name).unlink(missing_ok=True)
         for path in sorted(staging.iterdir()):
             os.replace(path, out_dir / path.name)
     except BaseException:

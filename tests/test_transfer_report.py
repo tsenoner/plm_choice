@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from data_preparation.export_go_annotations import GO_TSV_HEADER
 from data_preparation.go_semantic_similarity import parse_obo
 from evaluation.ec_hierarchy import ec_distance_set
 from evaluation.go_similarity_matrix import (
@@ -659,6 +660,32 @@ def test_hbi_ties_break_by_the_secondary_criterion_and_are_counted(tmp_path):
     assert tied[p00] and primary_tied[p00]
 
 
+def test_one_neighbour_reported_under_both_queries_is_not_a_tie(tmp_path):
+    """An all-vs-all search reports the same alignment twice, once under each protein.
+
+    After symmetrisation that neighbour appears twice in the query's candidate list, with
+    the same fident and the same E-value — so counting candidates rather than distinct
+    neighbours flagged a tie for essentially every bidirectionally-reported best hit,
+    while ``tied`` claims to mean "the pick depends on the id order". Here it does not:
+    P00 has exactly one best neighbour, P01.
+    """
+    both_directions = [("P00", "P01", 0.62, 1e-40), ("P01", "P00", 0.62, 1e-40)]
+    by_name, table = _hbi_variants(tmp_path, hits=both_directions)
+    p00, p01 = EC_IDS.index("P00"), EC_IDS.index("P01")
+    for criterion in ("evalue", "fident"):
+        nn, _, tied, primary_tied = hbi_neighbours(table, by_name["all"], criterion)
+        assert nn[p00] == p01 and nn[p01] == p00
+        assert not tied[p00] and not primary_tied[p00]
+        assert not tied[p01] and not primary_tied[p01]
+    # Dropping the duplicate must not have moved the pick: one direction alone agrees.
+    by_name_one, table_one = _hbi_variants(tmp_path, hits=both_directions[:1])
+    for criterion in ("evalue", "fident"):
+        nn_both, value_both, *_ = hbi_neighbours(table, by_name["all"], criterion)
+        nn_one, value_one, *_ = hbi_neighbours(table_one, by_name_one["all"], criterion)
+        assert nn_both.tolist() == nn_one.tolist()
+        assert value_both.tolist() == value_one.tolist()
+
+
 def test_the_summary_tie_column_means_the_same_thing_for_every_arm(tmp_path):
     """Finding: hbi_fident's n_ties was counting rounded-identity co-leaders, which is a
     different question from the embedding argmin's "the pick depends on the id order"."""
@@ -984,6 +1011,25 @@ def test_no_tau_writes_no_tau_file(tmp_path, mini_obo):
     assert "tau_b" not in manifest["outputs"]
 
 
+def test_a_reused_out_dir_keeps_no_output_of_the_previous_run(tmp_path, mini_obo):
+    """The out-dir is reused across runs (the sbatch writes every array task into a fixed
+    one), and the staged move-in only adds or replaces. A tau_b.csv left over from the
+    previous run would therefore sit next to a manifest that does not list it — which is
+    the exact misreading --no-tau exists to prevent, now with a real file behind it."""
+    out_dir = tmp_path / "shared"
+    first, _ = _go_report(tmp_path / "a", mini_obo, out_dir=out_dir)
+    assert (out_dir / "tau_b.csv").exists() and "tau_b" in first["outputs"]
+
+    second, _ = _go_report(tmp_path / "b", mini_obo, out_dir=out_dir, tau=False)
+    assert "tau_b" not in second["outputs"]
+    assert not (out_dir / "tau_b.csv").exists()
+    # ...and the rest of the report is still complete and from the second run.
+    assert json.loads((out_dir / "manifest.json").read_text())["outputs"] == second["outputs"]
+    for name in ("summary.csv", "paired_differences.csv", "per_query.parquet",
+                 "per_query_baseline.parquet"):
+        assert (out_dir / name).exists()
+
+
 def test_alt_ids_are_mapped_not_dropped(tmp_path, mini_obo):
     labels = {**GO_LABELS, "Q03": ["GO:0099999"]}  # secondary id of GO:0016301
     manifest, _ = _go_report(
@@ -1025,6 +1071,37 @@ def test_a_label_free_frozen_id_is_fatal(tmp_path):
             labels_kind="ec",
             freeze=write_freeze(tmp_path / "freeze.json", EC_IDS),
             labels=write_ec_labels(tmp_path / "labels.tsv", partial),
+            emb_dir=emb,
+            out_dir=tmp_path / "out",
+            n_boot=8,
+        )
+
+
+def test_the_raw_annotation_dump_is_refused_as_go_labels(tmp_path, mini_obo):
+    """The two GO TSVs in a run directory are indistinguishable to the reader.
+
+    ``export_go_annotations`` writes protein_id / GO_term / aspect / evidence over EVERY
+    evidence code, IEA included; ``build_go_cohort`` writes protein_id / GO_term over the
+    core-6-filtered cohort labels. The first two column names are identical and this module
+    ignores the rest, so handing it the dump used to run to completion and publish GO
+    numbers built on homology-transferred labels — the contamination the whole evidence
+    filter exists to prevent. The evidence column is the only thing that tells them apart.
+    """
+    dump = tmp_path / "go_annotations_sprot2024.tsv"
+    rows = ["\t".join(GO_TSV_HEADER)]
+    for pid in sorted(GO_LABELS):
+        rows += [f"{pid}\t{term}\tF\tIEA" for term in GO_LABELS[pid]]
+    dump.write_text("\n".join(rows) + "\n")
+
+    emb = tmp_path / "emb"
+    emb.mkdir()
+    write_h5(emb / "a.h5", {p: np.ones(3) for p in GO_IDS})
+    with pytest.raises(Exception, match="raw export_go_annotations dump"):
+        run_transfer_report(
+            labels_kind="go",
+            freeze=write_freeze(tmp_path / "freeze.json", GO_IDS),
+            labels=dump,
+            go_obo=mini_obo,
             emb_dir=emb,
             out_dir=tmp_path / "out",
             n_boot=8,
