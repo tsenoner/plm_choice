@@ -18,6 +18,12 @@
 #
 # OUTPUT GOES TO $DSS.  The cluster HOME quota filled up on 2026-09-17 and silently truncated
 # five jobs' output; nothing here may write into ~ except the slurm logs.
+# One split only, which is how the train-split reduction behind
+# ridge_trainfull_vs_allsplits.csv was produced (its own wrapper lived in /tmp and is
+# gone -- there is no need to write a second one):
+#
+#     SPLITS=train sbatch --array=0-14%8 scripts/lrz/ridge_full_reduce.sbatch
+#
 #SBATCH -J ridge-reduce
 #SBATCH -p lrz-cpu
 #SBATCH --qos=cpu                    # MANDATORY: lrz-cpu rejects the default QOS

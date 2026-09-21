@@ -1,6 +1,14 @@
 #!/bin/bash
 # Derive the shared-cohort exclusion freeze from the <=2000-residue embedding arms (M-12).
 #
+# PROVENANCE, 2026-09-21: this job has never been submitted -- `sacct` has no record of it
+# on any window. The freeze it describes DOES exist and is committed
+# (freeze/embedding_excluded_proteins.json): it was produced by running the underlying
+# Python directly on the login node, which is affordable because the work is an HDF5 key
+# walk rather than compute. So this file is a recipe that has never been executed as
+# written. Run it with `sbatch --test-only` before trusting it, and do not read a green
+# job here as confirmation that the deposited freeze came from it.
+#
 #     cd ~/plm_choice && mkdir -p logs
 #     sbatch --test-only scripts/lrz/cohort_freeze.sbatch
 #     sbatch            scripts/lrz/cohort_freeze.sbatch
