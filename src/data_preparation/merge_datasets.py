@@ -650,8 +650,10 @@ class ProteinAnalysisPipeline:
 
         created_plots = 0
         stats_rows: list[dict[str, object]] = []
+        plot_paths: list[Path] = []
         for data, threshold, title, ylim, filename, panel, column, unit in plot_configs:
             plot_path = plots_dir / filename
+            plot_paths.append(plot_path)
             if not (reuse and plot_path.exists()):
                 self._create_violin_plot(data, threshold, title, ylim, plot_path)
                 created_plots += 1
@@ -670,8 +672,6 @@ class ProteinAnalysisPipeline:
         # Create combined subplot figure
         combined_plot_path = plots_dir / "combined_distributions.png"
         if not (reuse and combined_plot_path.exists()):
-            # Extract plot paths from plot_configs
-            plot_paths = [plots_dir / cfg[4] for cfg in plot_configs]
             self._create_combined_plot(plot_paths, combined_plot_path)
             created_plots += 1
         else:

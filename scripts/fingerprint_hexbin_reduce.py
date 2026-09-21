@@ -53,8 +53,8 @@ from visualization.plm_constants import EMBEDDING_FAMILY_MAP, PLM_SIZES
 ALIGNMENT_PROBE_ROWS = 50_000
 
 
-def discover_arms(dist_dir: Path, split: str) -> list[str]:
-    """Arms present for ``split``, ordered and filtered exactly as the plotter does.
+def discover_arms(dist_dir: Path) -> list[str]:
+    """Arms present in ``dist_dir``, ordered and filtered exactly as the plotter does.
 
     The order is the figure's row/column order, so it has to come from the same
     (family, size, name) key ``pairwise_embedding_comparison`` sorts by -- otherwise
@@ -70,7 +70,7 @@ def discover_arms(dist_dir: Path, split: str) -> list[str]:
     )
 
 
-def check_alignment(dist_dir: Path, arms: list[str], n_rows: int) -> int:
+def check_alignment(dist_dir: Path, arms: list[str]) -> int:
     """Confirm every arm's file holds the same pairs in the same order.
 
     The columns are read positionally afterwards, so this is the assumption the whole
@@ -85,7 +85,7 @@ def check_alignment(dist_dir: Path, arms: list[str], n_rows: int) -> int:
     n = next(iter(heights.values()))
 
     ref_arm = arms[0]
-    probe = min(n_rows, n)
+    probe = min(ALIGNMENT_PROBE_ROWS, n)
     ref_head = pl.read_parquet(dist_dir / f"dist_{ref_arm}.parquet", columns=["query", "target"], n_rows=probe)
     for arm in arms[1:]:
         head = pl.read_parquet(dist_dir / f"dist_{arm}.parquet", columns=["query", "target"], n_rows=probe)
@@ -96,7 +96,7 @@ def check_alignment(dist_dir: Path, arms: list[str], n_rows: int) -> int:
 
 def load_split(dist_dir: Path, arms: list[str], identical_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """One split's per-arm distances plus its identical-sequence mask."""
-    n = check_alignment(dist_dir, arms, ALIGNMENT_PROBE_ROWS)
+    n = check_alignment(dist_dir, arms)
 
     identical = pl.read_parquet(identical_path)["identical"].to_numpy()
     if identical.size != n:
@@ -156,12 +156,13 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
-    arms = discover_arms(args.dist_dir / args.splits[0], args.splits[0])
+    arms = discover_arms(args.dist_dir / args.splits[0])
     print(f"{len(arms)} arms: {', '.join(arms)}", flush=True)
 
     per_split_counts: dict[str, dict[str, int]] = {}
     chunks: dict[str, list[np.ndarray]] = {arm: [] for arm in arms}
     identical_chunks: list[np.ndarray] = []
+    finite_chunks: list[np.ndarray] = []
     for split in args.splits:
         print(f"  reading {split}", flush=True)
         dist, identical = load_split(
@@ -179,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         for arm in arms:
             chunks[arm].append(dist[arm])
         identical_chunks.append(identical)
+        finite_chunks.append(finite)
         del dist
 
     values = {arm: np.concatenate(chunks[arm]) for arm in arms}
@@ -186,9 +188,11 @@ def main(argv: list[str] | None = None) -> int:
     identical = np.concatenate(identical_chunks)
     del identical_chunks
 
-    keep = ~identical
-    for arm in arms:
-        keep &= np.isfinite(values[arm])
+    # The per-split masks above already say which rows are finite in every arm, so
+    # reuse them rather than running isfinite a second time over all 14 concatenated
+    # arms -- same booleans, one pass instead of two.
+    keep = np.concatenate(finite_chunks) & ~identical
+    del finite_chunks
     n_total, n_keep = identical.size, int(keep.sum())
     print(f"{n_total:,} pairs -> {n_keep:,} kept ({100 * n_keep / n_total:.3f}%)", flush=True)
 
