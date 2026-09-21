@@ -31,9 +31,15 @@ New scripts for paper revision. See `docs/superpowers/specs/2026-03-19-ivan-infr
 - [ ] Randomly initialized pLM baseline: `embedding_generation.py --random_init`
   - Run for each model: `uv run python src/data_preparation/embeddings/embedding_generation.py sequences.fasta esm2_650m --random_init`
   - Output: random_init_<model>.h5
-- [ ] PDB experimental TM-scores: `src/data_preparation/pdb_tmscore.py`
-  - Needs: TMalign binary on PATH
-  - Output: tmscore_exp column in parquet
+- [x] PDB experimental TM-scores: `src/data_preparation/pdb_tmscore.py` (B6 / R2.2, 2026-09-18)
+  - Needs: a **US-align** binary on PATH (https://zhanggroup.org/US-align/ — not TMalign,
+    and not fetched by `scripts/download_reference_data.sh`), plus
+    `data/reference/sifts/uniprot_pdb.tsv`. Residue-level SIFTS and the wwPDB
+    `entries.idx` download themselves into `<work_dir>/cache`.
+  - Run: `scripts/run_ivan_pipeline.sh --step 4` (4a computes, 4b analyses)
+  - Output: `tmscore_exp` / `tmscore_exp_short` / `tmscore_exp_avg` columns plus full
+    structure provenance in the parquet; `attrition.json` (funnel + source stamps) and
+    `stats.json` (the R2.2 comparison) in the work dir
 
 ### Evaluation & validation infrastructure (added 2026-03-19, batch 2)
 - [ ] ~~EC-number hierarchy distances: `src/data_preparation/ec_hierarchy_distance.py`~~

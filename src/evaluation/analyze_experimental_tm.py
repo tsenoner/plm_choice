@@ -7,7 +7,7 @@ how much does the AlphaFold/Foldseek ``alntmscore`` we train on actually track
 EXPERIMENTAL structural similarity, and how much of experimental structural
 similarity is just sequence identity?
 
-Writes SUMMARY.md and stats.json into the given results directory.
+Writes stats.json into the given results directory and prints the same JSON.
 
 NOTE on normalisation, which the whole comparison hinges on:
   * Foldseek ``alntmscore`` is normalised by the ALIGNMENT SPAN,
@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -42,13 +43,33 @@ EXP_VARIANTS = [
 ]
 
 
+# A CATH homologous-superfamily code is four dot-separated integers, "1.10.8.10".
+_CATH_CODE_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+
 def load_cath(path: Path, wanted: set[tuple[str, str]]) -> dict[tuple[str, str], set[str]]:
-    """(pdb_id, chain) -> set of CATH homologous-superfamily codes (C.A.T.H)."""
+    """
+    (pdb_id, chain) -> set of CATH homologous-superfamily codes (C.A.T.H).
+
+    Expects ``cath-b-newest-all.gz``, whose rows are
+    ``<domain> <version> <C.A.T.H> <boundaries>`` -- field 3 is the full
+    four-level code. ``cath-domain-list.txt`` parses here just as happily, but
+    ITS field 3 is the single architecture digit: every pair would still get a
+    same/different label and the whole stratification would be meaningless with
+    no error anywhere. Hence the shape check on the code.
+    """
     out: dict[tuple[str, str], set[str]] = defaultdict(set)
+    n_rows = n_bad_code = 0
     with gzip.open(path, "rt", errors="replace") as fh:
         for line in fh:
+            if line.startswith("#"):
+                continue
             p = line.split()
             if len(p) < 3:
+                continue
+            n_rows += 1
+            if not _CATH_CODE_RE.match(p[2]):
+                n_bad_code += 1
                 continue
             dom = p[0]
             if len(dom) < 6:
@@ -56,6 +77,12 @@ def load_cath(path: Path, wanted: set[tuple[str, str]]) -> dict[tuple[str, str],
             key = (dom[:4].lower(), dom[4:-2])
             if key in wanted:
                 out[key].add(p[2])
+    if n_rows and n_bad_code > n_rows // 2:
+        raise SystemExit(
+            f"{path}: {n_bad_code} of {n_rows} rows carry no C.A.T.H code in field 3. "
+            "--cath expects cath-b-newest-all.gz (CATH daily release), not "
+            "cath-domain-list.txt, whose field 3 is the architecture digit."
+        )
     return dict(out)
 
 
@@ -114,11 +141,23 @@ def cluster_bootstrap_r(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--parquet", type=Path, required=True)
-    ap.add_argument("--results_dir", type=Path, required=True)
-    ap.add_argument("--cath", type=Path, default=None)
-    ap.add_argument("--attrition", type=Path, default=None)
+    ap = argparse.ArgumentParser(
+        description="B6 / R2.2: does alntmscore track EXPERIMENTAL structural similarity?",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument("--parquet", type=Path, required=True,
+                    help="tmscore_exp parquet written by data_preparation/pdb_tmscore.py.")
+    ap.add_argument("--results_dir", type=Path, required=True,
+                    help="stats.json is written here.")
+    ap.add_argument("--cath", type=Path, default=None,
+                    help="cath-b-newest-all.gz from the CATH daily release (rows: "
+                         "'<domain> <version> <C.A.T.H> <boundaries>'). NOT "
+                         "cath-domain-list.txt. Optional: enables the same- vs "
+                         "different-superfamily stratification. No downloader ships "
+                         "with this repo.")
+    ap.add_argument("--attrition", type=Path, default=None,
+                    help="attrition.json from the same run; copied into stats.json so "
+                         "the funnel and the source stamps travel with the numbers.")
     args = ap.parse_args()
 
     df = pl.read_parquet(args.parquet)
@@ -220,12 +259,24 @@ def main() -> None:
             )
 
     # ---- coverage / normalisation confound ------------------------------
+    # CAVEAT, do not read this as the direct test. The confound is that Foldseek
+    # normalises alntmscore by ITS OWN alignment span, and the pair table
+    # (query, target, fident, hfsp, alntmscore) carries no Foldseek span columns,
+    # so that quantity is not available here. len_ali/len1/len2 are US-ALIGN's
+    # numbers on the experimental structures. Pairs that US-align aligns nearly
+    # end to end are the ones where a span-normalised and a chain-normalised
+    # score can least diverge, so this is a proxy, not the measurement.
     cov = both.with_columns(
         (pl.col("len_ali") / pl.min_horizontal("len1", "len2")).alias("ali_frac")
     )
     S["alignment_coverage"] = {
         "median_len_ali_over_shorter_chain": float(cov["ali_frac"].median()),
         "frac_pairs_ali_ge_0.9_of_shorter": float((cov["ali_frac"] >= 0.9).mean()),
+        "caveat": (
+            "US-align's alignment span on the experimental structures, NOT "
+            "Foldseek's span behind alntmscore -- the pair table has no Foldseek "
+            "span columns. Proxy for the normalisation confound, not a direct test."
+        ),
     }
     near_full = cov.filter(pl.col("ali_frac") >= 0.9)
     S["near_full_length_subset"] = corr_block(

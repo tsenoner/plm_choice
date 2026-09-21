@@ -19,7 +19,7 @@ touched**, so there was no conflict to avoid — only unreviewed work being left
 | --- | --- |
 | `data_preparation/go_semantic_similarity.py` | **Wang (2007) GO semantic similarity, best-match-average.** The plan calls the GO arm "greenfield `go_report.py`" — it is not greenfield. Direct input to **C1**. |
 | `data_preparation/brenda_hfsp_validation.py` | Tests whether HFSP separates curated enzyme classes (beta-lactamase Ambler A/B/C/D). **C1's BRENDA gold-standard cohort.** |
-| `data_preparation/pdb_tmscore.py` | SIFTS → RCSB → TMalign pipeline for **experimental** TM-scores. main's `evaluation/pdb_tm_bias.py` is a library with no CLI and no computation side, so **B6 / R2.2** had no way to produce its input. |
+| `data_preparation/pdb_tmscore.py` | SIFTS → RCSB → US-align pipeline for **experimental** TM-scores (TMalign in the mined version; switched 2026-09-18). main's `evaluation/pdb_tm_bias.py` is a library with no CLI and no computation side, so **B6 / R2.2** had no way to produce its input. |
 | `data_preparation/ecod_homology_pairs.py` | Per-ECOD-group distance densities — structural stratification for **C2**. |
 | `data_preparation/organism_landscape.py` | Distance distributions by organism group + KS tests — the species-composition half of **R1.3 / C6**. |
 | `data_preparation/merge_parquet_columns.py` | Plumbing: merges new target columns into the splits. Everything above needs it. |
@@ -147,10 +147,19 @@ the canonical splits.
   data**. The GO parser bug above is exactly the class of defect that survives an import
   check and a green suite.
 - Several modules need reference data not in the repo (CAFA annotations, ECOD, SIFTS, a
-  TMalign binary). `scripts/download_reference_data.sh` is the intended fetcher — read it
-  before running it.
-- `pdb_tmscore`'s `--resolution_cutoff` is accepted but **not applied**, and its
+  US-align binary). `scripts/download_reference_data.sh` is the intended fetcher — read it
+  before running it. It does NOT fetch US-align: build that from
+  <https://zhanggroup.org/US-align/> and put it on PATH.
+- ~~`pdb_tmscore`'s `--resolution_cutoff` is accepted but **not applied**, and its
   `EXPERIMENTAL_METHODS` allowlist is unused; both now say so. Do not describe that
-  pipeline as resolution- or method-filtered until they are wired up.
+  pipeline as resolution- or method-filtered until they are wired up.~~
+  **FIXED 2026-09-18 (task B6), so this entry is now the opposite of the truth.** Both are
+  enforced, in `select_representative_chain`: F2 drops any entry whose EXPERIMENT TYPE is
+  not in `EXPERIMENTAL_METHODS`, F3 applies `--resolution_cutoff` to the
+  resolution-bearing methods (NMR carries no resolution and is exempt). The pipeline IS
+  resolution- and method-filtered; `attrition.json` records the cutoff, the guard and the
+  method histogram of the candidate entries. The same commit replaced `select_best_structure`
+  (which returned SIFTS file order under a docstring promising highest-resolution X-ray)
+  and switched TMalign → US-align.
 - Ivan's fork still holds the original branch. Nothing was force-pushed and no history was
   rewritten, so it is intact and can be re-checked at any time.

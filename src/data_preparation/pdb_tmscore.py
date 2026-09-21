@@ -58,12 +58,25 @@ Usage
     PYTHONPATH=src python src/data_preparation/pdb_tmscore.py \
         --pairs_parquet   data/processed/sprot_pre2024/sets/test.parquet \
         --entry_sifts     data/reference/sifts/uniprot_pdb.tsv \
-        --chain_sifts     <cache>/pdb_chain_uniprot.tsv.gz \
-        --entries_idx     <cache>/entries.idx \
         --work_dir        <results>/ \
         --output_parquet  <results>/tmscore_exp.parquet \
-        --usalign_path    ~/bin/USalign \
+        --usalign_path    USalign \
         --resolution_cutoff 3.0
+
+    PYTHONPATH=src python src/evaluation/analyze_experimental_tm.py \
+        --parquet         <results>/tmscore_exp.parquet \
+        --attrition       <results>/attrition.json \
+        --results_dir     <results>/
+
+``--entry_sifts`` comes from scripts/download_reference_data.sh. ``--chain_sifts``
+and ``--entries_idx`` are downloaded into ``<work_dir>/cache`` when omitted; both
+are WEEKLY-ROLLING files at a fixed URL, so ``attrition.json`` records the size,
+mtime and (for SIFTS) the release-date header line of whatever was actually read.
+
+US-align is NOT in this repo and NOT fetched by download_reference_data.sh: build
+it from https://zhanggroup.org/US-align/ and put it on PATH, or point
+``--usalign_path`` at the binary. Its version string is recorded in
+``attrition.json`` and stamped into every checkpoint record.
 
 Created: 2026-03-19 (Ivan infrastructure for pLM Choice revision)
 Rewritten: 2026-09-18 (task B6)
@@ -83,6 +96,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -158,6 +172,32 @@ def _open_maybe_gz(path: Path):
     if str(path).endswith(".gz"):
         return gzip.open(path, "rt", errors="replace")
     return open(path, errors="replace")
+
+
+def _source_stamp(path: Path) -> dict[str, str | int]:
+    """
+    Provenance for one input file, for attrition.json.
+
+    SIFTS and entries.idx are refreshed weekly at a FIXED url, so two runs months
+    apart read different content through the same CLI flags and can legitimately
+    pick different representative chains. Without a stamp there is no way to tell
+    afterwards which release produced a number. The SIFTS flatfiles carry their
+    release date on line 1 as a '#' comment; entries.idx does not, so size and
+    mtime stand in.
+    """
+    st = path.stat()
+    stamp: dict[str, str | int] = {
+        "path": str(path),
+        "bytes": st.st_size,
+        "mtime_utc": datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
+    }
+    name = str(path)
+    if name.endswith((".tsv", ".tsv.gz", ".idx", ".txt")):
+        with _open_maybe_gz(path) as fh:
+            first = fh.readline().strip()
+        if first.startswith("#"):
+            stamp["header"] = first[:200]
+    return stamp
 
 
 def load_entry_pdb_map(entry_sifts: Path, targets: set[str]) -> dict[str, set[str]]:
@@ -238,12 +278,19 @@ def load_entry_metadata(entries_idx: Path) -> dict[str, tuple[str, float | None]
     (NMR and friends).
     """
     meta: dict[str, tuple[str, float | None]] = {}
+    n_short = 0
     with _open_maybe_gz(entries_idx) as f:
         for i, line in enumerate(f):
             if i < 2:
                 continue
             p = line.rstrip("\n").split("\t")
             if len(p) < 8:
+                # An X-ray entry has an EMPTY EXPERIMENT TYPE, so it only reaches
+                # 8 fields if wwPDB writes the trailing tab. If it ever stops
+                # doing so, every X-ray entry silently loses its metadata, fails
+                # the method allowlist and the cohort collapses to NMR/EM. Loud
+                # rather than silent.
+                n_short += 1
                 continue
             pdb_id = p[0].strip().lower()
             try:
@@ -254,6 +301,14 @@ def load_entry_metadata(entries_idx: Path) -> dict[str, tuple[str, float | None]
                 res = None
             method = p[7].strip().upper() or "X-RAY DIFFRACTION"
             meta[pdb_id] = (method, res)
+    if n_short:
+        logger.warning(
+            "entries.idx: %d rows had fewer than 8 tab-separated fields and were "
+            "skipped -- those entries have NO method/resolution and will be "
+            "dropped by the allowlist. Check the file layout before trusting the "
+            "cohort.",
+            n_short,
+        )
     logger.info("Entry metadata: %d PDB entries", len(meta))
     return meta
 
@@ -465,7 +520,14 @@ def extract_chain_ca_pdb(
                 comp = p[cols["label_comp_id"]]
                 if line.startswith("HETATM") and comp != "MSE":
                     continue
-                ch_col = cols.get("auth_asym_id", cols.get("label_asym_id"))
+                # Indexed, not .get(): a missing column must raise KeyError into
+                # the guard below (row skipped like any other unparseable row).
+                # cols.get(...) returns None on an _atom_site loop that has
+                # neither column, and p[None] raises TypeError, which is NOT in
+                # the guard -- it escapes to the caller's except Exception and
+                # the whole protein is dropped as chain_extraction_error with the
+                # cause logged at DEBUG.
+                ch_col = cols["auth_asym_id"] if "auth_asym_id" in cols else cols["label_asym_id"]
                 if p[ch_col] != chain_id:
                     continue
                 model = p[cols["pdbx_PDB_model_num"]] if "pdbx_PDB_model_num" in cols else "1"
@@ -476,7 +538,7 @@ def extract_chain_ca_pdb(
                 alt = p[cols["label_alt_id"]] if "label_alt_id" in cols else "."
                 if alt not in {".", "?", "A"}:
                     continue
-                seq_col = cols.get("auth_seq_id", cols.get("label_seq_id"))
+                seq_col = cols["auth_seq_id"] if "auth_seq_id" in cols else cols["label_seq_id"]
                 key = _auth_seq_key(p[seq_col])
                 if key is None:
                     continue
@@ -499,27 +561,42 @@ def extract_chain_ca_pdb(
     if not kept and chain_ca:
         # Author ranges did not intersect anything (renumbered entry, odd
         # insertion codes); fall back to the whole chain rather than dropping.
-        _write_ca_pdb(chain_ca, out_pdb)
-        return len(chain_ca), True
+        return _write_ca_pdb(chain_ca, out_pdb), True
 
     if not kept:
         return 0, False
 
-    _write_ca_pdb(kept, out_pdb)
-    return len(kept), False
+    return _write_ca_pdb(kept, out_pdb), False
 
 
-def _write_ca_pdb(rows, out_pdb: Path) -> None:
+# PDB's resSeq field is four characters wide, so a residue past 9999 cannot be
+# expressed in fixed-width PDB at all. No deposited protein chain comes close.
+# But truncating silently would align a partial chain while the parquet reported
+# the full length, so the cut is logged and the returned count is what is
+# actually on disk.
+MAX_PDB_RESSEQ = 9999
+
+
+def _write_ca_pdb(rows, out_pdb: Path) -> int:
+    """Write the CA rows as fixed-width PDB. Returns how many were written."""
     out_pdb.parent.mkdir(parents=True, exist_ok=True)
+    if len(rows) > MAX_PDB_RESSEQ:
+        logger.warning(
+            "%s: chain has %d CA atoms, writing only the first %d (PDB resSeq is "
+            "4 columns wide)",
+            out_pdb.name,
+            len(rows),
+            MAX_PDB_RESSEQ,
+        )
+        rows = rows[:MAX_PDB_RESSEQ]
     with open(out_pdb, "w") as fh:
         for i, (comp, x, y, z, occ, b, el) in enumerate(rows, start=1):
-            if i > 9999:
-                break
             fh.write(
                 "ATOM  %5d  CA  %3s A%4d    %8.3f%8.3f%8.3f%6.2f%6.2f          %2s\n"
                 % (i, comp[:3], i, x, y, z, occ, b, el[:2].rjust(2))
             )
         fh.write("TER\nEND\n")
+    return len(rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -665,6 +742,25 @@ def main() -> None:
     chain_map = load_sifts_chain_mapping(chain_sifts, proteins)
     entry_meta = load_entry_metadata(entries_idx)
 
+    # Surface what the EXPERIMENTAL_METHODS allowlist (filter F2) throws away.
+    # entries.idx writes EXPERIMENT TYPE as free text, so a spelling this module
+    # does not list -- a bare "NMR" where it expects "SOLUTION NMR", say -- drops
+    # a whole class of structures into the undifferentiated
+    # no_candidate_after_filters bucket with no error and a quietly narrower
+    # cohort than the docstring claims.
+    candidate_entries = {pdb for cands in chain_map.values() for pdb, _ in cands}
+    method_hist = Counter(
+        entry_meta.get(e, ("NOT_IN_ENTRIES_IDX", None))[0] for e in candidate_entries
+    )
+    rejected_methods = {m: n for m, n in method_hist.items() if m not in EXPERIMENTAL_METHODS}
+    if rejected_methods:
+        logger.warning(
+            "F2 drops %d of %d candidate entries on EXPERIMENT TYPE: %s",
+            sum(rejected_methods.values()),
+            len(candidate_entries),
+            dict(sorted(rejected_methods.items(), key=lambda kv: -kv[1])),
+        )
+
     picks: dict[str, dict] = {}
     reject: dict[str, str] = {}
     for acc in sorted(proteins):
@@ -715,7 +811,10 @@ def main() -> None:
         try:
             n, fb = extract_chain_ca_pdb(cif, p["chain"], p["segments"], out)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("extract failed %s: %s", acc, exc)
+            # WARNING, not DEBUG: this branch means the mmCIF did not parse the
+            # way this module assumes, which is exactly the class of surprise
+            # that must not be invisible at the module's INFO default.
+            logger.warning("chain extraction failed for %s (%s): %s", acc, p["pdb_id"], exc)
             reject[acc] = "chain_extraction_error"
             continue
         if n < 20:
@@ -730,8 +829,22 @@ def main() -> None:
     pairs = pairs.filter(pl.col("query").is_in(list(have)) & pl.col("target").is_in(list(have)))
     attrition.append(("pairs with a chain file for BOTH proteins", pairs.height))
 
+    # A cached score is only reusable if it was produced from the SAME two
+    # structures by the SAME binary. Changing --resolution_cutoff or
+    # --coverage_guard, or letting the weekly SIFTS/entries.idx refresh through,
+    # changes what select_representative_chain picks WITHOUT changing the pair --
+    # so a checkpoint keyed on (query, target) alone would hand old scores to new
+    # q_pdb/q_chain/q_resolution provenance columns and say nothing about it.
+    # Stamping each record makes a stale entry recomputable instead of silently
+    # wrong. Records written before this stamp existed have no "stamp" key and
+    # are therefore treated as stale, which is the safe reading.
+    def _stamp(q: str, t: str) -> str:
+        pq, pt = picks[q], picks[t]
+        return f"{pq['pdb_id']}_{pq['chain']}|{pt['pdb_id']}_{pt['chain']}|{version}"
+
     ckpt = args.work_dir / "checkpoint.jsonl"
     done: dict[tuple[str, str], dict | None] = {}
+    n_stale = 0
     if ckpt.exists():
         with open(ckpt) as fh:
             for line in fh:
@@ -739,8 +852,21 @@ def main() -> None:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                done[(rec["query"], rec["target"])] = rec["res"]
-        logger.info("Resuming: %d pairs already in %s", len(done), ckpt)
+                key = (rec["query"], rec["target"])
+                if key[0] not in picks or key[1] not in picks:
+                    n_stale += 1
+                    continue
+                if rec.get("stamp") != _stamp(*key):
+                    n_stale += 1
+                    continue
+                done[key] = rec["res"]
+        logger.info("Resuming: %d reusable pairs in %s", len(done), ckpt)
+        if n_stale:
+            logger.warning(
+                "%d checkpointed pairs came from different chains or a different "
+                "US-align build and are being rescored, not reused.",
+                n_stale,
+            )
 
     pair_ids = list(zip(pairs["query"].to_list(), pairs["target"].to_list(), strict=True))
     work = [
@@ -758,7 +884,12 @@ def main() -> None:
                 desc="US-align", unit="pair",
             ):
                 done[(q, t)] = res
-                fh.write(json.dumps({"query": q, "target": t, "res": res}) + "\n")
+                fh.write(
+                    json.dumps(
+                        {"query": q, "target": t, "stamp": _stamp(q, t), "res": res}
+                    )
+                    + "\n"
+                )
                 n += 1
                 if n % args.checkpoint_every == 0:
                     fh.flush()
@@ -783,13 +914,15 @@ def main() -> None:
             row[k] = res[k] if res else None
         rows.append(row)
 
-    out = pl.DataFrame(rows).join(pairs, on=["query", "target"], how="left")
-    args.output_parquet.parent.mkdir(parents=True, exist_ok=True)
-    out.write_parquet(args.output_parquet)
+    attrition.append(
+        ("pairs with a US-align score", sum(1 for r in rows if r["tmscore_exp"] is not None))
+    )
 
-    scored = out.filter(pl.col("tmscore_exp").is_not_null())
-    attrition.append(("pairs with a US-align score", scored.height))
-
+    # attrition.json goes out BEFORE the parquet. When the funnel empties, it is
+    # the only record of where the pairs went -- and the parquet write is exactly
+    # the step that cannot run in that case (an empty row list gives a frame with
+    # no columns, and the join dies on a missing "query"). Writing it first means
+    # the diagnostic survives the failure it is there to explain.
     with open(args.work_dir / "attrition.json", "w") as fh:
         json.dump(
             {
@@ -797,6 +930,14 @@ def main() -> None:
                 "usalign_version": version,
                 "resolution_cutoff": args.resolution_cutoff,
                 "coverage_guard": args.coverage_guard,
+                "sources": {
+                    "pairs_parquet": _source_stamp(args.pairs_parquet),
+                    "entry_sifts": _source_stamp(args.entry_sifts),
+                    "chain_sifts": _source_stamp(Path(chain_sifts)),
+                    "entries_idx": _source_stamp(Path(entries_idx)),
+                },
+                "candidate_entry_methods": dict(sorted(method_hist.items())),
+                "checkpoint_pairs_rescored_as_stale": n_stale,
                 "reject_reasons": dict(sorted(Counter(reject.values()).items())),
             },
             fh, indent=2,
@@ -805,6 +946,24 @@ def main() -> None:
     logger.info("=" * 64)
     for name, n in attrition:
         logger.info("%-46s %8d", name, n)
+
+    if not rows:
+        # Exit NON-zero. The failure this module was rewritten to fix was a
+        # silently empty result that logged "0 pairs" and exited 0, which reads
+        # as success to every caller and to run_ivan_pipeline.sh's run_or_skip.
+        logger.error(
+            "No pair survived the funnel, so there is nothing to write. "
+            "%s records where they went.",
+            args.work_dir / "attrition.json",
+        )
+        raise SystemExit(1)
+
+    # validate="1:1": rows has exactly one entry per row of `pairs`, so a
+    # duplicated (query, target) on either side would multiply the output and
+    # quietly inflate n. sets/test.parquet has none; fail loudly if that changes.
+    out = pl.DataFrame(rows).join(pairs, on=["query", "target"], how="left", validate="1:1")
+    args.output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    out.write_parquet(args.output_parquet)
     logger.info("Wrote %s", args.output_parquet)
 
 
