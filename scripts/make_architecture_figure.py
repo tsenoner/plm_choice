@@ -345,8 +345,11 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     _arrow(ax, X_T3 + W_LAYER, TRUNK_Y, X_YHAT - 1.5, TRUNK_Y)
     ax.text(X_YHAT, TRUNK_Y, "$\\hat{y}$", ha="left", va="center",
             fontsize=10, color=INK, zorder=6)
-    ax.text(X_YHAT - 4.0, TRUNK_Y - H_LAYER / 2 - 2.0,
-            "PIDE, TM-score\nor HFSP", ha="center", va="top",
+    # One line, not two. Broken after "TM-score" the list stopped reading as three
+    # alternatives and started reading as a stanza; the header carries "one per target",
+    # so the "or" only has to separate, not explain.
+    ax.text(X_YHAT - 9.0, TRUNK_Y - H_LAYER / 2 - 2.5,
+            "PIDE, TM-score or HFSP", ha="center", va="top",
             fontsize=FS_NOTE, color=MUTED, zorder=6)
 
     # ---- the training-free Euclidean read-out, off the same frozen embeddings ----
