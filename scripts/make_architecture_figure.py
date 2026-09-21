@@ -337,10 +337,12 @@ def draw(out_dir: Path, stem: str, dpi: int) -> list[Path]:
     _bar(ax, X_CONCAT, TRUNK_Y - half / 2, half, B_FILL, B_EDGE, width=W_CONCAT)
     _arrow(ax, X_SHARED + W_SHARED, LANE_A_Y, X_CONCAT, TRUNK_Y + half / 2)
     _arrow(ax, X_SHARED + W_SHARED, LANE_B_Y, X_CONCAT, TRUNK_Y - half / 2)
-    # Offset right of the bar's centre so the incoming query-lane arrow clears the
-    # label's left edge; keep the offset small, or it stops reading as the bar's label.
-    ax.text(X_CONCAT + W_CONCAT / 2 + 2.5, TRUNK_Y + half + 2.0,
-            f"concatenate → {concat}", ha="center", va="bottom",
+    # "concatenate" alone. The width is stated by the layer that consumes it -- the next
+    # box reads "128 → 64" -- and implied by the two "n → 64" boxes feeding in, so "→ 128"
+    # here was the third telling. Being shorter it also sits centred on the bar again,
+    # instead of nudged right to clear the incoming query-lane arrow.
+    ax.text(X_CONCAT + W_CONCAT / 2, TRUNK_Y + half + 2.0,
+            "concatenate", ha="center", va="bottom",
             fontsize=FS_OP, color=INK, zorder=6)
 
     # ---- the trunk: three boxes, three arrows ------------------------------------
