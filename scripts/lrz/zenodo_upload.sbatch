@@ -74,7 +74,17 @@ build_tar () {   # build_tar <name> <parent-dir> <child>
     mv "$STAGE/$name.part" "$STAGE/$name"
 }
 
-build_tar embeddings_native.tar       "$PROC/sprot_pre2024"          embeddings_cohort2k
+# A new version starts as a COPY of the previous version's files, and record 17469268
+# already holds the 15 embedding .h5 files (~29 GB) plus supplementary_data.zip. So the
+# default upload is only what is new, and the embeddings are inherited untouched.
+#
+# WITH_EMBEDDINGS=1 also uploads the cohort embeddings THIS paper used. They are not the
+# same files: the deposited esm2_3b.h5 is 4,616 MB against 5,745 MB on the cluster, i.e. a
+# different protein cut. Replacing them is the honest thing to do before publishing --
+# it is ~31 GB, which is why it is a switch rather than the default.
+if [ -n "${WITH_EMBEDDINGS:-}" ]; then
+    build_tar embeddings_cohort2k.tar "$PROC/sprot_pre2024"          embeddings_cohort2k
+fi
 build_tar pair_tables_splits.tar      "$PROC"                        sprot_pre2024_e1
 build_tar identical_sequence_mask.tar "$DSS"                         ridge_identical
 [ -d "$DSS/pair_table_counts" ] && build_tar pair_table_counts.tar   "$DSS" pair_table_counts
