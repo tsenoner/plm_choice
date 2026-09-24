@@ -137,7 +137,7 @@ for f in "$STAGE"/*.tar "$STAGE"/*.h5; do
     # is not a reason to skip: only skip what THIS deposit already received, tracked in
     # a marker file, so an interrupted run resumes without re-sending 5 GB.
     if [ -f "$STAGE/.done_$name" ]; then echo "skip $name (uploaded by an earlier run)"; continue; fi
-    size="$(stat -c%s "$f")"
+    size="$(stat -Lc%s "$f")"   # -L: the embeddings are staged as symlinks, so follow them
     echo "uploading $name ($(numfmt --to=iec "$size"))"
     for attempt in 1 2 3; do
         if curl -sS -H @"$AUTH_HEADER" --retry 3 --retry-delay 30 \
