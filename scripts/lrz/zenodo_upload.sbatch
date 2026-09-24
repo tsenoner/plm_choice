@@ -74,17 +74,16 @@ build_tar () {   # build_tar <name> <parent-dir> <child>
     mv "$STAGE/$name.part" "$STAGE/$name"
 }
 
-# A new version starts as a COPY of the previous version's files, and record 17469268
-# already holds the 15 embedding .h5 files (~29 GB) plus supplementary_data.zip. So the
-# default upload is only what is new, and the embeddings are inherited untouched.
+# A new version starts as a COPY of the previous version's files: record 17469268 already
+# holds 15 embedding .h5 files (~29 GB) plus supplementary_data.zip, and they are inherited
+# unless we overwrite them.
 #
-# WITH_EMBEDDINGS=1 also uploads the cohort embeddings THIS paper used. They are not the
-# same files: the deposited esm2_3b.h5 is 4,616 MB against 5,745 MB on the cluster, i.e. a
-# different protein cut. Replacing them is the honest thing to do before publishing --
-# it is ~31 GB, which is why it is a switch rather than the default.
-if [ -n "${WITH_EMBEDDINGS:-}" ]; then
-    build_tar embeddings_cohort2k.tar "$PROC/sprot_pre2024"          embeddings_cohort2k
-fi
+# WITH_EMBEDDINGS=1 replaces the .h5 files with the cohort this paper used. They are not
+# the same files -- the deposited esm2_3b.h5 is 4,616 MB against 5,745 MB on the cluster,
+# a different protein cut -- so publishing without replacing them would ship embeddings
+# that are not the ones behind the numbers. They go up under their EXISTING names, so each
+# one overwrites its predecessor in place: the record keeps its 15-file shape instead of
+# growing a parallel tar, and no reader ends up with two versions of esm1b.h5.
 build_tar pair_tables_splits.tar      "$PROC"                        sprot_pre2024_e1
 build_tar identical_sequence_mask.tar "$DSS"                         ridge_identical
 [ -d "$DSS/pair_table_counts" ] && build_tar pair_table_counts.tar   "$DSS" pair_table_counts
@@ -103,24 +102,37 @@ done
 # 3. Upload. One PUT per file; Zenodo has no resume, so a failed file is retried
 #    whole, and an already-uploaded file of the same size is skipped.
 # ---------------------------------------------------------------------------
+if [ -n "${WITH_EMBEDDINGS:-}" ]; then
+    echo "staging the cohort embeddings for in-place replacement"
+    for h5 in "$PROC/sprot_pre2024/embeddings_cohort2k"/*.h5; do
+        ln -sfn "$h5" "$STAGE/$(basename "$h5")"
+    done
+fi
+
 UPLOADED="$(api "$API/deposit/depositions/$DEPOSIT_ID/files" | python3 -c 'import sys,json; print(" ".join(f["filename"] for f in json.load(sys.stdin)))' || echo "")"
 echo "already in the draft: ${UPLOADED:-nothing}"
 
-for f in "$STAGE"/*.tar; do
+shopt -s nullglob
+for f in "$STAGE"/*.tar "$STAGE"/*.h5; do
     name="$(basename "$f")"
-    case " $UPLOADED " in *" $name "*) echo "skip $name (already uploaded)"; continue;; esac
+    # An inherited file of the same name is the one we are replacing, so "already there"
+    # is not a reason to skip: only skip what THIS deposit already received, tracked in
+    # a marker file, so an interrupted run resumes without re-sending 5 GB.
+    if [ -f "$STAGE/.done_$name" ]; then echo "skip $name (uploaded by an earlier run)"; continue; fi
     size="$(stat -c%s "$f")"
     echo "uploading $name ($(numfmt --to=iec "$size"))"
     for attempt in 1 2 3; do
         if curl -sS -H @"$AUTH_HEADER" --retry 3 --retry-delay 30 \
                 -o /dev/null -w '  HTTP %{http_code} in %{time_total}s (%{speed_upload} B/s)\n' \
                 -X PUT --upload-file "$f" "$BUCKET/$name"; then
+            touch "$STAGE/.done_$name"
             break
         fi
         echo "  attempt $attempt failed; retrying"
         sleep 60
     done
 done
+shopt -u nullglob
 
 echo
 echo "draft $DEPOSIT_ID now holds:"
