@@ -59,7 +59,8 @@ DEP="$(api "$API/deposit/depositions/$DEPOSIT_ID")"
 BUCKET="$(printf '%s' "$DEP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["links"]["bucket"])')"
 DOI="$(printf '%s' "$DEP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["metadata"].get("prereserve_doi",{}).get("doi") or d.get("doi") or "not reserved")')"
 echo "bucket: $BUCKET"
-echo "RESERVED DOI: $DOI      <- this is what the manuscript should cite"
+echo "reserved version DOI: $DOI"
+echo "the manuscript cites the CONCEPT DOI (10.5281/zenodo.17469267), which resolves here once published"
 
 # ---------------------------------------------------------------------------
 # 2. What goes in. Archives are built once into $STAGE and reused, so a re-run
@@ -88,14 +89,31 @@ build_tar pair_tables_splits.tar      "$PROC"                        sprot_pre20
 build_tar identical_sequence_mask.tar "$DSS"                         ridge_identical
 [ -d "$DSS/pair_table_counts" ] && build_tar pair_table_counts.tar   "$DSS" pair_table_counts
 
-# The probe weights and their metrics: small, and the reason to deposit at all -- a
-# reader can score a new pair set without a GPU. Only present once the grid has finished.
+# The probe weights and their metrics: small, and a reason to deposit at all -- a reader
+# can score a new pair set without a GPU.
+#
+# "The directory exists" is NOT the test for whether they are ready. A grid in progress
+# has a models/ directory from its first cell, and tarring it gave
+# "tar: ... file changed as we read it" while Slurm was writing into it -- which would
+# have deposited a partial grid that looks complete. The test is the metrics file count:
+# 45 cells x 2 read-outs = 90 per dataset. Set EXPECT_METRICS=0 to override.
+EXPECT_METRICS="${EXPECT_METRICS:-90}"
 for d in full100_p10 pca100_p10; do
-    if [ -d "$HOME/plm_choice/models/$d" ]; then
-        build_tar "probes_$d.tar" "$HOME/plm_choice/models" "$d"
-    else
-        echo "  SKIP probes_$d.tar -- $HOME/plm_choice/models/$d does not exist yet"
+    dir="$HOME/plm_choice/models/$d"
+    if [ ! -d "$dir" ]; then
+        echo "  SKIP probes_$d.tar -- $dir does not exist yet"
+        continue
     fi
+    have="$(find "$dir" -name '*_metrics.txt' | wc -l)"
+    if [ "$have" -lt "$EXPECT_METRICS" ]; then
+        echo "  SKIP probes_$d.tar -- $have/$EXPECT_METRICS metrics files; the grid is still running"
+        continue
+    fi
+    if squeue -u "$USER" -h -o '%j' | grep -q probe-grid; then
+        echo "  SKIP probes_$d.tar -- probe-grid jobs are still queued or running"
+        continue
+    fi
+    build_tar "probes_$d.tar" "$HOME/plm_choice/models" "$d"
 done
 
 # ---------------------------------------------------------------------------
