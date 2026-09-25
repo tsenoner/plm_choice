@@ -130,6 +130,7 @@ fi
 UPLOADED="$(api "$API/deposit/depositions/$DEPOSIT_ID/files" | python3 -c 'import sys,json; print(" ".join(f["filename"] for f in json.load(sys.stdin)))' || echo "")"
 echo "already in the draft: ${UPLOADED:-nothing}"
 
+FAILED=""
 shopt -s nullglob
 for f in "$STAGE"/*.tar "$STAGE"/*.h5; do
     name="$(basename "$f")"
@@ -139,21 +140,72 @@ for f in "$STAGE"/*.tar "$STAGE"/*.h5; do
     if [ -f "$STAGE/.done_$name" ]; then echo "skip $name (uploaded by an earlier run)"; continue; fi
     size="$(stat -Lc%s "$f")"   # -L: the embeddings are staged as symlinks, so follow them
     echo "uploading $name ($(numfmt --to=iec "$size"))"
+    ok=0
     for attempt in 1 2 3; do
-        if curl -sS -H @"$AUTH_HEADER" --retry 3 --retry-delay 30 \
-                -o /dev/null -w '  HTTP %{http_code} in %{time_total}s (%{speed_upload} B/s)\n' \
+        # --fail matters: without it curl exits 0 on an HTTP 401/413, and the .done
+        # marker below would then skip a file that was never stored -- permanently,
+        # because a resume trusts the marker.
+        if curl -sS --fail -H @"$AUTH_HEADER" --retry 3 --retry-delay 30 \
+                -o "$STAGE/.resp_$name" \
+                -w '  HTTP %{http_code} in %{time_total}s (%{speed_upload} B/s)\n' \
                 -X PUT --upload-file "$f" "$BUCKET/$name"; then
             touch "$STAGE/.done_$name"
+            rm -f "$STAGE/.resp_$name"
+            ok=1
             break
         fi
         echo "  attempt $attempt failed; retrying"
         sleep 60
     done
+    # Giving up quietly is how a superseded file stays in the draft and gets published.
+    if [ "$ok" -eq 0 ]; then
+        echo "  GAVE UP on $name after 3 attempts"
+        FAILED="$FAILED $name"
+    fi
 done
 shopt -u nullglob
 
 echo
 echo "draft $DEPOSIT_ID now holds:"
-api "$API/deposit/depositions/$DEPOSIT_ID/files" | python3 -c 'import sys,json;[print(f"  {x[\"filename\"]:34} {int(x[\"filesize\"]):>14,} bytes") for x in json.load(sys.stdin)]'
+LISTING="$STAGE/.listing.json"
+api "$API/deposit/depositions/$DEPOSIT_ID/files" > "$LISTING"
+
+# Compare what the draft stores against what we staged. A new-version draft inherits the
+# previous version's files, so a name being present proves nothing: an upload that never
+# landed leaves the OLD file sitting there under the right name, and publishing would
+# ship the superseded protein cut. Only the byte count tells the two apart.
+python3 - "$LISTING" "$STAGE" <<'PYEOF'
+import json, os, sys
+
+listing, stage = sys.argv[1], sys.argv[2]
+files = sorted(json.load(open(listing)), key=lambda x: x["filename"])
+stale = []
+for x in files:
+    name, size = x["filename"], int(x["filesize"])
+    local = os.path.join(stage, name)
+    mark = ""
+    if os.path.exists(local):
+        want = os.stat(local).st_size          # follows the symlink
+        if want != size:
+            mark = "  <-- STALE: staged file is %s bytes" % format(want, ",")
+            stale.append(name)
+    print("  %-34s %14s bytes%s" % (name, format(size, ","), mark))
+print()
+print("  %d files, %.1f GB" % (len(files), sum(int(x["filesize"]) for x in files) / 1e9))
+if stale:
+    print()
+    print("REFUSING to call this complete: %d file(s) in the draft do not match what" % len(stale))
+    print("was staged -- %s" % ", ".join(stale))
+    print("Those are inherited copies from the previous version. Re-run to replace them.")
+    sys.exit(1)
+PYEOF
+listing_rc=$?
+rm -f "$LISTING"
+
 echo
+if [ -n "$FAILED" ] || [ "$listing_rc" -ne 0 ]; then
+    [ -n "$FAILED" ] && echo "FAILED to upload:$FAILED"
+    echo "Do NOT publish. Re-run this job -- finished files are skipped via their .done markers."
+    exit 1
+fi
 echo "NOT published. Review at https://zenodo.org/deposit/$DEPOSIT_ID and publish there."
