@@ -96,9 +96,13 @@ build_tar identical_sequence_mask.tar "$DSS"                         ridge_ident
 # has a models/ directory from its first cell, and tarring it gave
 # "tar: ... file changed as we read it" while Slurm was writing into it -- which would
 # have deposited a partial grid that looks complete. The test is the metrics file count:
-# 45 cells x 2 read-outs = 90 per dataset. Set EXPECT_METRICS=0 to override.
+# 2 read-outs x 3 targets x 15 arms = 90 cells, one metrics file each. (The array has 45
+# tasks, because each task runs both read-outs for its cell.) Set EXPECT_METRICS=0 to override.
 EXPECT_METRICS="${EXPECT_METRICS:-90}"
-for d in full100_p10 pca100_p10; do
+# pca_cohort, not pca100_p10: that grid was discarded on 2026-09-24 for having been trained
+# off the shared cohort, and its replacement is cut to the cohort under the new name. A name
+# that matches nothing is skipped silently below, so this list has to track the rename.
+for d in full100_p10 pca_cohort; do
     dir="$HOME/plm_choice/models/$d"
     if [ ! -d "$dir" ]; then
         echo "  SKIP probes_$d.tar -- $dir does not exist yet"
