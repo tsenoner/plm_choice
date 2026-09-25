@@ -24,11 +24,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-
-
-def arm_keys(path: Path) -> set[str]:
-    with h5py.File(path, "r") as h:
-        return set(h.keys())
+from _cohort import COHORT_SIZE, compute_cohort
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,26 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--native", required=True, type=Path, help="native embeddings_cohort2k dir")
     ap.add_argument("--pca", required=True, type=Path, help="PCA embeddings dir")
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--expect", type=int, default=526871, help="cohort size the freeze defines")
+    ap.add_argument("--expect", type=int, default=COHORT_SIZE, help="cohort the freeze defines")
     args = ap.parse_args(argv)
 
-    native = sorted(args.native.glob("*.h5"))
-    if not native:
-        raise SystemExit(f"no native arms in {args.native}")
-    # The cohort is what EVERY native arm holds -- computed here rather than assumed, so a
+    # The cohort is what EVERY native arm holds -- computed rather than assumed, so a
     # changed deposit cannot silently move it.
-    cohort: set[str] | None = None
-    for p in native:
-        k = arm_keys(p)
-        cohort = k if cohort is None else (cohort & k)
-        print(f"  {p.name:22} {len(k):>8,}  running intersection {len(cohort):>8,}")
-    assert cohort is not None
-    print(f"cohort = {len(cohort):,} proteins over {len(native)} native arms")
-    if len(cohort) != args.expect:
-        raise SystemExit(
-            f"cohort is {len(cohort):,}, expected {args.expect:,}. Refusing to cut against a "
-            "cohort that does not match the freeze -- fix the inputs, not this number."
-        )
+    cohort = compute_cohort(args.native, expect=args.expect)
 
     args.out.mkdir(parents=True, exist_ok=True)
     order = sorted(cohort)
