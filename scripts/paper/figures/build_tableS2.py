@@ -35,18 +35,14 @@ def _need(var: str) -> str:
 ARTEFACTS = _need("PAPER_ARTEFACTS")
 MANUSCRIPT = _need("MANUSCRIPT_DIR")
 
-METRICS = Path(
-    ARTEFACTS,
-    "probe_e1_2026-09-18/probe_metrics.csv"
-)
+# Both overridable, because the grid this table reports changed protocol on 2026-10-02
+# (10% of pairs / patience 5 -> 100% / patience 10) and the old values stay reproducible.
+METRICS = Path(os.environ.get("PROBE_METRICS") or Path(ARTEFACTS, "probe_e1_2026-09-18/probe_metrics.csv"))
 SUPP = Path(
     MANUSCRIPT,
     "sections/90.supplementary.md"
 )
-OUT = Path(
-    ARTEFACTS,
-    "final_figures_2026-09-21/tableS2.md"
-)
+OUT = Path(os.environ.get("TABLE_OUT") or Path(ARTEFACTS, "final_figures_2026-09-21/tableS2.md"))
 # The previously GENERATED table. The manuscript diff below reads 90.supplementary.md,
 # which is being hand-edited right now, so it is a moving target; this file is the
 # stable reference for "what did the metrics refresh actually move".
@@ -55,7 +51,7 @@ PREV = Path(
     "final_figures_2026-09-20/tableS2.md"
 )
 
-DATASET = "sprot_pre2024_e1_sub10"
+DATASET = os.environ.get("PROBE_DATASET", "sprot_pre2024_e1_sub10")
 
 # Display label -> arm key in probe_metrics.csv. Order is the table's row order.
 ROWS: list[tuple[str, str]] = [
