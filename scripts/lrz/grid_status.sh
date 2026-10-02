@@ -14,10 +14,21 @@ set -uo pipefail
 JOB="${1:-}"
 P="$HOME/plm_choice"
 
-# Prefer a queued array; fall back to the most recent one from the last two weeks.
+# Prefer a queued array. With nothing queued, pick the most recent FULL grid rather than
+# the newest job id: a one-cell repair submission is often newer than the grid it repairs,
+# and picking it reports the wrong dataset at 90/90 as though the grid were the subject.
+# "Full" means the most array tasks; ties go to the newer job.
+RECENT="$(sacct -u "$USER" -n -X --name=probe-grid -S now-21days -o JobID --parsable2 2>/dev/null \
+            | sed 's/_.*//;s/ //g' | grep -E '^[0-9]+$' | sort -un)"
 [ -z "$JOB" ] && JOB="$(squeue -u "$USER" -h -n probe-grid -o '%A' 2>/dev/null | sort -u | head -1)"
-[ -z "$JOB" ] && JOB="$(sacct -u "$USER" -n -X --name=probe-grid -S now-14days -o JobID 2>/dev/null \
-                         | sed 's/_.*//;s/ //g' | grep -E '^[0-9]+$' | sort -un | tail -1)"
+if [ -z "$JOB" ]; then
+    best=""; best_n=0
+    for j in $RECENT; do
+        n="$(sacct -j "$j" -n -X -o JobID --parsable2 2>/dev/null | grep -c '_')"
+        if [ "$n" -ge "$best_n" ]; then best_n="$n"; best="$j"; fi
+    done
+    JOB="$best"
+fi
 if [ -z "$JOB" ]; then echo "no probe-grid job found"; exit 1; fi
 
 # The dataset the job was launched with, taken from its own log rather than assumed.
@@ -72,6 +83,7 @@ pct=$(( have * 100 / 90 ))
 filled=$(( pct / 5 ))
 bar="$(printf '%*s' "$filled" '' | tr ' ' '#')$(printf '%*s' $((20 - filled)) '')"
 
+others="$(printf '%s\n' $RECENT | grep -v "^${JOB}$" | tail -4 | tr '\n' ' ')"
 printf '\nprobe-grid %s   dataset %s\n\n' "$JOB" "$DATASET"
 printf '  metrics   %2d/90  [%s] %d%%\n' "$have" "$bar" "$pct"
 printf '  tasks     running %-3s pending %-3s\n' "$run" "$pend"
@@ -89,5 +101,6 @@ fi
 if [ "$have" -ge 90 ]; then
     printf '\n  GRID COMPLETE -- collect metrics in a Slurm job, then rebuild the figures.\n'
 fi
+[ -n "$others" ] && printf '\n  newest other arrays: %s(pass one as an argument)\n' "$others"
 echo
 REMOTE_EOF
