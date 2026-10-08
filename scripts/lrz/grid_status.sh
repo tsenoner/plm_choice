@@ -13,6 +13,7 @@ ssh "${LRZ_HOST:-ai}" bash -s -- "${1:-}" <<'REMOTE_EOF'
 set -uo pipefail
 JOB="${1:-}"
 P="$HOME/plm_choice"
+DSS_PROC=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2/plm_choice_data/data/processed
 
 # Prefer a queued array. With nothing queued, pick the most recent FULL grid rather than
 # the newest job id: a one-cell repair submission is often newer than the grid it repairs,
@@ -42,6 +43,22 @@ DATASET="${DATASET:-unknown}"
 
 have=0
 [ -d "$P/models/$DATASET" ] && have="$(find "$P/models/$DATASET" -name '*_metrics.txt' 2>/dev/null | wc -l)"
+
+# The grid's size is 2 read-outs x 3 targets x (however many arms the dataset has), so it is
+# NOT always 90: the random-init control has 11 arms and completes at 66. Count the arms in
+# the dataset rather than assuming, or a finished grid reports as 73% done.
+WANT=90
+for base in "$DSS_PROC/$DATASET" "$P/models/$DATASET"; do
+    if [ -d "$base/embeddings" ]; then
+        a="$(find -L "$base/embeddings" -maxdepth 1 -name '*.h5' 2>/dev/null | wc -l)"
+        [ "$a" -gt 0 ] && WANT=$((a * 3 * 2)) && break
+    fi
+done
+# Fall back to the model tree: arms are the leaf dirs under one read-out/target pair.
+if [ "$WANT" -eq 90 ] && [ -d "$P/models/$DATASET/fnn/fident" ]; then
+    a="$(find "$P/models/$DATASET/fnn/fident" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    [ "$a" -gt 0 ] && WANT=$((a * 3 * 2))
+fi
 run="$(squeue -j "$JOB" -h -t RUNNING -r 2>/dev/null | wc -l)"
 pend="$(squeue -j "$JOB" -h -t PENDING -r 2>/dev/null | wc -l)"
 # Only the head of each log: the cohort filter runs before training, and a training log
@@ -79,13 +96,13 @@ for idx in $(sacct -j "$JOB" -n -X -o JobID,State --parsable2 2>/dev/null \
 done
 bad="${bad#,}"
 
-pct=$(( have * 100 / 90 ))
+pct=$(( have * 100 / WANT ))
 filled=$(( pct / 5 ))
 bar="$(printf '%*s' "$filled" '' | tr ' ' '#')$(printf '%*s' $((20 - filled)) '')"
 
 others="$(printf '%s\n' $RECENT | grep -v "^${JOB}$" | tail -4 | tr '\n' ' ')"
 printf '\nprobe-grid %s   dataset %s\n\n' "$JOB" "$DATASET"
-printf '  metrics   %2d/90  [%s] %d%%\n' "$have" "$bar" "$pct"
+printf '  metrics   %2d/%d  [%s] %d%%\n' "$have" "$WANT" "$bar" "$pct"
 printf '  tasks     running %-3s pending %-3s\n' "$run" "$pend"
 if [ "$warn" -eq 0 ]; then
     printf '  cohort    0 warnings  OK\n'
@@ -98,7 +115,7 @@ if [ -n "$bad" ]; then
 else
     printf '  resubmit  nothing\n'
 fi
-if [ "$have" -ge 90 ]; then
+if [ "$have" -ge "$WANT" ]; then
     printf '\n  GRID COMPLETE -- collect metrics in a Slurm job, then rebuild the figures.\n'
 fi
 [ -n "$others" ] && printf '\n  newest other arrays: %s(pass one as an argument)\n' "$others"
