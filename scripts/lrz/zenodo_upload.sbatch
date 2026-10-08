@@ -67,11 +67,13 @@ echo "the manuscript cites the CONCEPT DOI (10.5281/zenodo.17469267), which reso
 #    after a network failure does not rebuild 31 GB of tar.
 # ---------------------------------------------------------------------------
 mkdir -p "$STAGE"
-build_tar () {   # build_tar <name> <parent-dir> <child>
-    local name="$1" parent="$2" child="$3"
+build_tar () {   # build_tar <name> <parent-dir> <child> [exclude ...]
+    local name="$1" parent="$2" child="$3"; shift 3
     if [ -s "$STAGE/$name" ]; then echo "  reuse $name"; return; fi
-    echo "  building $name"
-    tar -C "$parent" -cf "$STAGE/$name.part" "$child"
+    local ex=()
+    for e in "$@"; do ex+=(--exclude="$e"); done
+    echo "  building $name${*:+ (excluding: $*)}"
+    tar -C "$parent" "${ex[@]}" -cf "$STAGE/$name.part" "$child"
     mv "$STAGE/$name.part" "$STAGE/$name"
 }
 
@@ -126,7 +128,12 @@ for d in full100_p10 pca_cohort randinit_full100; do
         echo "  SKIP probes_$d.tar -- probe-grid jobs are still queued or running"
         continue
     fi
-    build_tar "probes_$d.tar" "$HOME/plm_choice/models" "$d"
+    # Exclude the offline wandb runs. They are 83.8% of this tree -- 16.34 GB of 19.50 GB for
+    # full100_p10, against 0.08 GB of actual checkpoints -- and they are training telemetry,
+    # not something a reader needs to score a new pair set. With them in, the three tars came
+    # to 49 GB on top of a 36 GB draft and Zenodo rejected each one instantly with HTTP 400
+    # (a size rejection, not a transfer failure: 0.3 s round trip).
+    build_tar "probes_$d.tar" "$HOME/plm_choice/models" "$d" "wandb" "*.wandb" "last.ckpt"
 done
 
 # ---------------------------------------------------------------------------
