@@ -98,19 +98,28 @@ build_tar identical_sequence_mask.tar "$DSS"                         ridge_ident
 # have deposited a partial grid that looks complete. The test is the metrics file count:
 # 2 read-outs x 3 targets x 15 arms = 90 cells, one metrics file each. (The array has 45
 # tasks, because each task runs both read-outs for its cell.) Set EXPECT_METRICS=0 to override.
-EXPECT_METRICS="${EXPECT_METRICS:-90}"
 # pca_cohort, not pca100_p10: that grid was discarded on 2026-09-24 for having been trained
 # off the shared cohort, and its replacement is cut to the cohort under the new name. A name
 # that matches nothing is skipped silently below, so this list has to track the rename.
-for d in full100_p10 pca_cohort; do
+# randinit_full100 is the untrained control at the same protocol; the paper reports it, so it
+# is deposited with the other two.
+for d in full100_p10 pca_cohort randinit_full100; do
     dir="$HOME/plm_choice/models/$d"
     if [ ! -d "$dir" ]; then
         echo "  SKIP probes_$d.tar -- $dir does not exist yet"
         continue
     fi
+    # A grid's size is 2 read-outs x 3 targets x its OWN arm count -- 90 for the 15-arm grids,
+    # 66 for the 11-arm control. A fixed 90 would have held the finished control back forever.
+    want="${EXPECT_METRICS:-}"
+    if [ -z "$want" ]; then
+        arms="$(find "$dir/fnn/fident" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+        want=$(( arms * 3 * 2 ))
+        [ "$want" -eq 0 ] && want=90
+    fi
     have="$(find "$dir" -name '*_metrics.txt' | wc -l)"
-    if [ "$have" -lt "$EXPECT_METRICS" ]; then
-        echo "  SKIP probes_$d.tar -- $have/$EXPECT_METRICS metrics files; the grid is still running"
+    if [ "$have" -lt "$want" ]; then
+        echo "  SKIP probes_$d.tar -- $have/$want metrics files; the grid is still running"
         continue
     fi
     if squeue -u "$USER" -h -o '%j' | grep -q probe-grid; then
