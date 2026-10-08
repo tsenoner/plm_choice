@@ -88,7 +88,14 @@ NOTE2
         ssh "$REMOTE" "mkdir -p '$d/$(dirname "$p")'"
         # -a preserves times so a re-run skips what already landed; --partial keeps a half
         # file so an interrupted 28 GB transfer resumes instead of restarting.
+        # Exclusions, measured rather than assumed:
+        #   wandb/     81.3% of local models/ (13.02 GB of 16.01) is offline training telemetry,
+        #              against 0.30 GB of actual checkpoints. Same finding as the Zenodo tars.
+        #   tmp_*/     2.36 GB of MMseqs/Foldseek scratch databases under data_split_*. The
+        #              2026-07-29 reclaim already deleted 38.6 GB of exactly this class.
         rsync -a --partial --human-readable --info=progress2 \
+              --exclude='wandb/' --exclude='*.wandb' --exclude='last.ckpt' \
+              --exclude='tmp_clustering/' --exclude='tmp_*/' \
               "$SRC/$p/" "$REMOTE:$d/$p/" || echo "  rsync returned $? for $p"
     done
     echo
@@ -102,7 +109,10 @@ NOTE2
         d="${e%%|*}"; p="${e#*|}"
         [ -e "$SRC/$p" ] || continue
         echo "=== $p  ($(basename "$d")) ==="
-        ( cd "$SRC/$p" && find . -type f -exec md5 -q {} \; -print \
+        ( cd "$SRC/$p" && find . -type f \
+            ! -path '*/wandb/*' ! -name '*.wandb' ! -name 'last.ckpt' \
+            ! -path '*/tmp_clustering/*' ! -path '*/tmp_*/*' \
+            -exec md5 -q {} \; -print \
             | paste - - | awk '{print $1"  "$2}' | sort -k2 ) > "/tmp/.loc_$$"
         ssh "$REMOTE" "cd '$d/$p' && find . -type f -exec md5sum {} \; | sort -k2" \
             | awk '{print $1"  "$2}' | sort -k2 > "/tmp/.rem_$$"
