@@ -18,17 +18,29 @@ ARCHIVE="$DSS/plm_choice_archive_2026-10-08"
 UNKNOWN="$DSS/unknown_unknown"
 SRC="${SRC_ROOT:-$HOME/Documents/projects/plm_choice}"
 
-# Each entry is "<destination root>|<path relative to the repo root>". Two destinations,
-# because these are two projects: the UniRef snapshots left plm_choice and belong to the
-# "unknown unknown" manuscript Tobias resumes in November, so they must not be filed under
-# a plm_choice archive that a later cleanup would read as this paper's history.
+# Each entry is "<destination root>|<path relative to the repo root>". $UNKNOWN is kept as a
+# destination because the "unknown unknown" manuscript may yet need a tree of its own, but
+# nothing is filed there now: the UniRef snapshots it was created for are being deleted
+# rather than archived.
 # Whole directories, because a half-copied tree is worse than an untouched one.
 ENTRIES=(
-    "$UNKNOWN|data/raw/2024_new"           # 40.6 GB -- uniref50_{2024_01,2025_01}.db, last copy
-    "$ARCHIVE|models"                      # 15.0 GB -- original submission probes, not reproducible
-    "$ARCHIVE|data/backup"                 #  5.8 GB -- pre-parquet CSVs, zero code references
-    "$ARCHIVE|data/interm/sprot_pre2024"   # 13 GB total (7.1 GB of it local-only); copied whole
-                                           #        so the archive stands alone
+    # What is left after the 2026-10-08 investigation. Everything else that was on this list
+    # turned out not to need archiving, and the reason is recorded next to each removal:
+    #
+    #   data/raw/2024_new (40.6 GB)  DROPPED -- UniProt still serves release-2024_01 and
+    #       2025_01 (checked, HTTP 200), and Tobias will re-download the latest anyway.
+    #   data/backup (5.8 GB)         DROPPED -- 23 CSVs, pre-parquet era, zero code references.
+    #   foldcomp/afdb_swissprot_v4   DROPPED by the --exclude below -- public AlphaFold DB file.
+    #   wandb/, tmp_*/               DROPPED by --exclude -- telemetry and scratch.
+    #   sets/{train,val,test}.parquet  ALREADY ON LRZ, md5-proven, under the name
+    #       sprot_pre2024_e1/sets/. The earlier audit compared exact paths and missed this.
+    #
+    # models/ stays because its checkpoints are NOT reproducible: training sets no
+    # deterministic=True, and a sampled checkpoint differs from the nearest LRZ grid
+    # (epoch=47/step=224064 against epoch=46/step=121401, different md5). Minus wandb it is
+    # ~3 GB, not 15.
+    "$ARCHIVE|models"
+    "$ARCHIVE|data/interm/sprot_pre2024"
 )
 
 mode="${1:---dry}"
@@ -96,6 +108,7 @@ NOTE2
         rsync -a --partial --human-readable --info=progress2 \
               --exclude='wandb/' --exclude='*.wandb' --exclude='last.ckpt' \
               --exclude='tmp_clustering/' --exclude='tmp_*/' \
+              --exclude='foldcomp/afdb_swissprot_v4' \
               "$SRC/$p/" "$REMOTE:$d/$p/" || echo "  rsync returned $? for $p"
     done
     echo
@@ -112,6 +125,7 @@ NOTE2
         ( cd "$SRC/$p" && find . -type f \
             ! -path '*/wandb/*' ! -name '*.wandb' ! -name 'last.ckpt' \
             ! -path '*/tmp_clustering/*' ! -path '*/tmp_*/*' \
+            ! -name 'afdb_swissprot_v4' \
             -exec md5 -q {} \; -print \
             | paste - - | awk '{print $1"  "$2}' | sort -k2 ) > "/tmp/.loc_$$"
         ssh "$REMOTE" "cd '$d/$p' && find . -type f -exec md5sum {} \; | sort -k2" \
