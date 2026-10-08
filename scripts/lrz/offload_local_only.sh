@@ -120,7 +120,9 @@ NOTE2
     rc=0
     for e in "${ENTRIES[@]}"; do
         d="${e%%|*}"; p="${e#*|}"
-        [ -e "$SRC/$p" ] || continue
+        # A path that is not there cannot be verified. Skipping it used to print "All paths
+        # verified" over a check that never ran.
+        if [ ! -e "$SRC/$p" ]; then echo "=== $p: MISSING LOCALLY -- nothing to verify"; rc=1; continue; fi
         echo "=== $p  ($(basename "$d")) ==="
         ( cd "$SRC/$p" && find . -type f \
             ! -path '*/wandb/*' ! -name '*.wandb' ! -name 'last.ckpt' \
@@ -128,9 +130,15 @@ NOTE2
             ! -name 'afdb_swissprot_v4' \
             -exec md5 -q {} \; -print \
             | paste - - | awk '{print $1"  "$2}' | sort -k2 ) > "/tmp/.loc_$$"
-        ssh "$REMOTE" "cd '$d/$p' && find . -type f -exec md5sum {} \; | sort -k2" \
+        ssh "$REMOTE" "cd '$d/$p' || exit 9; find . -type f -exec md5sum {} \; | sort -k2" \
             | awk '{print $1"  "$2}' | sort -k2 > "/tmp/.rem_$$"
-        if diff -q "/tmp/.loc_$$" "/tmp/.rem_$$" >/dev/null; then
+        n=$(grep -c . "/tmp/.loc_$$")
+        # Zero files on both sides compares equal. That is not a verification: on 2026-10-08 a
+        # check of exactly this shape reported "VERIFY OK: 0 files identical" one step before
+        # a tree it had never copied would have been deleted.
+        if [ "$n" -eq 0 ]; then
+            echo "  ** NOTHING CHECKED (0 local files) -- refusing"; rc=1
+        elif diff -q "/tmp/.loc_$$" "/tmp/.rem_$$" >/dev/null; then
             echo "  OK  $(wc -l < "/tmp/.loc_$$" | tr -d ' ') files identical"
         else
             echo "  ** MISMATCH -- do not delete $p **"
