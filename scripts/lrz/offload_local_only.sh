@@ -116,6 +116,9 @@ NOTE2
     ;;
 
   --verify)
+    # LC_ALL=C on BOTH sorts: macOS and Linux collate mixed-case names differently (SUMMARY.md
+    # sorts before cache.txt on one, after it on the other), which misaligns a line diff and
+    # reports a mismatch between identical trees.
     echo "md5 both sides, per file. This reads every byte on both ends."
     rc=0
     for e in "${ENTRIES[@]}"; do
@@ -129,9 +132,9 @@ NOTE2
             ! -path '*/tmp_clustering/*' ! -path '*/tmp_*/*' \
             ! -name 'afdb_swissprot_v4' \
             -exec md5 -q {} \; -print \
-            | paste - - | awk '{print $1"  "$2}' | sort -k2 ) > "/tmp/.loc_$$"
-        ssh "$REMOTE" "cd '$d/$p' || exit 9; find . -type f -exec md5sum {} \; | sort -k2" \
-            | awk '{print $1"  "$2}' | sort -k2 > "/tmp/.rem_$$"
+            | paste - - | awk '{print $1"  "$2}' | LC_ALL=C sort -k2 ) > "/tmp/.loc_$$"
+        ssh "$REMOTE" "cd '$d/$p' || exit 9; find . -type f -exec md5sum {} \; | LC_ALL=C sort -k2" \
+            | awk '{print $1"  "$2}' | LC_ALL=C sort -k2 > "/tmp/.rem_$$"
         n=$(grep -c . "/tmp/.loc_$$")
         # Zero files on both sides compares equal. That is not a verification: on 2026-10-08 a
         # check of exactly this shape reported "VERIFY OK: 0 files identical" one step before
