@@ -100,7 +100,7 @@ def main() -> int:
     sp = pd.read_csv(args.sprot_metrics)
     sp = sp[sp["dataset"] == args.sprot_dataset]
 
-    arm_rows, ladder_rows = [], []
+    arm_rows, ladder_rows, agree_rows = [], [], []
     for read_out in ("fnn", "euclidean"):
         for target in TARGETS:
             for subset in SUBSETS:
@@ -124,6 +124,17 @@ def main() -> int:
                                                 "delta_new2024": point[big] - point[small], "ci_lo": lo, "ci_hi": hi,
                                                 "excludes_0": lo > 0 or hi < 0,
                                                 "delta_sprot": ref.get(big, np.nan) - ref.get(small, np.nan)})
+                # Is "the ranking does not carry over" itself resolved? Rank agreement with Swiss-Prot per
+                # replicate gives it a CI; and how many arms the best one cannot be told apart from.
+                common = [a for a in arms if a in ref]
+                per_rep = [stats.spearmanr([boots[a][i] for a in common], [ref[a] for a in common])[0]
+                           for i in range(len(boots[common[0]]))]
+                best = max(arms, key=point.get)
+                tied = sum(1 for a in arms if a != best and ci(boots[best] - boots[a])[0] <= 0)
+                lo, hi = ci(np.asarray(per_rep))
+                agree_rows.append({"read_out": read_out, "target": target, "subset": subset, "n_arms": len(common),
+                                   "rank_agreement": stats.spearmanr([point[a] for a in common], [ref[a] for a in common])[0],
+                                   "ci_lo": lo, "ci_hi": hi, "best": best, "n_tied_with_best": tied})
                 print(f"{read_out:9} {target:10} {subset:4} {len(arms):2} arms  {len(y):5} pairs / {n_prot} proteins",
                       file=sys.stderr)
 
@@ -131,6 +142,7 @@ def main() -> int:
     arms_df, lad_df = pd.DataFrame(arm_rows), pd.DataFrame(ladder_rows)
     arms_df.to_csv(args.out / "new2024_arms.csv", index=False)
     lad_df.to_csv(args.out / "new2024_ladders.csv", index=False)
+    pd.DataFrame(agree_rows).to_csv(args.out / "new2024_rank_agreement.csv", index=False)
 
     # Does the cross-model ranking carry over? Spearman between arms' New2024 and Swiss-Prot scores.
     for (ro, tg, ss), g in arms_df.groupby(["read_out", "target", "subset"]):
@@ -152,29 +164,45 @@ DISPLAY = [("prott5", "ProtT5"), ("prottucker", "ProtTucker"), ("esm1b", "ESM-1b
 
 
 def table_md(arms_df: pd.DataFrame) -> str:
-    """Pandoc multiline table: FNN Spearman rho, Swiss-Prot vs New2024 (protein-level 95% CI), all pairs."""
+    """Pandoc grid table, two-row header: FNN Spearman rho, Swiss-Prot vs New2024 (protein-level 95% CI).
+
+    Best and second best per column are marked as in Table S2 (bold underlined, italic underlined),
+    on point estimates; the caption says how many arms the New2024 best cannot be told apart from.
+    """
     d = arms_df[(arms_df.read_out == "fnn") & (arms_df.subset == "all")].set_index(["target", "arm"])
-    # A cell wider than its column shifts the next column's text, so line() refuses one.
-    w = [12, 10, 17, 10, 17, 10, 17]
-    rule = "  " + "-" * (sum(w) + len(w) - 1)
+    marks = {}
+    for tg in TARGETS:
+        for col in ("sprot", "new2024"):
+            first, second = d.loc[tg][col].sort_values(ascending=False).index[:2]
+            marks[(tg, col, first)], marks[(tg, col, second)] = "best", "second"
 
-    def line(cells):
-        assert all(len(c) <= n for c, n in zip(cells, w, strict=True)), cells
-        return "  " + " ".join(c.ljust(n) for c, n in zip(cells, w, strict=True)).rstrip()
+    def mark(txt: str, kind: str | None) -> str:
+        return {"best": f"**[{txt}]{{.underline}}**", "second": f"*[{txt}]{{.underline}}*"}.get(kind, txt)
 
-    out = [rule,
-           line(["", "PIDE", "PIDE", "TM-score", "TM-score", "HFSP", "HFSP"]),
-           line(["Model", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024"]),
-           "  " + " ".join("-" * n for n in w)]
-    rows = []
+    w = [12] + [22, 35] * len(TARGETS)          # model, then (Swiss-Prot, New2024) per target
+    span = [a + b + 3 for a, b in zip(w[1::2], w[2::2], strict=True)]  # one target header over two columns
+
+    def row(cells: list[str], widths: list[int]) -> str:
+        # A cell wider than its column breaks the grid, so this refuses one.
+        assert all(len(c) <= n for c, n in zip(cells, widths, strict=True)), cells
+        return "| " + " | ".join(c.ljust(n) for c, n in zip(cells, widths, strict=True)) + " |"
+
+    def rule(widths: list[int], ch: str = "-", blank_first: bool = False) -> str:
+        return "+" + "+".join((" " if blank_first and i == 0 else ch) * (n + 2) for i, n in enumerate(widths)) + "+"
+
+    out = [rule([w[0]] + span),
+           row(["", "PIDE", "TM-score", "HFSP"], [w[0]] + span),
+           rule(w, blank_first=True),            # the model cell spans both header rows
+           row(["Model"] + ["Swiss-Prot", "New2024"] * len(TARGETS), w),
+           rule(w, "=")]
     for arm, name in DISPLAY:
         cells = [name]
         for tg in TARGETS:
             r = d.loc[(tg, arm)]
-            cells += [f"{r.sprot:.2f}", f"{r.new2024:.2f} ({r.ci_lo:.2f}--{r.ci_hi:.2f})"]
-        rows.append(line(cells))
-    return "\n".join(out + ["\n\n".join(rows), rule]) + "\n"
-
+            cells += [mark(f"{r.sprot:.2f}", marks.get((tg, "sprot", arm))),
+                      mark(f"{r.new2024:.2f}", marks.get((tg, "new2024", arm))) + f" ({r.ci_lo:.2f}--{r.ci_hi:.2f})"]
+        out += [row(cells, w), rule(w)]
+    return "\n".join(out) + "\n"
 
 if __name__ == "__main__":
     raise SystemExit(main())
