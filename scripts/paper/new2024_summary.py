@@ -154,14 +154,16 @@ DISPLAY = [("prott5", "ProtT5"), ("prottucker", "ProtTucker"), ("esm1b", "ESM-1b
 def table_md(arms_df: pd.DataFrame) -> str:
     """Pandoc multiline table: FNN Spearman rho, Swiss-Prot vs New2024 (protein-level 95% CI), all pairs."""
     d = arms_df[(arms_df.read_out == "fnn") & (arms_df.subset == "all")].set_index(["target", "arm"])
-    w = [12, 9, 17, 9, 17, 9, 17]
+    # A cell wider than its column shifts the next column's text, so line() refuses one.
+    w = [12, 10, 17, 10, 17, 10, 17]
     rule = "  " + "-" * (sum(w) + len(w) - 1)
 
     def line(cells):
+        assert all(len(c) <= n for c, n in zip(cells, w, strict=True)), cells
         return "  " + " ".join(c.ljust(n) for c, n in zip(cells, w, strict=True)).rstrip()
 
     out = [rule,
-           line(["", "PIDE", "", "TM-score", "", "HFSP", ""]),
+           line(["", "PIDE", "PIDE", "TM-score", "TM-score", "HFSP", "HFSP"]),
            line(["Model", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024"]),
            "  " + " ".join("-" * n for n in w)]
     rows = []
