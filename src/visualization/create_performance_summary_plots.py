@@ -202,6 +202,10 @@ def load_results_data(base_dir: Path) -> pd.DataFrame:
 
 
 #: probe_metrics.csv column -> the name this module plots under.
+# Axis labels for the metric columns. A raw distance falls as similarity rises, so its rho is
+# negative; the figure plots the magnitude, and the caption says so.
+Y_LABELS = {"Absolute Spearman": "Spearman ρ", "Pearson R2": "Pearson R²"}
+
 _CSV_METRIC_COLUMNS = {
     "Pearson_r2": "Pearson R2",
     "Pearson_r2_SE": "Pearson R2 SE",
@@ -725,7 +729,7 @@ def generate_metric_plot(
         all_trend_stats.extend(trend_stats)
 
         ax.set_xlabel("pLM, ordered by parameter count", fontsize=PLOT_CONFIG["label_fontsize"])
-        ax.set_ylabel(y_metric, fontsize=PLOT_CONFIG["label_fontsize"])
+        ax.set_ylabel(Y_LABELS.get(y_metric, y_metric), fontsize=PLOT_CONFIG["label_fontsize"])
         ax.set_title(
             PARAMETER_TITLES.get(param, param), fontsize=PLOT_CONFIG["title_fontsize"]
         )

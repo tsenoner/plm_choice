@@ -2,7 +2,7 @@
 """Rebuild Table S2 (tbls:performance) VALUES from the 2026-09-18 probe grid.
 
 Reads probe_metrics.csv, keeps dataset=sprot_pre2024_e1_sub10, native Euclidean +
-FNN, metric = Pearson R2.  Emits the same pandoc grid table the manuscript already
+FNN, metric = |Spearman rho| (Pearson R2 until 2026-10-09; the paper now uses one score).  Emits the same pandoc grid table the manuscript already
 carries, so the only thing that moves is the numbers and the best/second marking.
 
 Best/second are per (target, read-out column), with the random Gaussian control
@@ -92,9 +92,11 @@ def load() -> dict[tuple[str, str, str], float]:
     df = df[df["dataset"] == DATASET]
     out: dict[tuple[str, str, str], float] = {}
     for _, r in df.iterrows():
-        v = r["Pearson_r2"]
+        # A raw distance falls as similarity rises, so its rho is negative: the table reports
+        # the magnitude, as Figure 1 does.
+        v = r["Spearman"]
         if pd.notna(v):
-            out[(r["target"], r["model_type"], r["arm"])] = float(v)
+            out[(r["target"], r["model_type"], r["arm"])] = abs(float(v))
     return out
 
 
