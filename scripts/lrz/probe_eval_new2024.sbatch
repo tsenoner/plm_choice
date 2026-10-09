@@ -41,8 +41,12 @@ unset VIRTUAL_ENV
 
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
 NEW="$DSS/plm_choice_data/data/processed/2024_new_e1"
-SRC_DATASET=sprot_pre2024_e1_sub10
-DST_DATASET=new2024_e1
+# Which trained grid to score, and where its New2024 mirror goes. Overridable because the paper
+# moved protocol on 2026-10-02 (10% of pairs, patience 5 -> 100%, patience 10); the old default
+# stays so the submitted numbers remain reproducible.
+#     SRC_DATASET=full100_p10 DST_DATASET=new2024_full100_p10 sbatch scripts/lrz/probe_eval_new2024.sbatch
+SRC_DATASET="${SRC_DATASET:-sprot_pre2024_e1_sub10}"
+DST_DATASET="${DST_DATASET:-new2024_e1}"
 TEST="$NEW/sets/new2024.parquet"
 
 cd "$HOME/plm_choice"
