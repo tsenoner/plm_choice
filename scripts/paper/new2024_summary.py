@@ -138,8 +138,40 @@ def main() -> int:
         r = stats.spearmanr(g["new2024"], g["sprot"])[0] if len(g) > 2 else np.nan
         print(f"{ro:9} {tg:10} {ss:4} range {g['new2024'].min():.3f}-{g['new2024'].max():.3f}  "
               f"rank agreement with Swiss-Prot rho={r:.2f} (n={len(g)})")
-    print(f"wrote {args.out}/new2024_arms.csv, new2024_ladders.csv")
+    (args.out / "new2024_table.md").write_text(table_md(arms_df))
+    print(f"wrote {args.out}/new2024_arms.csv, new2024_ladders.csv, new2024_table.md")
     return 0
+
+
+# Table S1 order and names, so the supplement's two per-model tables read the same way.
+DISPLAY = [("prott5", "ProtT5"), ("prottucker", "ProtTucker"), ("esm1b", "ESM-1b"), ("clean", "CLEAN"),
+           ("esm2_8m", "ESM-2 8M"), ("esm2_35m", "ESM-2 35M"), ("esm2_150m", "ESM-2 150M"),
+           ("esm2_650m", "ESM-2 650M"), ("esm2_3b", "ESM-2 3B"), ("esm3_open", "ESM-3"),
+           ("esmc_300m", "ESM-C 300M"), ("esmc_600m", "ESM-C 600M"), ("ankh_base", "Ankh base"),
+           ("ankh_large", "Ankh large")]
+
+
+def table_md(arms_df: pd.DataFrame) -> str:
+    """Pandoc multiline table: FNN Spearman rho, Swiss-Prot vs New2024 (protein-level 95% CI), all pairs."""
+    d = arms_df[(arms_df.read_out == "fnn") & (arms_df.subset == "all")].set_index(["target", "arm"])
+    w = [12, 9, 17, 9, 17, 9, 17]
+    rule = "  " + "-" * (sum(w) + len(w) - 1)
+
+    def line(cells):
+        return "  " + " ".join(c.ljust(n) for c, n in zip(cells, w, strict=True)).rstrip()
+
+    out = [rule,
+           line(["", "PIDE", "", "TM-score", "", "HFSP", ""]),
+           line(["Model", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024", "Swiss-Prot", "New2024"]),
+           "  " + " ".join("-" * n for n in w)]
+    rows = []
+    for arm, name in DISPLAY:
+        cells = [name]
+        for tg in TARGETS:
+            r = d.loc[(tg, arm)]
+            cells += [f"{r.sprot:.2f}", f"{r.new2024:.2f} ({r.ci_lo:.2f}--{r.ci_hi:.2f})"]
+        rows.append(line(cells))
+    return "\n".join(out + ["\n\n".join(rows), rule]) + "\n"
 
 
 if __name__ == "__main__":
