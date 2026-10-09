@@ -13,6 +13,7 @@ from scipy import stats
 from shared.embedding_names import is_iid_random_baseline
 from visualization.plm_constants import (
     EMBEDDING_COLOR_MAP,
+    EMBEDDING_DISPLAY_NAMES,
     EMBEDDING_FAMILY_COLOR_MAP,
     EMBEDDING_FAMILY_MAP,
     PLM_SIZES,
@@ -358,6 +359,14 @@ def _add_connecting_lines(ax: plt.Axes, data: pd.DataFrame, y_metric: str):
             )
 
 
+def _model_tick_label(embedding: str) -> str:
+    """'ESM2 650M', 'ESM 1b 650M', 'Ankh Base 450M': model name and size on one line."""
+    key = embedding.lower()
+    name = EMBEDDING_DISPLAY_NAMES.get(key, embedding).replace("\n", " ")
+    size = human_readable_number(PLM_SIZES[key]) if key in PLM_SIZES and PLM_SIZES[key] else ""
+    return name if (not size or size in name) else f"{name} {size}"
+
+
 def _add_trendlines(
     ax: plt.Axes,
     data: pd.DataFrame,
@@ -570,7 +579,7 @@ def _create_embedding_legend(fig: plt.Figure, df: pd.DataFrame) -> plt.legend:
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.4, 0.1),
+        bbox_to_anchor=(0.4, 0.0),
         frameon=False,
         title="pLM Family",
         title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
@@ -610,7 +619,7 @@ def _create_model_type_legend(fig: plt.Figure, model_types: list[str]) -> plt.le
         handles=handles,
         labels=labels,
         loc="upper center",
-        bbox_to_anchor=(0.85, 0.1),
+        bbox_to_anchor=(0.85, 0.0),
         frameon=False,
         title="Model Type",
         title_fontsize=PLOT_CONFIG["legend_title_fontsize"],
@@ -684,6 +693,8 @@ def generate_metric_plot(
         markers=MODEL_MARKER_MAP,
         kind="scatter",
         s=PLOT_CONFIG["marker_size"],
+        edgecolor="#1f2328",
+        linewidth=0.6,
         height=PLOT_CONFIG["plot_height"],
         aspect=PLOT_CONFIG["plot_aspect"],
         facet_kws={"sharey": True, "sharex": False},
@@ -713,7 +724,7 @@ def generate_metric_plot(
             stat["n_models_missing_in_panel"] = len(missing)
         all_trend_stats.extend(trend_stats)
 
-        ax.set_xlabel("pLM Parameter Count", fontsize=PLOT_CONFIG["label_fontsize"])
+        ax.set_xlabel("pLM, ordered by parameter count", fontsize=PLOT_CONFIG["label_fontsize"])
         ax.set_ylabel(y_metric, fontsize=PLOT_CONFIG["label_fontsize"])
         ax.set_title(
             PARAMETER_TITLES.get(param, param), fontsize=PLOT_CONFIG["title_fontsize"]
@@ -750,16 +761,16 @@ def generate_metric_plot(
             va="top",
         )
 
-        # Set custom x-axis labels
-        size_labels = [
-            human_readable_number(PLM_SIZES.get(emb.lower()))
-            if emb.lower() in PLM_SIZES
-            else emb
-            for emb in category_order
-        ]
+        # Name every model on its tick, not just its size. Size-only ticks left two models both
+        # labelled "650M" (ESM-1b and ESM-2 650M), told apart only by green versus orange -- the
+        # exact pair the family palette fails to separate for red-green colour-blind readers
+        # (dE 5.3 under protanopia). Identity must never rest on colour alone.
         ax.set_xlim(-0.5, len(category_order) - 0.5)
         ax.set_xticks(range(len(category_order)))
-        ax.set_xticklabels(size_labels)
+        ax.set_xticklabels(
+            [_model_tick_label(emb) for emb in category_order],
+            rotation=50, ha="right", rotation_mode="anchor", fontsize=PLOT_CONFIG["tick_fontsize"] * 0.8,
+        )
 
     # Create and place custom legends
     _create_embedding_legend(g.figure, df_sorted)
@@ -768,7 +779,7 @@ def generate_metric_plot(
     # Adjust spacing - use subplots_adjust instead of tight_layout for better control
     g.figure.subplots_adjust(
         wspace=PLOT_CONFIG["subplot_spacing"],
-        bottom=0.25,  # Make room for legends
+        bottom=0.36,  # room for the rotated model-name ticks, the axis title and the legends
         top=1,
         left=0.1,
         right=1,

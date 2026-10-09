@@ -1553,7 +1553,9 @@ class EmbeddingComparisonVisualizer:
                 0.1,
                 plm_display_name,
                 fontweight="bold",
-                color=color,
+                # Ink, not the family colour: the filled ridge beside the label already carries
+                # the colour, and yellow text (Ankh) reads at 1.37:1 contrast on white.
+                color="#1f2328",
                 ha="right",
                 va="center",
                 transform=ax.transAxes,
