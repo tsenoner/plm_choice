@@ -20,6 +20,10 @@ Every arm of one target is scored on the SAME replicate, so differences between 
 size ladders) get paired CIs. "score" is Spearman rho oriented so that higher is better:
 rho for the FNN probe, -rho for the Euclidean read-out (a distance).
 
+--exclude drops every pair that involves a listed accession (one per line, '#' comments allowed),
+e.g. proteins whose sequence was public before a model's training data
+(scripts/paper/new2024_uniparc_history.py); the prediction order check runs before the drop.
+
 Outputs: new2024_arms.csv (one row per read-out x target x arm x subset) and
 new2024_ladders.csv (paired differences along each family's size ladder).
 """
@@ -46,12 +50,14 @@ LADDERS = {
 SUBSETS = ("all", "lt95")
 
 
-def load_arms(preds: Path, pairs: pd.DataFrame, read_out: str, target: str, subset: str):
+def load_arms(preds: Path, pairs: pd.DataFrame, read_out: str, target: str, subset: str,
+              exclude: frozenset = frozenset()):
     """{arm: oriented predictions} plus the shared (query, target, y) of that target's pairs."""
     keep = pairs[target].notna().to_numpy()
     sub = pairs[keep].reset_index(drop=True)
     y_all = sub[target].to_numpy(dtype="float32")
     mask = np.ones(len(sub), bool) if subset == "all" else ~(sub["fident"].to_numpy() >= 0.95)
+    mask &= ~(sub["query"].isin(exclude) | sub["target"].isin(exclude)).to_numpy()
     arms = {}
     for npz in sorted(preds.glob(f"{read_out}/{target}/*/evaluation_results/test_new2024_*_predictions_targets.npz")):
         arm = npz.parts[-3]
@@ -94,9 +100,14 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--n-boot", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--exclude", type=Path, help="accessions whose pairs are dropped, one per line")
     args = ap.parse_args()
 
     pairs = pd.read_parquet(args.pairs)
+    exclude = frozenset()
+    if args.exclude:
+        exclude = frozenset(ln.split("#")[0].strip() for ln in args.exclude.read_text().splitlines()) - {""}
+        print(f"excluding {len(exclude)} proteins and every pair they are in", file=sys.stderr)
     sp = pd.read_csv(args.sprot_metrics)
     sp = sp[sp["dataset"] == args.sprot_dataset]
 
@@ -104,7 +115,7 @@ def main() -> int:
     for read_out in ("fnn", "euclidean"):
         for target in TARGETS:
             for subset in SUBSETS:
-                arms, q, t, y = load_arms(args.preds, pairs, read_out, target, subset)
+                arms, q, t, y = load_arms(args.preds, pairs, read_out, target, subset, exclude)
                 if not arms:
                     continue
                 point, boots, n_prot = bootstrap(arms, q, t, y, args.n_boot, args.seed)
