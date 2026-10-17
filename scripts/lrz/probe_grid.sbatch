@@ -10,6 +10,12 @@
 #     DATASET=sprot_pre2024_e1_sub10_randinit EXPECT_ARMS=11 \
 #         sbatch -p lrz-dgx-a100-40x8-mig --qos=mig --gres=gpu:3g.20gb:1 \
 #         --array=0-32%10 scripts/lrz/probe_grid.sbatch
+#     # probe capacity (R2.5) / linear read-out (R1.8) on the final protocol: a DATASET alias
+#     # per variant (scripts/lrz/make_probe_alias.sh), PIDE only = indices 0..EXPECT_ARMS-1
+#     DATASET=full100_p10_h256 EXPECT_ARMS=6 PATIENCE=10 HIDDEN=256 MODELS=fnn \
+#         sbatch --time=2-00:00:00 --mem=128G --array=0-5 scripts/lrz/probe_grid.sbatch
+#     DATASET=full100_p10_lindist EXPECT_ARMS=15 PATIENCE=10 MODELS=linear_distance \
+#         sbatch --time=2-00:00:00 --mem=128G --array=0-14 scripts/lrz/probe_grid.sbatch
 #
 # ---------------------------------------------------------------------------
 # WHAT THIS REPRODUCES. The published protocol, on corrected data: fnn, hidden 64, lr 1e-4,
@@ -61,6 +67,14 @@ PARAMS=(fident alntmscore hfsp)
 # suspiciously early -- three alntmscore cells peaked at epochs 2-4 while their neighbours
 # trained for 20-47, which is the signature of an early plateau rather than a converged fit.
 PATIENCE="${PATIENCE:-5}"
+# Probe-capacity check (R2.5, plan C12): the fnn's first layer is Linear(n -> HIDDEN), 64 in
+# the published protocol. A non-default HIDDEN must run under its own DATASET alias (a dir
+# of symlinks, like full100_p10), because the cell's path is models/$DATASET/$model/... and
+# would otherwise land on -- or resume from -- the hidden-64 cell.
+HIDDEN="${HIDDEN:-64}"
+# Read-outs per cell. linear_distance is a linear model on (a-b)^2, i.e. a learned
+# per-dimension weighting of the squared Euclidean distance (R1.8). Default: the published pair.
+read -r -a MODELS <<< "${MODELS:-fnn euclidean}"
 
 cd "$HOME/plm_choice"
 PY=./.venv/bin/python
@@ -104,7 +118,7 @@ if [ "$DATA" = "$SRC" ]; then
 fi
 
 export WANDB_MODE=offline WANDB_SILENT=true
-echo "task=$IDX param=$PARAM arm=$ARM dataset=$DATASET host=$(hostname)"
+echo "task=$IDX param=$PARAM arm=$ARM dataset=$DATASET models=${MODELS[*]} hidden=$HIDDEN host=$(hostname)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 run_cell () {
@@ -122,6 +136,7 @@ run_cell () {
             --data_dir "$DATA/sets" --output_base_dir "$exp" \
             --num_workers 10 --batch_size 1024 --learning_rate 0.0001 \
             --max_epochs 100 --early_stopping_patience "$PATIENCE" --val_check_interval 1.0 \
+            --hidden_size "$HIDDEN" \
             --seed 42 --wandb_project which-plm ${extra[@]+"${extra[@]}"}
     fi
     # evaluate.py reads hparams back from wandb/*/files/config.yaml, which records the
@@ -158,6 +173,7 @@ batch_size: 1024
 seed: 42
 dataset: $DATASET
 EOF
+    if [ "$model" = fnn ]; then echo "hidden_size: $HIDDEN" >> "$exp/hparams.yaml"; fi
     # evaluate.py catches its own exceptions and exits 0, so success is asserted on the
     # metrics file. That assertion only means anything if the file cannot be a previous
     # run's -- and the documented rerun path ("training already complete, going straight
@@ -171,6 +187,5 @@ EOF
     echo "[$model] done: $(ls "$exp"/evaluation_results/*_metrics.txt)"
 }
 
-run_cell fnn
-run_cell euclidean
-echo "done: $PARAM / $ARM"
+for model in "${MODELS[@]}"; do run_cell "$model"; done
+echo "done: $PARAM / $ARM (models: ${MODELS[*]}, hidden $HIDDEN)"
