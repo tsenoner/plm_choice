@@ -104,15 +104,59 @@ def knn_acc(x: np.ndarray, labels: np.ndarray) -> float:
     return float(cross_val_score(clf, x, labels, cv=5).mean())
 
 
+def plot(allc: pl.DataFrame, metrics: dict, arms: list[str], out: Path, per_stratum: int) -> None:
+    """One figure per colouring, one panel per arm; legends list only the labels present."""
+    n = allc.filter(pl.col("arm") == arms[0]).height
+    for colouring, col, palette in (("superkingdom", "superkingdom", SK_COLOURS), ("cath", "cath_class", CATH_COLOURS)):
+        fig, axes = plt.subplots(1, len(arms), figsize=(6.2 * len(arms), 6.4))
+        for ax, arm in zip(np.atleast_1d(axes), arms, strict=True):
+            d = allc.filter(pl.col("arm") == arm)
+            other = d.filter(~pl.col(col).is_in(list(palette)) | pl.col(col).is_null())
+            ax.scatter(other["x"], other["y"], s=0.4, c="#d9d9d9", alpha=0.4, rasterized=True, linewidths=0)
+            dd = d.filter(pl.col(col).is_in(list(palette))).sample(fraction=1.0, shuffle=True, seed=1)
+            ax.scatter(dd["x"], dd["y"], s=0.6, c=[palette[v] for v in dd[col]], alpha=0.6, rasterized=True,
+                       linewidths=0)
+            m = metrics["arms"][arm]
+            key = "superkingdom" if colouring == "superkingdom" else "cath"
+            what = "superkingdom" if colouring == "superkingdom" else "CATH-class"
+            ax.set_title(f"{DISPLAY.get(arm, arm)}\n10-NN {what} acc. {m[f'knn10_{key}_full']:.2f} full / "
+                         f"{m[f'knn10_{key}_2d']:.2f} 2-D;  distance ρ(full, 2-D) {m['distance_rho_full_vs_2d']:.2f}",
+                         fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        present = set(allc[col].drop_nulls().to_list())
+        handles = [plt.Line2D([], [], marker="o", ls="", color=c, label=k, markersize=7)
+                   for k, c in palette.items() if k in present]
+        if colouring == "cath":
+            handles.append(plt.Line2D([], [], marker="o", ls="", color="#d9d9d9", label="none / multiple",
+                                      markersize=7))
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10)
+        fig.suptitle(f"UMAP of {n:,} cohort proteins (≤{per_stratum:,} per superkingdom), "
+                     f"coloured by {'superkingdom' if colouring == 'superkingdom' else 'CATH class (Gene3D)'}",
+                     fontsize=12, weight="bold")
+        fig.tight_layout(rect=(0, 0.05, 1, 0.95))
+        fig.savefig(out / f"umap_{colouring}.png", dpi=200)
+        plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sprot-json", type=Path, required=True)
-    ap.add_argument("--emb-dir", type=Path, required=True)
+    ap.add_argument("--sprot-json", type=Path)
+    ap.add_argument("--emb-dir", type=Path)
+    ap.add_argument("--plot-only", action="store_true",
+                    help="redraw the figures from --out's umap_coords.parquet and umap_metrics.json")
     ap.add_argument("--arms", nargs="+", default=["prott5", "esmc_600m", "random_1024"])
     ap.add_argument("--per-stratum", type=int, default=12_500)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.plot_only:
+        metrics = json.loads((args.out / "umap_metrics.json").read_text())
+        plot(pl.read_parquet(args.out / "umap_coords.parquet"), metrics, list(metrics["arms"]), args.out,
+             args.per_stratum)
+        return
+    if args.sprot_json is None or args.emb_dir is None:
+        ap.error("--sprot-json and --emb-dir are required unless --plot-only")
     import umap  # noqa: PLC0415  (only this script needs umap-learn)
 
     cache = args.out / "labels.parquet"
@@ -177,33 +221,7 @@ def main() -> None:
     allc = pl.concat(coords).join(sample, on="acc")
     allc.write_parquet(args.out / "umap_coords.parquet")
 
-    for colouring, col, palette in (("superkingdom", "superkingdom", SK_COLOURS), ("cath", "cath_class", CATH_COLOURS)):
-        fig, axes = plt.subplots(1, len(args.arms), figsize=(6.2 * len(args.arms), 6.4))
-        for ax, arm in zip(np.atleast_1d(axes), args.arms, strict=True):
-            d = allc.filter(pl.col("arm") == arm)
-            other = d.filter(~pl.col(col).is_in(list(palette)) | pl.col(col).is_null())
-            ax.scatter(other["x"], other["y"], s=0.4, c="#d9d9d9", alpha=0.4, rasterized=True, linewidths=0)
-            dd = d.filter(pl.col(col).is_in(list(palette))).sample(fraction=1.0, shuffle=True, seed=1)
-            ax.scatter(dd["x"], dd["y"], s=0.6, c=[palette[v] for v in dd[col]], alpha=0.6, rasterized=True,
-                       linewidths=0)
-            m = metrics["arms"][arm]
-            key = "superkingdom" if colouring == "superkingdom" else "cath"
-            ax.set_title(f"{DISPLAY.get(arm, arm)}\n10-NN {colouring} acc. {m[f'knn10_{key}_full']:.2f} full / "
-                         f"{m[f'knn10_{key}_2d']:.2f} 2-D;  distance ρ(full, 2-D) {m['distance_rho_full_vs_2d']:.2f}",
-                         fontsize=10)
-            ax.set_xticks([])
-            ax.set_yticks([])
-        handles = [plt.Line2D([], [], marker="o", ls="", color=c, label=k, markersize=7) for k, c in palette.items()]
-        if colouring == "cath":
-            handles.append(plt.Line2D([], [], marker="o", ls="", color="#d9d9d9", label="none / multiple",
-                                      markersize=7))
-        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10)
-        fig.suptitle(f"UMAP of {len(ids):,} cohort proteins (≤{args.per_stratum:,} per superkingdom), "
-                     f"coloured by {'superkingdom' if colouring == 'superkingdom' else 'CATH class (Gene3D)'}",
-                     fontsize=12, weight="bold")
-        fig.tight_layout(rect=(0, 0.05, 1, 0.95))
-        fig.savefig(args.out / f"umap_{colouring}.png", dpi=200)
-        plt.close(fig)
+    plot(allc, metrics, args.arms, args.out, args.per_stratum)
     log("done")
 
 
