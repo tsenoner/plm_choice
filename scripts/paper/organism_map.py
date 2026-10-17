@@ -20,8 +20,8 @@ pairs behind Figures 2 and 3, the share falling in each
 
 Protein columns count proteins. Pair columns count pair memberships (each pair counts both of
 its proteins), so they read on the same scale as the protein columns and show which proteins
-the pairs are made of; two pair-level rows add the share of pairs whose two proteins share a
-superkingdom or an organism.
+the pairs are made of. composition.csv also gives, per pair set, the share of pairs whose two
+proteins share a superkingdom or an organism (not in the table: no protein column has one).
 
 Why it exists. PNAS reviewer R1.3, quoted in Yana Bromberg's comment Y2 (task D14, plan C11),
 asked for a breakdown of the pair set by species, function, length and truncation; the
@@ -323,7 +323,7 @@ def main() -> int:
     summary["cap_rate_by_superkingdom"] = {
         r["superkingdom"]: {"proteins": r["n"], "mmseqs_capped": r["mm"], "foldseek_capped": r["fs"]}
         for r in attrs.group_by("superkingdom").agg(pl.len().alias("n"), pl.col("mmseqs_capped").mean().alias("mm"),
-                                                    pl.col("foldseek_capped").mean().alias("fs")).iter_rows(named=True)}
+                                                    pl.col("foldseek_capped").mean().alias("fs")).sort("superkingdom").iter_rows(named=True)}
     summary["top10_by_column"] = top_by_column
     comp = pl.DataFrame(rows)
     comp.write_csv(args.out / "composition.csv")
@@ -334,7 +334,7 @@ def main() -> int:
     return 0
 
 
-HEAD = {"cohort": "Cohort", "train": "Train", "val": "Validation", "test": "Test",
+HEAD = {"cohort": "Swiss-Prot ≤1022", "train": "Train", "val": "Validation", "test": "Test",
         "test_pide_hfsp": "Test, PIDE/HFSP", "test_tmscore": "Test, TM-score", "random": "Random"}
 ANNOTATION = {"exp_ec": "EC number (ECO:0000269)", "exp_go_mf": "GO-MF (CAFA codes)",
               "mmseqs_capped": "MMseqs2, 300 targets", "foldseek_capped": "Foldseek, 1000 targets"}
@@ -372,7 +372,7 @@ def table_md(comp: pl.DataFrame, columns: dict, top: list[tuple[int, str]], edge
     block("Length (residues)", [(f"{a}--{b}", "length", f"Q{i + 1}") for i, (a, b) in enumerate(zip(lo, hi, strict=True))])
     block("Experimental function", [(ANNOTATION[k], "annotation", k) for k in ("exp_ec", "exp_go_mf")])
     block("Search reached its cap", [(ANNOTATION[k], "annotation", k) for k in ("mmseqs_capped", "foldseek_capped")])
-    block("Pairs within one", [("Superkingdom", "pair", "same_superkingdom"), ("Organism", "pair", "same_organism")])
+    # The pair-level shares (same superkingdom / organism) have no protein-column value; composition.csv has them.
 
     w = [max(len(lbl) for lbl, _ in body)] + [max(len(HEAD[c]), *(len(v[i]) for _, v in body))
                                                for i, c in enumerate(cols)]
