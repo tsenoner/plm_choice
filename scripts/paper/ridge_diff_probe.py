@@ -21,7 +21,10 @@ is that estimator, fitted exactly rather than by SGD, on the same pairs as the p
   GPU in float64. Features are standardised with the training moments; the ridge solution for
   every alpha in the grid comes from one eigendecomposition of the correlation matrix (alpha is
   relative to n, i.e. in units of the standardised X'X/n). Alpha is chosen by validation MSE;
-  the test split is touched once, for every alpha, and the selected alpha is reported.
+  the test split is touched once, for every alpha, and the selected alpha is reported. The grid
+  runs to 1e4, far above the largest eigenvalue (~400), where the weights approach each
+  dimension's own correlation with the target: a first grid that stopped at 1 was still
+  improving there on TM-score, i.e. the validation pairs reward shrinkage.
 * **Check.** The test pass also scores -||a-b|| -- the Euclidean read-out -- whose Spearman
   must equal the one in the paper's Euclidean metrics file for the arm; ``--check-metrics``
   asserts it (to 1e-4) so the pairs are proven identical, not assumed.
@@ -49,7 +52,7 @@ from shared.datasets import _load_and_filter_data  # noqa: E402
 
 TARGETS = ("fident", "alntmscore", "hfsp")
 FEATURES = ("abs", "sq")
-ALPHAS = (1e-8, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+ALPHAS = (1e-6, 1e-4, 1e-3, 1e-2, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 1e3, 1e4)
 
 
 def load_embeddings(h5_path: Path, ids: list[str]) -> np.ndarray:
@@ -228,6 +231,7 @@ def main() -> None:
                 "fit": info,
                 "alphas": rows,
                 "selected": rows[best],
+                "selected_at_grid_edge": best in (0, len(ALPHAS) - 1),
                 "euclidean_spearman_replayed": -euclid,
                 "euclidean_check": check,
                 "embedding": str(args.embedding),
