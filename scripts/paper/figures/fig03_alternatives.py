@@ -53,7 +53,7 @@ from visualization.pairwise_embedding_comparison import (  # noqa: E402
 
 SCALES = ("minmax", "p99", "zscore", "iqr")
 SCALE_LABEL = {
-    "minmax": "min–max (published)",
+    "minmax": "min–max (Figure 2's scale)",
     "p99": "99th-percentile divisor",
     "zscore": "z-score",
     "iqr": "IQR",
@@ -89,7 +89,8 @@ def draw_rho(cols, viz, lower, upper, vlim, title, cbar_label, path, upper_label
     """One n x n grid, diagonal = model names; both triangles on the diverging rho scale."""
     n = len(cols)
     norm = plt.Normalize(-vlim, vlim)
-    fig, ax = plt.subplots(figsize=(15.5, 13))
+    # Printed at ~7 in wide, these sizes land at ~7-8 pt, as the published Figure 3's do.
+    fig, ax = plt.subplots(figsize=(15.5, 13.5))
     grid = np.full((n, n), np.nan)
     il = np.tril_indices(n, -1)
     grid[il] = lower[il]
@@ -101,32 +102,34 @@ def draw_rho(cols, viz, lower, upper, vlim, title, cbar_label, path, upper_label
         for j in range(n):
             if i == j:
                 name = EMBEDDING_DISPLAY_NAMES.get(cols[i], cols[i])
-                ax.text(j, i, name, ha="center", va="center", fontsize=10.5, weight="bold")
+                ax.text(j, i, name, ha="center", va="center", fontsize=13.5, weight="bold")
             elif not np.isnan(grid[i, j]):
-                ax.text(j, i, f"{grid[i, j] * 100:.0f}", ha="center", va="center", fontsize=14,
+                ax.text(j, i, f"{grid[i, j] * 100:.0f}", ha="center", va="center", fontsize=19,
                         weight="bold", color=_readable_text_color(CORR_DIVERGING_CMAP, norm, grid[i, j]))
     for s, e in family_blocks(viz, cols):
         ax.add_patch(Rectangle((s - 0.5, s - 0.5), e - s, e - s, fill=False, lw=4, ec="black"))
     labels = [EMBEDDING_DISPLAY_NAMES.get(c, c) for c in cols]
-    ax.set_xticks(range(n), labels, rotation=45, ha="right", fontsize=12)
-    ax.set_yticks(range(n), labels, fontsize=12)
+    ax.set_xticks(range(n), labels, fontsize=16)
+    ax.set_yticks(range(n), labels, fontsize=16)
     ax.tick_params(length=0)
     for sp in ax.spines.values():
         sp.set_visible(False)
     if upper_label or lower_label:
-        title += "\n" + "   ·   ".join(x for x in (upper_label, lower_label) if x)
+        title += "\n" + "\n".join(x for x in (upper_label, lower_label) if x)
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(-vlim * 100, vlim * 100), cmap=CORR_DIVERGING_CMAP),
                       ax=ax, fraction=0.04, pad=0.02)
-    cb.set_label(cbar_label, fontsize=14)
-    ax.set_title(title, fontsize=15, weight="bold", pad=14)
-    fig.savefig(path, dpi=200, bbox_inches="tight")
+    cb.set_label(cbar_label, fontsize=18)
+    cb.ax.tick_params(labelsize=15)
+    ax.set_title(title, fontsize=19, weight="bold", pad=14)
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def draw_w_ranks(cols, viz, matrices, aucs, rhos, path):
     n = len(cols)
     iu = np.triu_indices(n, 1)
-    fig, axes = plt.subplots(2, 2, figsize=(17, 16))
+    fig, axes = plt.subplots(2, 2, figsize=(17, 17), layout="constrained")
+    names = [EMBEDDING_DISPLAY_NAMES.get(c, c).replace("\n", " ") for c in cols]
     cmap = plt.get_cmap("Blues_r")
     for ax, scale in zip(axes.flat, SCALES, strict=True):
         m = matrices[scale]
@@ -135,22 +138,22 @@ def draw_w_ranks(cols, viz, matrices, aucs, rhos, path):
         ax.imshow(np.ma.masked_invalid(ranks), cmap=cmap, vmin=1, vmax=len(iu[0]), aspect="equal")
         for i, j in zip(*iu, strict=True):
             r = ranks[i, j]
-            ax.text(j, i, f"{r:.0f}", ha="center", va="center", fontsize=7.5,
+            ax.text(j, i, f"{r:.0f}", ha="center", va="center", fontsize=13,
                     color="white" if r < 40 else "black")
-        for i in range(n):
-            ax.text(i, i, EMBEDDING_DISPLAY_NAMES.get(cols[i], cols[i]),
-                    ha="center", va="center", fontsize=6.5, weight="bold")
         for s, e in family_blocks(viz, cols):
-            ax.add_patch(Rectangle((s - 0.5, s - 0.5), e - s, e - s, fill=False, lw=2.5, ec="black"))
-        ax.set_xticks([])
-        ax.set_yticks([])
+            ax.add_patch(Rectangle((s - 0.5, s - 0.5), e - s, e - s, fill=False, lw=3, ec="black"))
+        # Model names on the axes, not the diagonal: they do not fit a cell at print size.
+        ax.set_yticks(range(n), names, fontsize=12)
+        ax.set_xticks(range(n), names, fontsize=12, rotation=90)
+        ax.xaxis.tick_top()
+        ax.tick_params(length=0)
         for sp in ax.spines.values():
             sp.set_visible(False)
         rho = "" if scale == "minmax" else f"; ρ with min–max {rhos[scale]:.2f}"
-        ax.set_title(f"{SCALE_LABEL[scale]}\nfamily AUC {aucs[scale]:.2f}{rho}", fontsize=13)
+        ax.set_title(f"{SCALE_LABEL[scale]}\nfamily AUC {aucs[scale]:.2f}{rho}", fontsize=17)
     fig.suptitle("Rank of each Wasserstein distance among the 91 model pairs (1 = most alike),\n"
-                 "5,000,000 random pairs; black frames = families", fontsize=15, weight="bold")
-    fig.savefig(path, dpi=200, bbox_inches="tight")
+                 "5,000,000 random pairs; black frames = families", fontsize=19, weight="bold")
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -172,7 +175,8 @@ def main() -> None:
     vlim = symmetric_corr_limit(rnd["correlations"], aln["correlations"])
 
     # A: the published figure, as is.
-    if args.published.is_file():
+    # Only once: after option C is adopted, bib_2026/figures/fig03.png IS C2.
+    if args.published.is_file() and not (args.out / "A_minmax.png").exists():
         shutil.copyfile(args.published, args.out / "A_minmax.png")
 
     # B: same plotter, same shared scales as the published pair, W on the p99 scale.
@@ -194,8 +198,8 @@ def main() -> None:
     draw_rho(cols, viz, rnd["correlations"], aln["correlations"], vlim,
              "Spearman correlation between models' pairwise distances (×100)",
              "Spearman ρ (×100)", args.out / "C2_rho_two_populations.png",
-             upper_label="upper right: 74.6 M pairs MMseqs2/Foldseek could align",
-             lower_label="lower left: 5,000,000 random pairs")
+             upper_label="upper right: 74.6 M pairs MMseqs2 or Foldseek could align",
+             lower_label="lower left: 5,000,000 uniformly random pairs")
 
     # Supplement panel: W ranks on four scales (matrices from wasserstein_scaling.py, same order).
     sc = json.loads(args.scaling.read_text())

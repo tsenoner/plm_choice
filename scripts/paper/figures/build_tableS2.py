@@ -11,6 +11,10 @@ trained probe stays "--".
 
 Also parses the CURRENT table out of 90.supplementary.md (read-only) and reports a
 cell-by-cell diff, so the change count quoted to the user is measured, not guessed.
+
+LINEAR_CSV (optional) adds a third read-out column, "Linear", between the two: the
+closed-form ridge regression on |a-b| (R1.8), read from the ``ridge_abs`` column of
+``d14_open_collect.py``'s linear_probe_rho.csv. Its best/second marking follows the same rule.
 """
 
 from __future__ import annotations
@@ -78,7 +82,10 @@ BLOCKS: list[tuple[str, str]] = [
     ("TM-score", "alntmscore"),
     ("HFSP", "hfsp"),
 ]
+LINEAR_CSV = os.environ.get("LINEAR_CSV")
 COLS: list[tuple[str, str]] = [("Euclidean", "euclidean"), ("FNN", "fnn")]
+if LINEAR_CSV:
+    COLS.insert(1, ("Linear", "linear"))
 
 DASH = "--"
 # Full column widths (the span between two "+" in a rule), matched to the table
@@ -97,6 +104,12 @@ def load() -> dict[tuple[str, str, str], float]:
         v = r["Spearman"]
         if pd.notna(v):
             out[(r["target"], r["model_type"], r["arm"])] = abs(float(v))
+    if LINEAR_CSV:
+        # Already oriented (a fitted predictor of similarity), so no magnitude: a negative
+        # value would be a real failure, and abs() would hide it.
+        for _, r in pd.read_csv(LINEAR_CSV).iterrows():
+            if pd.notna(r["ridge_abs"]):
+                out[(r["target"], "linear", r["arm"])] = float(r["ridge_abs"])
     return out
 
 
@@ -137,25 +150,26 @@ def build() -> tuple[str, dict[tuple[str, str, str], str]]:
 
 def rule(ch: str, first: bool, param_col: bool = True) -> str:
     """Grid-table rule. `first` marks the header separator (=== and alignment :)."""
+    vals = "".join(f"{(('=' if first else ch) * W_VAL)}+" for _ in COLS)
     if first:
-        return f"+:{'=' * (W_PARAM - 2)}:+{'=' * W_EMB}+{'=' * W_VAL}+{'=' * W_VAL}+"
+        return f"+:{'=' * (W_PARAM - 2)}:+{'=' * W_EMB}+{vals}"
     if param_col:
-        return f"+{ch * W_PARAM}+{ch * W_EMB}+{ch * W_VAL}+{ch * W_VAL}+"
-    return f"|{' ' * W_PARAM}+{ch * W_EMB}+{ch * W_VAL}+{ch * W_VAL}+"
+        return f"+{ch * W_PARAM}+{ch * W_EMB}+{vals}"
+    return f"|{' ' * W_PARAM}+{ch * W_EMB}+{vals}"
 
 
-def row(param: str, emb: str, a: str, b: str) -> str:
+def row(param: str, emb: str, *vals: str) -> str:
     return (
         f"| {param:<{W_PARAM - 2}} "
         f"| {emb:<{W_EMB - 2}} "
-        f"| {a:<{W_VAL - 2}} "
-        f"| {b:<{W_VAL - 2}} |"
+        + "".join(f"| {v:<{W_VAL - 2}} " for v in vals)
+        + "|"
     )
 
 
 def render(cells: dict[tuple[str, str, str], str]) -> str:
     lines = [rule("-", False)]
-    lines.append(row("Parameter", "Embedding", "Euclidean", "FNN"))
+    lines.append(row("Parameter", "Embedding", *(lbl for lbl, _ in COLS)))
     lines.append(rule("=", True))
     for bi, (blabel, target) in enumerate(BLOCKS):
         if bi:
@@ -165,8 +179,7 @@ def render(cells: dict[tuple[str, str, str], str]) -> str:
                 row(
                     blabel if ri == 0 else "",
                     lbl,
-                    cells[(target, "euclidean", arm)],
-                    cells[(target, "fnn", arm)],
+                    *(cells[(target, mt, arm)] for _, mt in COLS),
                 )
             )
             if ri < len(ROWS) - 1:
@@ -183,15 +196,20 @@ def parse_grid(body: str) -> dict[tuple[str, str, str], str]:
     cur_block: str | None = None
     found: dict[tuple[str, str, str], str] = {}
     seen: set[str] = set()
+    key_of = {lbl: mt for lbl, mt in [("Euclidean", "euclidean"), ("Linear", "linear"), ("FNN", "fnn")]}
+    cols: list[str] = []
 
     for line in body.splitlines():
         if not line.startswith("|"):
             continue
         parts = [p.strip() for p in line.strip().strip("|").split("|")]
-        if len(parts) != 4:
+        if len(parts) < 4:
             continue
-        param, emb, a, b = parts
+        param, emb, *vals = parts
         if emb == "Embedding":
+            cols = [key_of[v] for v in vals]
+            continue
+        if len(vals) != len(cols):
             continue
         if param:
             cur_block = param
@@ -201,8 +219,8 @@ def parse_grid(body: str) -> dict[tuple[str, str, str], str]:
         target = dict(BLOCKS)[cur_block]
         block_of[cur_block] = target
         arm = label2arm[emb]
-        found[(target, "euclidean", arm)] = a
-        found[(target, "fnn", arm)] = b
+        for mt, v in zip(cols, vals, strict=True):
+            found[(target, mt, arm)] = v
     return found
 
 
@@ -259,7 +277,8 @@ def main() -> None:
     print(f"cells total                : {len(new)}")
     print(f"dash cells remaining       : {len(dashes_left)} -> {dashes_left}")
 
-    diff(new, parse_prev(), "PREVIOUS GENERATED TABLE (2026-09-20)")
+    if PREV.is_file():
+        diff(new, parse_prev(), "PREVIOUS GENERATED TABLE (2026-09-20)")
     diff(new, parse_current(), "MANUSCRIPT 90.supplementary.md (live, being edited)")
 
     # best/second marking per (target, read-out), read back off the rendered cells
