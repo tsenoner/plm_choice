@@ -104,6 +104,23 @@ def knn_acc(x: np.ndarray, labels: np.ndarray) -> float:
     return float(cross_val_score(clf, x, labels, cv=5).mean())
 
 
+def export_sample(out: Path, emb_dir: Path, arms: list[str], dest: Path) -> None:
+    """The proteins of an earlier run, as ProtSpace input: one HDF5 per arm, one label table."""
+    coords = pl.read_parquet(out / "umap_coords.parquet")
+    sample = (coords.filter(pl.col("arm") == coords["arm"][0])
+              .select("acc", "superkingdom", "cath_class", "length").sort("acc"))
+    ids = sample["acc"].to_list()
+    dest.mkdir(parents=True, exist_ok=True)
+    for arm in arms:
+        x = load(emb_dir / f"{arm}.h5", ids)
+        with h5py.File(dest / f"{arm}.h5", "w") as f:
+            for pid, v in zip(ids, x, strict=True):
+                f.create_dataset(pid, data=v)
+        log(f"{arm}: {x.shape} -> {dest / f'{arm}.h5'}")
+    sample.rename({"acc": "protein_id"}).write_csv(dest / "annotations.csv")
+    log(f"{len(ids):,} proteins -> {dest / 'annotations.csv'}")
+
+
 def plot(allc: pl.DataFrame, metrics: dict, arms: list[str], out: Path, per_stratum: int) -> None:
     """One figure per colouring, one panel per arm; legends list only the labels present."""
     n = allc.filter(pl.col("arm") == arms[0]).height
@@ -145,6 +162,10 @@ def main() -> None:
     ap.add_argument("--emb-dir", type=Path)
     ap.add_argument("--plot-only", action="store_true",
                     help="redraw the figures from --out's umap_coords.parquet and umap_metrics.json")
+    ap.add_argument("--export-sample", type=Path, metavar="DIR",
+                    help="write the sample of --out's umap_coords.parquet as one <arm>.h5 per --arms plus "
+                         "annotations.csv (protein_id, superkingdom, cath_class, length) -- ProtSpace's "
+                         "input format -- then exit")
     ap.add_argument("--arms", nargs="+", default=["prott5", "esmc_600m", "random_1024"])
     ap.add_argument("--per-stratum", type=int, default=12_500)
     ap.add_argument("--out", type=Path, required=True)
@@ -154,6 +175,11 @@ def main() -> None:
         metrics = json.loads((args.out / "umap_metrics.json").read_text())
         plot(pl.read_parquet(args.out / "umap_coords.parquet"), metrics, list(metrics["arms"]), args.out,
              args.per_stratum)
+        return
+    if args.export_sample is not None:
+        if args.emb_dir is None:
+            ap.error("--export-sample needs --emb-dir")
+        export_sample(args.out, args.emb_dir, args.arms, args.export_sample)
         return
     if args.sprot_json is None or args.emb_dir is None:
         ap.error("--sprot-json and --emb-dir are required unless --plot-only")
