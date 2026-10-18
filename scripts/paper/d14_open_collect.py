@@ -177,7 +177,8 @@ def main() -> None:
                 continue
             s = {}
             for h in (16, 256):
-                done = [r for r in sub if r[f"rho_h{h}"] is not None]
+                # The Gaussian control has no signal to gain; keep it out of the size trend.
+                done = [r for r in sub if r[f"rho_h{h}"] is not None and r["arm"] != CONTROL]
                 s[f"h{h}"] = {
                     "n_done": len(done),
                     "rank_vs_h64": agreement({r["arm"]: r["rho_h64"] for r in done},
