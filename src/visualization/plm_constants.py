@@ -67,25 +67,50 @@ EMBEDDING_FAMILY_COLOR_MAP: dict[str, str] = {
     "Untrained": "#b0b0b0",
 }
 
-#: Two-line axis labels, sized for tick text.
+#: Axis labels, spelled exactly as in the manuscript text (ESM-2 8M, ESM-C 300M, ProtT5,
+#: Ankh-base). They are single-line; a cell or tick one panel wide takes ``narrow_label``.
 EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
-    "ankh_base": "Ankh\nBase",
-    "ankh_large": "Ankh\nLarge",
+    "ankh_base": "Ankh-base",
+    "ankh_large": "Ankh-large",
     "clean": "CLEAN",
-    "esm1b": "ESM\n1b",
-    "esm2_8m": "ESM2\n8M",
-    "esm2_35m": "ESM2\n35M",
-    "esm2_150m": "ESM2\n150M",
-    "esm2_650m": "ESM2\n650M",
-    "esm2_3b": "ESM2\n3B",
-    "esm3_open": "ESM3",
-    "esmc_300m": "ESM C\n300M",
-    "esmc_600m": "ESM C\n600M",
-    "prostt5": "Prost\nT5",
-    "prott5": "Prot\nT5",
-    "prottucker": "Prot\nTucker",
+    "esm1b": "ESM-1b",
+    "esm2_8m": "ESM-2 8M",
+    "esm2_35m": "ESM-2 35M",
+    "esm2_150m": "ESM-2 150M",
+    "esm2_650m": "ESM-2 650M",
+    "esm2_3b": "ESM-2 3B",
+    "esm3_open": "ESM-3",
+    "esmc_300m": "ESM-C 300M",
+    "esmc_600m": "ESM-C 600M",
+    "prostt5": "ProstT5",
+    "prott5": "ProtT5",
+    "prottucker": "ProtTucker",
     "random_1024": "Random",
 }
+
+
+def narrow_label(name: str) -> str:
+    """Break a model label onto two lines for a cell or tick that is one panel wide.
+
+    The break falls at the first space ("ESM-2" / "8M"), else at the hyphen of a name longer
+    than five characters ("Ankh-" / "base": the hyphen stays at the end of its line), else,
+    for a name longer than six, where a capital follows a lowercase letter ("Prot" /
+    "Tucker"). Anything shorter stays whole.
+    """
+    if "\n" in name:
+        return name
+    if " " in name.strip():
+        head, _, tail = name.partition(" ")
+        return head + "\n" + tail
+    if len(name) > 5 and "-" in name[1:-1]:
+        i = name.index("-", 1)
+        return name[: i + 1] + "\n" + name[i + 1 :]
+    if len(name) > 6:
+        for i in range(1, len(name)):
+            if name[i].isupper() and name[i - 1].islower():
+                return name[:i] + "\n" + name[i:]
+    return name
+
 
 #: Untrained-architecture baselines (reviewer R1.9), keyed by ``MODEL_CONFIGS``
 #: key and mapped to the pretrained twin: the architecture — and therefore the
@@ -154,6 +179,7 @@ __all__ = [
     "EMBEDDING_FAMILY_COLOR_MAP",
     "EMBEDDING_COLOR_MAP",
     "EMBEDDING_DISPLAY_NAMES",
+    "narrow_label",
     "MODEL_MARKER_MAP",
     "RANDOM_INIT_TWINS",
     "human_readable_number",

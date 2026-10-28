@@ -45,6 +45,7 @@ from visualization.plm_constants import (
     EMBEDDING_FAMILY_COLOR_MAP,
     EMBEDDING_FAMILY_MAP,
     PLM_SIZES,
+    narrow_label,
 )
 
 # Configure logging
@@ -744,9 +745,7 @@ class EmbeddingComparisonVisualizer:
                     if i == j:
                         # Diagonal: show embedding name with proper display name
                         embedding_key = col1.replace("dist_", "")
-                        embedding_name = EMBEDDING_DISPLAY_NAMES.get(
-                            embedding_key, embedding_key
-                        )
+                        embedding_name = narrow_label(EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key))
                         ax.text(
                             0.5,
                             0.5,
@@ -788,9 +787,7 @@ class EmbeddingComparisonVisualizer:
                     # Add labels for edge plots with proper display names
                     if i == n - 1:
                         embedding_key = col2.replace("dist_", "")
-                        label = EMBEDDING_DISPLAY_NAMES.get(
-                            embedding_key, embedding_key
-                        )
+                        label = narrow_label(EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key))
                         ax.set_xlabel(
                             label,
                             rotation=0,
@@ -799,9 +796,7 @@ class EmbeddingComparisonVisualizer:
                         )
                     if j == 0:
                         embedding_key = col1.replace("dist_", "")
-                        label = EMBEDDING_DISPLAY_NAMES.get(
-                            embedding_key, embedding_key
-                        )
+                        label = narrow_label(EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key))
                         ax.set_ylabel(
                             label,
                             rotation=0,
@@ -811,14 +806,9 @@ class EmbeddingComparisonVisualizer:
 
                     pbar.update(1)
 
-        # Add title and colorbar
-        fig.suptitle(
-            "PairwiseDistance Comparison",
-            x=0.5,
-            y=0.91,
-            fontsize=22 * self.font_scale,
-            weight="bold",
-        )
+        # No suptitle: the figure's caption carries the title. The one this drew
+        # ("PairwiseDistance Comparison", a class name with the space missing) read as
+        # a typo in print.
 
         # Create a dummy mappable for colorbar
         im = plt.cm.ScalarMappable(cmap="pink", norm=plt.Normalize(vmin=1, vmax=vmax))
@@ -3027,9 +3017,7 @@ class EmbeddingComparisonVisualizer:
                     if i == j:
                         # Diagonal: show embedding name with proper display name
                         embedding_key = col1.replace("dist_", "")
-                        embedding_name = EMBEDDING_DISPLAY_NAMES.get(
-                            embedding_key, embedding_key
-                        )
+                        embedding_name = narrow_label(EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key))
                         ax.text(
                             0.5,
                             0.5,
@@ -3127,7 +3115,7 @@ class EmbeddingComparisonVisualizer:
         # Add row and column labels outside the grid with proper display names
         for i, col in enumerate(dist_cols):
             embedding_key = col.replace("dist_", "")
-            label = EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key)
+            label = narrow_label(EMBEDDING_DISPLAY_NAMES.get(embedding_key, embedding_key))
             # Y-axis labels (left side)
             axes[i, 0].set_ylabel(
                 label,

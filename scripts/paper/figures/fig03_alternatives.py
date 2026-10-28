@@ -48,6 +48,7 @@ from visualization.pairwise_embedding_comparison import (  # noqa: E402
     EMBEDDING_DISPLAY_NAMES,
     EmbeddingComparisonVisualizer,
     _readable_text_color,
+    narrow_label,
     symmetric_corr_limit,
 )
 
@@ -101,14 +102,14 @@ def draw_rho(cols, viz, lower, upper, vlim, title, cbar_label, path, upper_label
     for i in range(n):
         for j in range(n):
             if i == j:
-                name = EMBEDDING_DISPLAY_NAMES.get(cols[i], cols[i])
+                name = narrow_label(EMBEDDING_DISPLAY_NAMES.get(cols[i], cols[i]))
                 ax.text(j, i, name, ha="center", va="center", fontsize=13.5, weight="bold")
             elif not np.isnan(grid[i, j]):
                 ax.text(j, i, f"{grid[i, j] * 100:.0f}", ha="center", va="center", fontsize=19,
                         weight="bold", color=_readable_text_color(CORR_DIVERGING_CMAP, norm, grid[i, j]))
     for s, e in family_blocks(viz, cols):
         ax.add_patch(Rectangle((s - 0.5, s - 0.5), e - s, e - s, fill=False, lw=4, ec="black"))
-    labels = [EMBEDDING_DISPLAY_NAMES.get(c, c) for c in cols]
+    labels = [narrow_label(EMBEDDING_DISPLAY_NAMES.get(c, c)) for c in cols]
     ax.set_xticks(range(n), labels, fontsize=16)
     ax.set_yticks(range(n), labels, fontsize=16)
     ax.tick_params(length=0)

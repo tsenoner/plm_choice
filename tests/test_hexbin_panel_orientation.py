@@ -59,8 +59,8 @@ def test_panel_axes_match_their_labels(tmp_path):
 
     # The single lower-triangle panel: row 1 (dist_prott5), column 0 (dist_ankh_base).
     panel = axes[1, 0]
-    assert panel.get_xlabel().replace("\n", " ") == "Ankh Base"
-    assert panel.get_ylabel().replace("\n", " ") == "Prot T5"
+    assert panel.get_xlabel().replace("-\n", "-") == "Ankh-base"
+    assert panel.get_ylabel().replace("\n", " ") == "ProtT5"
 
     # dist_ankh_base was cached over X_RANGE and dist_prott5 over Y_RANGE, so the
     # axis limits say which arm actually reached which axis.
