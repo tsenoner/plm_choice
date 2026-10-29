@@ -1,0 +1,28 @@
+# Zenodo record, version 2: the name each file is built and uploaded under -> the name it is published under.
+# scripts/lrz/zenodo_v2_finish.sh renames the draft's files by this map. The prefix groups the flat file list.
+ankh_base.h5	embeddings_ankh_base.h5
+ankh_large.h5	embeddings_ankh_large.h5
+clean.h5	embeddings_clean.h5
+esm1b.h5	embeddings_esm1b.h5
+esm2_8m.h5	embeddings_esm2_8m.h5
+esm2_35m.h5	embeddings_esm2_35m.h5
+esm2_150m.h5	embeddings_esm2_150m.h5
+esm2_650m.h5	embeddings_esm2_650m.h5
+esm2_3b.h5	embeddings_esm2_3b.h5
+esm3_open.h5	embeddings_esm3_open.h5
+esmc_300m.h5	embeddings_esmc_300m.h5
+esmc_600m.h5	embeddings_esmc_600m.h5
+prott5.h5	embeddings_prott5.h5
+prottucker.h5	embeddings_prottucker.h5
+random_1024.h5	embeddings_random_1024.h5
+pair_tables_splits.tar	pairs_splits.tar
+pair_table_counts.tar	pairs_counts.tar
+identical_sequence_mask.tar	pairs_identical_mask.tar
+random_pairs.tar	pairs_random.tar
+probes_full100_p10.tar	probes_native.tar
+probes_pca_cohort.tar	probes_pca128.tar
+probes_randinit_full100.tar	probes_untrained.tar
+functional_annotation.tar	analysis_functional_annotation.tar
+experimental_tm.tar	analysis_experimental_tm.tar
+distance_histograms.tar	analysis_distance_histograms.tar
+new2024.tar	testset_new2024.tar

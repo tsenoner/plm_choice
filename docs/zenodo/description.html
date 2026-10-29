@@ -2,7 +2,7 @@
 <p>The study compares 14 protein language models (pLMs) and a random Gaussian control on 75,849,972 Swiss-Prot protein pairs, each scored for sequence identity (PIDE), HFSP and structural similarity (TM-score). It separates the signal already in raw embedding distances from the signal a supervised probe extracts, and compares embeddings with an MMseqs2 homology search for transferring EC numbers and GO molecular-function terms.</p>
 <p>This record holds:</p>
 <ul>
-<li>per-protein embeddings of 540,881 Swiss-Prot 2024_01 proteins for all 15 embedding sets (<code>*.h5</code>);</li>
+<li>per-protein embeddings of 540,881 Swiss-Prot 2024_01 proteins for all 15 embedding sets (<code>embeddings_*.h5</code>);</li>
 <li>the deduplicated pair set with its training, validation and test splits, pair counts and an identical-sequence mask;</li>
 <li>the probe grids (trained probes and raw-distance scores for 3 targets) on native embeddings, 128-dimensional PCA projections and 11 untrained networks;</li>
 <li>the EC and GO-MF cohorts with their annotation-transfer results and the MMseqs2 homology baseline;</li>

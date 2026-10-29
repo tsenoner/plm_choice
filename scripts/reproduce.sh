@@ -8,7 +8,7 @@
 # command for each part that is not, rather than pretending to run it.
 #
 #   ./scripts/reproduce.sh              # verify the environment + run the test suite
-#   ./scripts/reproduce.sh --with-data  # additionally fetch the Zenodo deposit (~31 GB)
+#   ./scripts/reproduce.sh --with-data  # additionally fetch the Zenodo deposit (~43 GB)
 #
 set -euo pipefail
 
@@ -68,7 +68,7 @@ PY
   note "Verify after downloading:"
   manual "cd $DATA_DIR && md5sum -c <(sed 's/md5://' manifest.txt | awk '{print \$1\"  \"\$2}')"
 else
-  note "Skipped. Re-run with --with-data to fetch the deposit (~31 GB), or:"
+  note "Skipped. Re-run with --with-data to fetch the deposit (~43 GB), or:"
   manual "open https://doi.org/$ZENODO_CONCEPT_DOI"
 fi
 

@@ -9,33 +9,33 @@ Target names used everywhere: `fident` = PIDE, the fractional sequence identity 
 two AlphaFold DB v4 models (0–1). A missing value means the search reported no reliable alignment for that
 measure.
 
-## Embeddings: `<model>.h5` (15 files)
+## Embeddings: `embeddings_<model>.h5` (15 files)
 
 One HDF5 dataset per protein, named by accession, holding the mean over per-residue final-layer
 representations.
 
 | file | model | dim | dtype | stored shape | proteins |
 |---|---|---:|---|---|---:|
-| `ankh_base.h5` | Ankh base | 768 | float32 | (768,) | 540,881 |
-| `ankh_large.h5` | Ankh large | 1536 | float32 | (1536,) | 540,881 |
-| `clean.h5` | CLEAN | 128 | float32 | (128,) | 526,871 |
-| `esm1b.h5` | ESM1b | 1280 | float32 | (1280,) | 526,871 |
-| `esm2_8m.h5` | ESM2 8M | 320 | float32 | (320,) | 540,881 |
-| `esm2_35m.h5` | ESM2 35M | 480 | float32 | (480,) | 540,881 |
-| `esm2_150m.h5` | ESM2 150M | 640 | float32 | (640,) | 540,881 |
-| `esm2_650m.h5` | ESM2 650M | 1280 | float32 | (1280,) | 540,881 |
-| `esm2_3b.h5` | ESM2 3B | 2560 | float32 | (2560,) | 540,881 |
-| `esm3_open.h5` | ESM3 open | 1536 | float32 | (1536,) | 540,881 |
-| `esmc_300m.h5` | ESM C 300M | 960 | float32 | (960,) | 540,881 |
-| `esmc_600m.h5` | ESM C 600M | 1152 | float32 | (1152,) | 540,881 |
-| `prott5.h5` | ProtT5 | 1024 | float16 | (1, 1024) | 540,881 |
-| `prottucker.h5` | ProtTucker | 128 | float16 | (1, 128) | 540,881 |
-| `random_1024.h5` | random Gaussian control | 1024 | float16 | (1024,) | 540,881 |
+| `embeddings_ankh_base.h5` | Ankh base | 768 | float32 | (768,) | 540,881 |
+| `embeddings_ankh_large.h5` | Ankh large | 1536 | float32 | (1536,) | 540,881 |
+| `embeddings_clean.h5` | CLEAN | 128 | float32 | (128,) | 526,871 |
+| `embeddings_esm1b.h5` | ESM1b | 1280 | float32 | (1280,) | 526,871 |
+| `embeddings_esm2_8m.h5` | ESM2 8M | 320 | float32 | (320,) | 540,881 |
+| `embeddings_esm2_35m.h5` | ESM2 35M | 480 | float32 | (480,) | 540,881 |
+| `embeddings_esm2_150m.h5` | ESM2 150M | 640 | float32 | (640,) | 540,881 |
+| `embeddings_esm2_650m.h5` | ESM2 650M | 1280 | float32 | (1280,) | 540,881 |
+| `embeddings_esm2_3b.h5` | ESM2 3B | 2560 | float32 | (2560,) | 540,881 |
+| `embeddings_esm3_open.h5` | ESM3 open | 1536 | float32 | (1536,) | 540,881 |
+| `embeddings_esmc_300m.h5` | ESM C 300M | 960 | float32 | (960,) | 540,881 |
+| `embeddings_esmc_600m.h5` | ESM C 600M | 1152 | float32 | (1152,) | 540,881 |
+| `embeddings_prott5.h5` | ProtT5 | 1024 | float16 | (1, 1024) | 540,881 |
+| `embeddings_prottucker.h5` | ProtTucker | 128 | float16 | (1, 128) | 540,881 |
+| `embeddings_random_1024.h5` | random Gaussian control | 1024 | float16 | (1024,) | 540,881 |
 
 Flatten with `.ravel()` and cast to float32 before computing distances. The evaluation cohort is the
 526,871 accessions present in all 15 files (the proteins of at most 1022 residues).
 
-## `pair_tables_splits.tar`
+## `pairs_splits.tar`
 
 `sprot_pre2024_e1/sets/{train,val,test}.parquet`, one row per protein pair, each unordered pair once.
 
@@ -50,12 +50,12 @@ Rows: train 59,587,201; validation 8,196,507; test 8,066,264 (75,849,972 in all)
 pair; the paper's cohort filter (both proteins in all 15 embedding files) removes 940,833 when they are
 loaded.
 
-## `pair_table_counts.tar`
+## `pairs_counts.tar`
 
 `pair_table_counts/sprot_pre2024_e1.json`: pairs per split and how many carry each target (`per_split`,
 `total`).
 
-## `identical_sequence_mask.tar`
+## `pairs_identical_mask.tar`
 
 `ridge_identical/`: pairs whose two proteins have identical sequences (325,019 of 75,849,972). Identical
 inputs give identical embeddings, so these pairs are excluded from the distance distributions.
@@ -66,10 +66,11 @@ inputs give identical embeddings, so these pairs are excluded from the distance 
 | `{train,val,test}_identical_keyed.parquet` | `query`, `target` of the identical pairs only |
 | `identical_pairs.json` | counts per split and in total |
 
-## Probe grids: `probes_full100_p10.tar`, `probes_pca_cohort.tar`, `probes_randinit_full100.tar`
+## Probe grids: `probes_native.tar`, `probes_pca128.tar`, `probes_untrained.tar`
 
-Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `full100_p10` (native embeddings),
-`pca_cohort` (128-dimensional PCA projections) or `randinit_full100` (untrained networks, arms named
+Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `full100_p10` (`probes_native.tar`: native
+embeddings), `pca_cohort` (`probes_pca128.tar`: 128-dimensional PCA projections) or `randinit_full100`
+(`probes_untrained.tar`: untrained networks, arms named
 `random_init_<model>_seed0`); `<read-out>` = `fnn` (trained probe) or `euclidean` (raw distance, nothing
 fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for `randinit_full100`), so
 90 cells per grid (66).
@@ -86,7 +87,7 @@ fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for
 The paper's score is the Spearman ρ in `*_metrics.txt`; for the `euclidean` read-out, its magnitude
 (distance falls as similarity rises).
 
-## `functional_annotation.tar`
+## `analysis_functional_annotation.tar`
 
 `functional_annotation/`: leave-one-out 1-nearest-neighbour annotation transfer (goPredSim protocol) for
 15 pretrained embedding sets, 11 untrained controls and two MMseqs2 homology baselines.
@@ -123,7 +124,7 @@ E-value or by identity. The EC score in the
 paper is `exact` (all four EC fields agree), the GO-MF score `f1` (protein-centric F1 of the ancestor-closed
 term sets, root excluded).
 
-## `experimental_tm.tar`
+## `analysis_experimental_tm.tar`
 
 `experimental_tm/`: test pairs where both proteins have an experimental PDB chain (one representative chain
 per protein from residue-level SIFTS, resolution ≤ 3.0 Å), aligned Cα-only with US-align.
@@ -137,7 +138,7 @@ per protein from residue-level SIFTS, resolution ≤ 3.0 Å), aligned Cα-only w
 
 The three `exptm_*` files share the pair-table format, so the probes score on them unchanged.
 
-## `distance_histograms.tar`
+## `analysis_distance_histograms.tar`
 
 `distance_histograms/random_pairs/` (Figure 2: the 5,000,000 random pairs) and
 `distance_histograms/aligner_pairs/` (Table S4 and the Supplement's aligner-found distributions: the
@@ -152,7 +153,7 @@ Every normalization in the paper (min–max, division by a percentile or the med
 these raw-scale histograms. The JSON field `source` records where the distances were read on the
 authors' machines.
 
-## `random_pairs.tar`
+## `pairs_random.tar`
 
 `random_pairs/`:
 
@@ -162,7 +163,7 @@ authors' machines.
 | `summary.json` | sampling parameters and convergence checks |
 | `convergence.csv` | Spearman ρ between selected models and distance quartiles as the sample grows |
 
-## `new2024.tar`
+## `testset_new2024.tar`
 
 `new2024/`: a test set of proteins new since the models were trained (from UniRef50 clusters new in
 release 2025_01 with no member in any 2024_01 cluster; structures predicted with ColabFold).

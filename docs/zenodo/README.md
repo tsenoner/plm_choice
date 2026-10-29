@@ -16,23 +16,27 @@ and GO molecular-function terms. Formats are described in `DATA_DICTIONARY.md`.
 
 ## Files
 
-| file | size | contents |
-|---|---:|---|
-| `README.md`, `DATA_DICTIONARY.md`, `CITATION.cff` | | this description, the file formats, citation metadata |
-| `ankh_base.h5` … `random_1024.h5` (15 files) | 32.7 GB | one embedding per protein for each of the 14 pLMs and the random Gaussian control; 540,881 Swiss-Prot proteins (526,871 for ESM1b and CLEAN) |
-| `pair_tables_splits.tar` | 1.0 GB | the deduplicated pair set: train, validation and test pairs with PIDE, HFSP and TM-score |
-| `pair_table_counts.tar` | 10 kB | pair counts per split and target |
-| `identical_sequence_mask.tar` | 2.7 MB | which pairs join two identical sequences |
-| `probes_full100_p10.tar` | 3.1 GB | the probe grid: trained probes and raw-distance scores, 15 embedding sets × 3 targets |
-| `probes_pca_cohort.tar` | 3.1 GB | the same grid on 128-dimensional PCA projections |
-| `probes_randinit_full100.tar` | 2.3 GB | the same grid on 11 untrained (random-initialisation) networks |
-| `functional_annotation.tar` | 202 MB | EC and GO-MF cohorts, 1-nearest-neighbour annotation-transfer results, the MMseqs2 homology baseline |
-| `experimental_tm.tar` | 0.8 MB | test pairs rescored from experimental PDB structures with US-align |
-| `distance_histograms.tar` | 59 MB | per-model distance distributions over random pairs and over aligner-found pairs |
-| `random_pairs.tar` | 601 MB | 5,000,000 uniformly drawn protein pairs with their embedding distances under every model |
-| `new2024.tar` | 74 MB | the New2024 test set: pairs among proteins new in UniRef50 2025_01, the 5 excluded proteins, embeddings |
+Zenodo shows files in one flat list, so the name's prefix says what kind of file it is: `embeddings_`,
+`pairs_`, `probes_`, `analysis_` or `testset_`.
 
-Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`.
+| file | size | unpacks to | contents |
+|---|---:|---|---|
+| `README.md`, `DATA_DICTIONARY.md`, `CITATION.cff` | | | this description, the file formats, citation metadata |
+| `embeddings_<model>.h5` (15 files) | 32.7 GB | | one embedding per protein for each of the 14 pLMs and the random Gaussian control; 540,881 Swiss-Prot proteins (526,871 for ESM1b and CLEAN) |
+| `pairs_splits.tar` | 1.0 GB | `sprot_pre2024_e1/sets/` | the deduplicated pair set: training, validation and test pairs with PIDE, HFSP and TM-score |
+| `pairs_counts.tar` | 10 kB | `pair_table_counts/` | pair counts per split and target |
+| `pairs_identical_mask.tar` | 2.7 MB | `ridge_identical/` | which pairs join two identical sequences |
+| `pairs_random.tar` | 601 MB | `random_pairs/` | 5,000,000 uniformly drawn protein pairs with their embedding distances under every model |
+| `probes_native.tar` | 3.1 GB | `full100_p10/` | the probe grid: trained probes and raw-distance scores, 15 embedding sets × 3 targets |
+| `probes_pca128.tar` | 3.1 GB | `pca_cohort/` | the same grid on 128-dimensional PCA projections |
+| `probes_untrained.tar` | 2.3 GB | `randinit_full100/` | the same grid on 11 untrained (random-initialisation) networks |
+| `analysis_functional_annotation.tar` | 202 MB | `functional_annotation/` | EC and GO-MF cohorts, 1-nearest-neighbour annotation-transfer results, the MMseqs2 homology baseline |
+| `analysis_experimental_tm.tar` | 0.8 MB | `experimental_tm/` | test pairs rescored from experimental PDB structures with US-align |
+| `analysis_distance_histograms.tar` | 59 MB | `distance_histograms/` | per-model distance distributions over random pairs and over aligner-found pairs |
+| `testset_new2024.tar` | 74 MB | `new2024/` | the New2024 test set: pairs among proteins new in UniRef50 2025_01, the 5 excluded proteins, embeddings |
+
+Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`. Their folder names
+are the ones the code uses.
 
 ## Data in brief
 
@@ -57,20 +61,28 @@ Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <f
 ```python
 import h5py, numpy as np, pandas as pd
 
-pairs = pd.read_parquet("sprot_pre2024_e1/sets/test.parquet")       # from pair_tables_splits.tar
+pairs = pd.read_parquet("sprot_pre2024_e1/sets/test.parquet")       # from pairs_splits.tar
 row = pairs.iloc[0]
-with h5py.File("esm2_650m.h5") as h:
+with h5py.File("embeddings_esm2_650m.h5") as h:
     a = np.asarray(h[row["query"]], dtype=np.float32).ravel()
     b = np.asarray(h[row["target"]], dtype=np.float32).ravel()
 print(np.linalg.norm(a - b), row[["fident", "hfsp", "alntmscore"]].to_dict())
 ```
 
-`.ravel()` matters for `prott5.h5` and `prottucker.h5`, which store each vector with shape (1, d).
+`.ravel()` matters for ProtT5 and ProtTucker, which store each vector with shape (1, d).
+
+The code in the repository reads embeddings as `<model>.h5` from one directory. Drop the prefix after
+downloading:
+
+```bash
+for f in embeddings_*.h5; do mv "$f" "${f#embeddings_}"; done
+```
 
 ## Changes from version 1 (2025)
 
-- The embedding files are replaced in place by the ones behind the revised results; they cover a different
-  set of proteins (for example, `esm2_3b.h5` grew from 4.6 to 5.7 GB).
+- The embedding files are replaced by the ones behind the revised results; they cover a different set of
+  proteins (for example, the ESM2 3B file grew from 4.6 to 5.7 GB). They are now named
+  `embeddings_<model>.h5` (version 1: `<model>.h5`).
 - The pair set is deduplicated: 75.8 million pairs, each once (version 1: 113 million rows).
 - The probes are retrained on all training pairs instead of a 10% sample, with patience 10 instead of 5,
   and come with a PCA grid and an untrained-network control.

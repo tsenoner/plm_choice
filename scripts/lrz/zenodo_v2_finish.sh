@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Finish version 2 of the Zenodo record: upload the documentation from docs/zenodo/, remove
-# the 2025 supplementary_data.zip the new version inherited, and write the metadata from
+# Finish version 2 of the Zenodo record: give the files their published names
+# (docs/zenodo/file_names.tsv), upload the documentation from docs/zenodo/, remove the 2025
+# supplementary_data.zip the new version inherited, and write the metadata from
 # docs/zenodo/metadata.json. Small API calls only, so it runs on the login node:
 #
 #     DRY_RUN=1 scripts/lrz/zenodo_v2_finish.sh     # show what would change
@@ -30,6 +31,23 @@ api "$API/deposit/depositions/$DEPOSIT_ID" > "$WORK/dep.json"
 STATE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$WORK/dep.json")"
 [ "$STATE" != "done" ] || { echo "deposit $DEPOSIT_ID is already published; nothing to do"; exit 1; }
 BUCKET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["links"]["bucket"])' "$WORK/dep.json")"
+
+# 0. Published names. Files are built and uploaded under their working names (the ones
+#    zenodo_upload.sbatch and zenodo_stage_v2.sh stage, so their .done markers stay valid) and
+#    renamed here by docs/zenodo/file_names.tsv. A rename keeps the stored bytes; a file
+#    already under its published name is left alone, so a re-run changes nothing.
+api "$API/deposit/depositions/$DEPOSIT_ID/files" > "$WORK/files.json"
+grep -v '^#' "$DOCS/file_names.tsv" | while IFS=$'\t' read -r old new; do
+    fid="$(python3 -c '
+import json, sys
+print(next((f["id"] for f in json.load(open(sys.argv[1])) if f["filename"] == sys.argv[2]), ""))
+' "$WORK/files.json" "$old")"
+    [ -n "$fid" ] || continue
+    if [ -n "$DRY_RUN" ]; then echo "would rename $old -> $new"; continue; fi
+    api -X PUT -H "Content-Type: application/json" --data "{\"filename\": \"$new\"}" \
+        "$API/deposit/depositions/$DEPOSIT_ID/files/$fid" > /dev/null
+    echo "renamed $old -> $new"
+done
 
 # 1. Documentation: PUT to the bucket under the same name replaces the inherited 2025 file.
 for name in README.md DATA_DICTIONARY.md CITATION.cff; do

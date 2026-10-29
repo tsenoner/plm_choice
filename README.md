@@ -141,10 +141,13 @@ artifacts that live on Zenodo instead.
 
 ## Data availability
 
-Embeddings, pair tables and metrics: Zenodo concept DOI
-[`10.5281/zenodo.17469267`](https://doi.org/10.5281/zenodo.17469267) — 15 HDF5 embedding
-files over 542,299 Swiss-Prot proteins, plus the similarity scores and supplementary
-data.
+Embeddings, pair tables, probes and analysis data: Zenodo concept DOI
+[`10.5281/zenodo.17469267`](https://doi.org/10.5281/zenodo.17469267). Version 2 (2026, about
+43 GB) holds 15 HDF5 embedding files over 540,881 Swiss-Prot proteins, the deduplicated pair
+tables, the probe grids and the functional, experimental-structure and distance data; its
+README and data dictionary are in [`docs/zenodo/`](docs/zenodo/README.md). The embedding files
+are published as `embeddings_<model>.h5`; the code reads `<model>.h5`, so drop the prefix after
+downloading.
 
 Two caveats worth stating plainly:
 
