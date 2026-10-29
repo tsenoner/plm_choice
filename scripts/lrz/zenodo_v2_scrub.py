@@ -68,7 +68,8 @@ PROBE_EMBEDDINGS = {
 BLOCK = [
     "/Users", "/dss", "/dev/shm", "/private/tmp", "/opt/homebrew", "ge45ted2", "tsenoner",
     "pr63ci", "claude", "internal_backup", "full100", "pca_cohort", "randinit_full100",
-    "sprot_pre2024_e1", "ridge_", "_v2", "noPB", "sfcap", "published_tau", "wandb",
+    # "ridge_identical"/"ridge_full", not "ridge_": the Gene Ontology cites "GOC:mtg_cambridge_2009"
+    "sprot_pre2024_e1", "ridge_identical", "ridge_full", "_v2", "noPB", "sfcap", "published_tau", "wandb",
     "c1_strat", "functional_2026", "slices_union", "exclusion freeze",
 ]
 # substrings long enough that chance hits in binary data are negligible (scanned over whole files)
