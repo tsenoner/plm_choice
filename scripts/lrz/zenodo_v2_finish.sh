@@ -143,7 +143,7 @@ files_ok = d["files"].get("default_preview") == "README.md"   # Zenodo keeps no 
 affil_ok = all(ids_now[n] == affil[n] for n in affil)
 
 if files_ok and affil_ok:
-    print("preview, file order and ROR affiliations already set")
+    print("preview and ROR affiliations already set")
 elif dry:
     print("would set default preview README.md, the file order and the ROR affiliations:", affil)
 else:
