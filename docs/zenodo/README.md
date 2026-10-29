@@ -35,8 +35,8 @@ Zenodo shows files in one flat list, so the name's prefix says what kind of file
 | `analysis_distance_histograms.tar` | 59 MB | `distance_histograms/` | per-model distance distributions over random pairs and over aligner-found pairs |
 | `testset_new2024.tar` | 74 MB | `new2024/` | the New2024 test set: pairs among proteins new in UniRef50 2025_01, the 5 excluded proteins, embeddings |
 
-Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`. Their folder names
-are the ones the code uses.
+Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`. The pair and probe
+archives keep the folder names the code reads.
 
 ## Data in brief
 
