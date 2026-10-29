@@ -93,7 +93,58 @@ else
     echo "metadata written"
 fi
 
-# 4. What the draft now holds.
+# 4. The record page previews README.md and lists the files in the README's order; without
+#    this Zenodo previews the first previewable file by name (DATA_DICTIONARY.md). Only the
+#    InvenioRDM API sets these, and its PUT replaces the whole draft: so the draft is read in
+#    that format, only `files` is changed, and the descriptive metadata must match before and after.
+python3 - "$WORK/auth" "$DEPOSIT_ID" "$DOCS/file_names.tsv" "${DRY_RUN:-}" <<'PY'
+import json, sys, urllib.error, urllib.request
+auth = open(sys.argv[1]).read().split(":", 1)[1].strip()
+dep, tsv, dry = sys.argv[2], sys.argv[3], sys.argv[4]
+draft = f"https://zenodo.org/api/records/{dep}/draft"
+rdm = "application/vnd.inveniordm.v1+json"
+
+def call(method, url, body=None, accept=rdm):
+    data = None if body is None else json.dumps(body).encode()
+    r = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": auth, "Accept": accept, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(r) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"{method} {url}: HTTP {e.code} {e.read()[:500]!r}")
+
+def described():
+    m = call("GET", f"https://zenodo.org/api/deposit/depositions/{dep}", accept="application/json")["metadata"]
+    keys = ("title", "creators", "description", "version", "publication_date", "upload_type", "license",
+            "access_right", "keywords", "related_identifiers", "prereserve_doi")
+    return {k: m.get(k) for k in keys}
+
+order = ["README.md", "DATA_DICTIONARY.md", "CITATION.cff"] + [
+    line.split("\t")[1].strip() for line in open(tsv) if line.strip() and not line.startswith("#")]
+d = call("GET", draft)
+entries = d["files"].get("entries") or {}
+have = set(entries) if isinstance(entries, dict) else {e["key"] for e in entries}
+if have != set(order):
+    sys.exit(f"draft files differ from the expected list: {sorted(have ^ set(order))}")
+if d["files"].get("default_preview") == "README.md" and d["files"].get("order") == order:
+    print("preview and file order already set"); sys.exit()
+if dry:
+    print("would set default preview README.md and the file order:", ", ".join(order)); sys.exit()
+before = described()
+body = {k: d[k] for k in ("access", "metadata", "pids", "custom_fields") if k in d}
+body["files"] = {"enabled": True, "default_preview": "README.md", "order": order}
+out = call("PUT", draft, body)
+after = described()
+moved = [k for k in before if before[k] != after[k]]
+if moved:
+    sys.exit(f"metadata changed by the files update: {moved} -- check the draft before publishing")
+if out["files"].get("default_preview") != "README.md":
+    sys.exit(f"default preview not set: {out['files'].get('default_preview')!r}")
+print("default preview README.md; file order set; metadata unchanged")
+PY
+
+# 5. What the draft now holds.
 api "$API/deposit/depositions/$DEPOSIT_ID" > "$WORK/dep.json"
 python3 - "$WORK/dep.json" <<'PY'
 import json, sys
