@@ -149,6 +149,17 @@ elif dry:
 else:
     before = described()
     body = {k: d[k] for k in ("access", "metadata", "pids", "custom_fields") if k in d}
+    md = body["metadata"]
+    # A read returns vocabulary entries with their display fields (title, icon, props); a write
+    # takes only the id, and rejects the rest.
+    ident = lambda v: {"id": v["id"]} if isinstance(v, dict) and "id" in v else v  # noqa: E731
+    md["resource_type"] = ident(md.get("resource_type"))
+    md["rights"] = [ident(r) for r in md.get("rights", [])]
+    md["languages"] = [ident(x) for x in md.get("languages", [])]
+    for ri in md.get("related_identifiers", []):
+        for k in ("relation_type", "resource_type"):
+            if k in ri:
+                ri[k] = ident(ri[k])
     for c in body["metadata"]["creators"]:
         c["affiliations"] = [{"id": r} for r in affil[c["person_or_org"]["name"]]]
     body["files"] = {"enabled": True, "default_preview": "README.md", "order": order}
