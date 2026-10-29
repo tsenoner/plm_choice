@@ -1,0 +1,9 @@
+{
+  "_comment": "ROR ids of each creator's affiliations for the Zenodo record (zenodo_v2_finish.sh). TUM-IAS has no ROR id of its own and is part of TUM.",
+  "Senoner, Tobias": ["02kkvpp62"],
+  "Koludarov, Ivan": ["02kkvpp62"],
+  "Günther, Joshua": ["02kkvpp62"],
+  "Shehu, Amarda": ["02jqj7156"],
+  "Rost, Burkhard": ["02kkvpp62"],
+  "Bromberg, Yana": ["03czfpz43", "02kkvpp62"]
+}

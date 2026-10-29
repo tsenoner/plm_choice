@@ -93,16 +93,19 @@ else
     echo "metadata written"
 fi
 
-# 4. The record page previews README.md and lists the files in the README's order; without
-#    this Zenodo previews the first previewable file by name (DATA_DICTIONARY.md). Only the
-#    InvenioRDM API sets these, and its PUT replaces the whole draft: so the draft is read in
-#    that format, only `files` is changed, and the descriptive metadata must match before and after.
-python3 - "$WORK/auth" "$DEPOSIT_ID" "$DOCS/file_names.tsv" "${DRY_RUN:-}" <<'PY'
+# 4. What only the InvenioRDM API sets: README.md as the record page's preview (otherwise Zenodo
+#    previews the first previewable file by name), the file order of the README, the creators'
+#    affiliations linked to their ROR ids (docs/zenodo/affiliations.json), and a reserved DOI, so
+#    the form shows the DOI the README and CITATION.cff state before anything is published. That
+#    API's PUT replaces the whole draft, so the draft is read in its format, only these parts are
+#    changed, and every other descriptive field must match before and after.
+python3 - "$WORK/auth" "$DEPOSIT_ID" "$DOCS/file_names.tsv" "$DOCS/affiliations.json" "${DRY_RUN:-}" <<'PY'
 import json, sys, urllib.error, urllib.request
 auth = open(sys.argv[1]).read().split(":", 1)[1].strip()
-dep, tsv, dry = sys.argv[2], sys.argv[3], sys.argv[4]
+dep, tsv, aff_file, dry = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 draft = f"https://zenodo.org/api/records/{dep}/draft"
 rdm = "application/vnd.inveniordm.v1+json"
+want_doi = f"10.5281/zenodo.{dep}"
 
 def call(method, url, body=None, accept=rdm):
     data = None if body is None else json.dumps(body).encode()
@@ -116,32 +119,63 @@ def call(method, url, body=None, accept=rdm):
 
 def described():
     m = call("GET", f"https://zenodo.org/api/deposit/depositions/{dep}", accept="application/json")["metadata"]
-    keys = ("title", "creators", "description", "version", "publication_date", "upload_type", "license",
-            "access_right", "keywords", "related_identifiers", "prereserve_doi")
-    return {k: m.get(k) for k in keys}
+    keys = ("title", "description", "version", "publication_date", "upload_type", "license",
+            "access_right", "keywords", "related_identifiers")
+    out = {k: m.get(k) for k in keys}
+    out["creators"] = [(c.get("name"), c.get("orcid")) for c in m.get("creators", [])]
+    return out
 
 order = ["README.md", "DATA_DICTIONARY.md", "CITATION.cff"] + [
     line.split("\t")[1].strip() for line in open(tsv) if line.strip() and not line.startswith("#")]
+affil = {k: v for k, v in json.load(open(aff_file)).items() if not k.startswith("_")}
+
 d = call("GET", draft)
 entries = d["files"].get("entries") or {}
 have = set(entries) if isinstance(entries, dict) else {e["key"] for e in entries}
 if have != set(order):
     sys.exit(f"draft files differ from the expected list: {sorted(have ^ set(order))}")
-if d["files"].get("default_preview") == "README.md" and d["files"].get("order") == order:
-    print("preview and file order already set"); sys.exit()
-if dry:
-    print("would set default preview README.md and the file order:", ", ".join(order)); sys.exit()
-before = described()
-body = {k: d[k] for k in ("access", "metadata", "pids", "custom_fields") if k in d}
-body["files"] = {"enabled": True, "default_preview": "README.md", "order": order}
-out = call("PUT", draft, body)
-after = described()
-moved = [k for k in before if before[k] != after[k]]
-if moved:
-    sys.exit(f"metadata changed by the files update: {moved} -- check the draft before publishing")
-if out["files"].get("default_preview") != "README.md":
-    sys.exit(f"default preview not set: {out['files'].get('default_preview')!r}")
-print("default preview README.md; file order set; metadata unchanged")
+names = [c["person_or_org"].get("name") for c in d["metadata"]["creators"]]
+if set(names) != set(affil):
+    sys.exit(f"creators {names} do not match {aff_file}")
+ids_now = {c["person_or_org"]["name"]: [a.get("id") for a in c.get("affiliations", [])]
+           for c in d["metadata"]["creators"]}
+files_ok = d["files"].get("default_preview") == "README.md" and d["files"].get("order") == order
+affil_ok = all(ids_now[n] == affil[n] for n in affil)
+
+if files_ok and affil_ok:
+    print("preview, file order and ROR affiliations already set")
+elif dry:
+    print("would set default preview README.md, the file order and the ROR affiliations:", affil)
+else:
+    before = described()
+    body = {k: d[k] for k in ("access", "metadata", "pids", "custom_fields") if k in d}
+    for c in body["metadata"]["creators"]:
+        c["affiliations"] = [{"id": r} for r in affil[c["person_or_org"]["name"]]]
+    body["files"] = {"enabled": True, "default_preview": "README.md", "order": order}
+    out = call("PUT", draft, body)
+    if out.get("errors"):
+        sys.exit(f"Zenodo rejected part of the update: {out['errors']}")
+    after = described()
+    moved = [k for k in before if before[k] != after[k]]
+    if moved:
+        sys.exit(f"metadata changed beyond files and affiliations: {moved} -- check the draft")
+    got = {c["person_or_org"]["name"]: [(a.get("id"), a.get("name")) for a in c.get("affiliations", [])]
+           for c in out["metadata"]["creators"]}
+    if out["files"].get("default_preview") != "README.md" or any(
+            [i for i, _ in got[n]] != affil[n] for n in affil):
+        sys.exit(f"update did not take: preview {out['files'].get('default_preview')!r}, affiliations {got}")
+    print("default preview README.md; file order set; affiliations:", got)
+
+d = call("GET", draft)
+doi = (d.get("pids") or {}).get("doi", {}).get("identifier")
+if not doi:
+    if dry:
+        print(f"would reserve the DOI (expected {want_doi})"); sys.exit()
+    d = call("POST", f"{draft}/pids/doi")
+    doi = (d.get("pids") or {}).get("doi", {}).get("identifier")
+if doi != want_doi:
+    sys.exit(f"reserved DOI {doi!r} differs from {want_doi}, which README.md and CITATION.cff state")
+print(f"DOI reserved: {doi}")
 PY
 
 # 5. What the draft now holds.
