@@ -66,6 +66,16 @@ inputs give identical embeddings, so these pairs are excluded from the distance 
 | `{train,val,test}_identical_keyed.parquet` | `query`, `target` of the identical pairs only |
 | `identical_pairs.json` | counts per split and in total |
 
+## `pairs_random.tar`
+
+`random_pairs/`:
+
+| file | contents |
+|---|---|
+| `random_pairs_distances.parquet` | 5,000,000 pairs drawn uniformly from the 526,871-protein cohort (seed 42): `query`, `target`, and `dist_<model>`, the Euclidean distance under each of the 15 embedding sets |
+| `summary.json` | sampling parameters and convergence checks |
+| `convergence.csv` | Spearman ρ between selected models and distance quartiles as the sample grows |
+
 ## Probe grids: `probes_native.tar`, `probes_pca128.tar`, `probes_untrained.tar`
 
 Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `full100_p10` (`probes_native.tar`: native
@@ -152,16 +162,6 @@ The three `exptm_*` files share the pair-table format, so the probes score on th
 Every normalization in the paper (min–max, division by a percentile or the median) is an affine map of
 these raw-scale histograms. The JSON field `source` records where the distances were read on the
 authors' machines.
-
-## `pairs_random.tar`
-
-`random_pairs/`:
-
-| file | contents |
-|---|---|
-| `random_pairs_distances.parquet` | 5,000,000 pairs drawn uniformly from the 526,871-protein cohort (seed 42): `query`, `target`, and `dist_<model>`, the Euclidean distance under each of the 15 embedding sets |
-| `summary.json` | sampling parameters and convergence checks |
-| `convergence.csv` | Spearman ρ between selected models and distance quartiles as the sample grows |
 
 ## `testset_new2024.tar`
 
