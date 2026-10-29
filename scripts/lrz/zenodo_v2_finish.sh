@@ -94,7 +94,7 @@ else
 fi
 
 # 4. What only the InvenioRDM API sets: README.md as the record page's preview (otherwise Zenodo
-#    previews the first previewable file by name), the file order of the README, the creators'
+#    previews the first previewable file by name; a requested file order is not kept), the creators'
 #    affiliations linked to their ROR ids (docs/zenodo/affiliations.json), and a reserved DOI, so
 #    the form shows the DOI the README and CITATION.cff state before anything is published. That
 #    API's PUT replaces the whole draft, so the draft is read in its format, only these parts are
@@ -139,7 +139,7 @@ if set(names) != set(affil):
     sys.exit(f"creators {names} do not match {aff_file}")
 ids_now = {c["person_or_org"]["name"]: [a.get("id") for a in c.get("affiliations", [])]
            for c in d["metadata"]["creators"]}
-files_ok = d["files"].get("default_preview") == "README.md" and d["files"].get("order") == order
+files_ok = d["files"].get("default_preview") == "README.md"   # Zenodo keeps no custom order (lists by name)
 affil_ok = all(ids_now[n] == affil[n] for n in affil)
 
 if files_ok and affil_ok:
@@ -175,7 +175,7 @@ else:
     if out["files"].get("default_preview") != "README.md" or any(
             [i for i, _ in got[n]] != affil[n] for n in affil):
         sys.exit(f"update did not take: preview {out['files'].get('default_preview')!r}, affiliations {got}")
-    print("default preview README.md; file order set; affiliations:", got)
+    print("default preview README.md; affiliations:", got)
 
 d = call("GET", draft)
 doi = (d.get("pids") or {}).get("doi", {}).get("identifier")
