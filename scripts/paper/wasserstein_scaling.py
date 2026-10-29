@@ -76,11 +76,11 @@ ARMS = (
 #: (CLEAN is an ESM-1b head, ProtTucker a ProtT5 head).
 FAMILY = {
     "ankh_base": "Ankh", "ankh_large": "Ankh",
-    "clean": "ESM-1", "esm1b": "ESM-1",
-    "esm2_8m": "ESM-2", "esm2_35m": "ESM-2", "esm2_150m": "ESM-2",
-    "esm2_650m": "ESM-2", "esm2_3b": "ESM-2",
-    "esm3_open": "ESM-3",
-    "esmc_300m": "ESM-C", "esmc_600m": "ESM-C",
+    "clean": "ESM1", "esm1b": "ESM1",
+    "esm2_8m": "ESM2", "esm2_35m": "ESM2", "esm2_150m": "ESM2",
+    "esm2_650m": "ESM2", "esm2_3b": "ESM2",
+    "esm3_open": "ESM3",
+    "esmc_300m": "ESMC", "esmc_600m": "ESMC",
     "prott5": "ProtT5", "prottucker": "ProtT5",
 }
 

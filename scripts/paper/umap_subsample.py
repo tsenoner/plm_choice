@@ -55,8 +55,8 @@ SUPERKINGDOMS = ("Bacteria", "Eukaryota", "Archaea", "Viruses")
 CATH = {"1": "1 mainly α", "2": "2 mainly β", "3": "3 α/β", "4": "4 few SS"}
 SK_COLOURS = {"Bacteria": "#1f77b4", "Eukaryota": "#d62728", "Archaea": "#2ca02c", "Viruses": "#9467bd"}
 CATH_COLOURS = {"1 mainly α": "#e6550d", "2 mainly β": "#3182bd", "3 α/β": "#31a354", "4 few SS": "#756bb1"}
-DISPLAY = {"prott5": "ProtT5", "esmc_600m": "ESM C-600M", "esm2_3b": "ESM2-3B", "random_1024": "Random (control)",
-           "clean": "CLEAN", "ankh_large": "Ankh Large", "esm2_8m": "ESM2-8M", "prottucker": "ProtTucker"}
+DISPLAY = {"prott5": "ProtT5", "esmc_600m": "ESMC 600M", "esm2_3b": "ESM2 3B", "random_1024": "Random (control)",
+           "clean": "CLEAN", "ankh_large": "Ankh large", "esm2_8m": "ESM2 8M", "prottucker": "ProtTucker"}
 
 
 def log(msg: str) -> None:

@@ -37,19 +37,19 @@ FREEZE = REPO / "freeze"
 
 # (key, label, family). Order: by family, then by size -- the order the reader scans.
 MODELS = [
-    ("ankh_base", "Ankh-base", "Ankh"),
-    ("ankh_large", "Ankh-large", "Ankh"),
+    ("ankh_base", "Ankh base", "Ankh"),
+    ("ankh_large", "Ankh large", "Ankh"),
     ("prott5", "ProtT5", "ProtT5"),
-    ("esm1b", "ESM-1b", "ESM-1"),
-    ("esm2_8m", "ESM-2 8M", "ESM-2"),
-    ("esm2_35m", "ESM-2 35M", "ESM-2"),
-    ("esm2_150m", "ESM-2 150M", "ESM-2"),
-    ("esm2_650m", "ESM-2 650M", "ESM-2"),
-    ("esm2_3b", "ESM-2 3B", "ESM-2"),
-    ("esmc_300m", "ESM-C 300M", "ESM-C"),
-    ("esmc_600m", "ESM-C 600M", "ESM-C"),
+    ("esm1b", "ESM1b", "ESM1"),
+    ("esm2_8m", "ESM2 8M", "ESM2"),
+    ("esm2_35m", "ESM2 35M", "ESM2"),
+    ("esm2_150m", "ESM2 150M", "ESM2"),
+    ("esm2_650m", "ESM2 650M", "ESM2"),
+    ("esm2_3b", "ESM2 3B", "ESM2"),
+    ("esmc_300m", "ESMC 300M", "ESMC"),
+    ("esmc_600m", "ESMC 600M", "ESMC"),
 ]
-MARKER = {"Ankh": "s", "ProtT5": "D", "ESM-1": "^", "ESM-2": "o", "ESM-C": "v"}
+MARKER = {"Ankh": "s", "ProtT5": "D", "ESM1": "^", "ESM2": "o", "ESMC": "v"}
 INK, MUTED, GRID = "#1f2328", "#57606a", "#d0d7de"
 
 
@@ -115,14 +115,14 @@ def main() -> int:
 
     # --- B: fold change against parameter count ------------------------------------------
     b.axhline(1, color=MUTED, lw=0.8, ls="--", zorder=1)
-    esm2 = [r for r in rows if r["fam"] == "ESM-2"]
+    esm2 = [r for r in rows if r["fam"] == "ESM2"]
     b.plot([r["params"] for r in esm2], [r["ratio"] for r in esm2],
-           color=EMBEDDING_FAMILY_COLOR_MAP["ESM-2"], lw=1.0, alpha=0.6, zorder=2)
+           color=EMBEDDING_FAMILY_COLOR_MAP["ESM2"], lw=1.0, alpha=0.6, zorder=2)
     for r in rows:
         c, m = EMBEDDING_FAMILY_COLOR_MAP[r["fam"]], MARKER[r["fam"]]
         b.scatter(r["params"], r["ratio"], s=40, marker=m, facecolor=c, edgecolor=INK, linewidth=0.6, zorder=3)
-    lab = {"ankh_base": "Ankh-base", "ankh_large": "Ankh-large", "prott5": "ProtT5", "esm1b": "ESM-1b",
-           "esmc_300m": "ESM-C 300M", "esmc_600m": "ESM-C 600M"}
+    lab = {"ankh_base": "Ankh base", "ankh_large": "Ankh large", "prott5": "ProtT5", "esm1b": "ESM1b",
+           "esmc_300m": "ESMC 300M", "esmc_600m": "ESMC 600M"}
     off = {"ankh_base": (-7, 0), "ankh_large": (0, -11), "prott5": (0, 9), "esm1b": (7, 0),
            "esmc_300m": (-7, 0), "esmc_600m": (7, 0)}
     for r in rows:
@@ -131,7 +131,7 @@ def main() -> int:
             b.annotate(lab[r["key"]], (r["params"], r["ratio"]), xytext=(dx, dy), textcoords="offset points",
                        fontsize=7, color=INK, ha="left" if dx > 0 else ("right" if dx < 0 else "center"),
                        va="center")
-    b.text(4e7, 0.43, "ESM-2, 8M → 3B:\n375× the parameters", fontsize=7, color=INK, ha="center", va="center")
+    b.text(4e7, 0.43, "ESM2, 8M → 3B:\n375× the parameters", fontsize=7, color=INK, ha="center", va="center")
     b.set_xscale("log")
     b.set_yscale("log", base=2)
     b.set_ylim(0.2, 6.5)

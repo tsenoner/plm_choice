@@ -62,6 +62,10 @@ LABELS = {
     "ESM2-150M": "esm2_150m", "ESM2-650M": "esm2_650m", "ESM2-3B": "esm2_3b",
     "ESM3": "esm3_open", "ESM C-300M": "esmc_300m", "ESM C-600M": "esmc_600m",
     "ProtT5": "prott5", "ProtTucker": "prottucker", "Random": "random_1024",
+    # the manuscript's spelling since 2026-10-29 (listed last, so NAME prints it)
+    "Ankh base": "ankh_base", "Ankh large": "ankh_large", "ESM1b": "esm1b",
+    "ESM2 8M": "esm2_8m", "ESM2 35M": "esm2_35m", "ESM2 150M": "esm2_150m",
+    "ESM2 650M": "esm2_650m", "ESM2 3B": "esm2_3b", "ESMC 300M": "esmc_300m", "ESMC 600M": "esmc_600m",
 }
 NAME = {v: k for k, v in LABELS.items()}
 BLOCK = {"PIDE": "fident", "TM-score": "alntmscore", "HFSP": "hfsp"}

@@ -50,10 +50,10 @@ import numpy as np
 import pandas as pd
 from scipy import optimize, stats
 
-DISPLAY = {"prott5": "ProtT5", "prottucker": "ProtTucker", "esm1b": "ESM-1b", "clean": "CLEAN",
-           "esm2_8m": "ESM-2 8M", "esm2_35m": "ESM-2 35M", "esm2_150m": "ESM-2 150M",
-           "esm2_650m": "ESM-2 650M", "esm2_3b": "ESM-2 3B", "esm3_open": "ESM-3",
-           "esmc_300m": "ESM-C 300M", "esmc_600m": "ESM-C 600M", "ankh_base": "Ankh base",
+DISPLAY = {"prott5": "ProtT5", "prottucker": "ProtTucker", "esm1b": "ESM1b", "clean": "CLEAN",
+           "esm2_8m": "ESM2 8M", "esm2_35m": "ESM2 35M", "esm2_150m": "ESM2 150M",
+           "esm2_650m": "ESM2 650M", "esm2_3b": "ESM2 3B", "esm3_open": "ESM3",
+           "esmc_300m": "ESMC 300M", "esmc_600m": "ESMC 600M", "ankh_base": "Ankh base",
            "ankh_large": "Ankh large", "random_1024": "Gaussian control"}
 SPECIALISTS = {"clean", "prottucker"}
 FOUNDATION = [a for a in DISPLAY if a not in SPECIALISTS and a != "random_1024"]  # Figure 1's twelve

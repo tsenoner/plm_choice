@@ -40,9 +40,9 @@ from scipy import stats
 
 TARGETS = ("fident", "alntmscore", "hfsp")
 LADDERS = {
-    "ESM-2": ["esm2_8m", "esm2_35m", "esm2_150m", "esm2_650m", "esm2_3b"],
+    "ESM2": ["esm2_8m", "esm2_35m", "esm2_150m", "esm2_650m", "esm2_3b"],
     "Ankh": ["ankh_base", "ankh_large"],
-    "ESM-C": ["esmc_300m", "esmc_600m"],
+    "ESMC": ["esmc_300m", "esmc_600m"],
 }
 # "all" = every pair of the target; "lt95" = drops near-identical pairs (PIDE >= 0.95), which
 # are ~half of New2024's PIDE pairs and compress every model towards the same score. A pair
@@ -167,10 +167,10 @@ def main() -> int:
 
 
 # Table S1 order and names, so the supplement's two per-model tables read the same way.
-DISPLAY = [("prott5", "ProtT5"), ("prottucker", "ProtTucker"), ("esm1b", "ESM-1b"), ("clean", "CLEAN"),
-           ("esm2_8m", "ESM-2 8M"), ("esm2_35m", "ESM-2 35M"), ("esm2_150m", "ESM-2 150M"),
-           ("esm2_650m", "ESM-2 650M"), ("esm2_3b", "ESM-2 3B"), ("esm3_open", "ESM-3"),
-           ("esmc_300m", "ESM-C 300M"), ("esmc_600m", "ESM-C 600M"), ("ankh_base", "Ankh base"),
+DISPLAY = [("prott5", "ProtT5"), ("prottucker", "ProtTucker"), ("esm1b", "ESM1b"), ("clean", "CLEAN"),
+           ("esm2_8m", "ESM2 8M"), ("esm2_35m", "ESM2 35M"), ("esm2_150m", "ESM2 150M"),
+           ("esm2_650m", "ESM2 650M"), ("esm2_3b", "ESM2 3B"), ("esm3_open", "ESM3"),
+           ("esmc_300m", "ESMC 300M"), ("esmc_600m", "ESMC 600M"), ("ankh_base", "Ankh base"),
            ("ankh_large", "Ankh large")]
 
 

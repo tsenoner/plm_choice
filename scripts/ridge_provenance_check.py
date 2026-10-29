@@ -43,6 +43,9 @@ LABEL_TO_KEY = {
     "ESM-2 8M": "esm2_8m", "ESM-2 35M": "esm2_35m", "ESM-2 150M": "esm2_150m",
     "ESM-2 650M": "esm2_650m", "ESM-2 3B": "esm2_3b", "ESM-3": "esm3_open",
     "ESM-C 300M": "esmc_300m", "ESM-C 600M": "esmc_600m",
+    # and since 2026-10-29 (ESM C manuscript / Ankh paper spellings)
+    "Ankh base": "ankh_base", "Ankh large": "ankh_large", "ESMC 300M": "esmc_300m",
+    "ESMC 600M": "esmc_600m",
 }
 
 

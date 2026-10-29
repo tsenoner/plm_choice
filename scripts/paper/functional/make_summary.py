@@ -50,8 +50,8 @@ TWINS = {
     "randinit_prot_t5": "prott5",
 }
 FAMILIES = {
-    "ESM-2": ["esm2_8m", "esm2_35m", "esm2_150m", "esm2_650m", "esm2_3b"],
-    "ESM-C": ["esmc_300m", "esmc_600m"],
+    "ESM2": ["esm2_8m", "esm2_35m", "esm2_150m", "esm2_650m", "esm2_3b"],
+    "ESMC": ["esmc_300m", "esmc_600m"],
     "Ankh": ["ankh_base", "ankh_large"],
 }
 PARAMS = {  # parameter count in millions, for "smaller vs larger" ordering only

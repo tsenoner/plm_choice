@@ -11,6 +11,8 @@ Keys are the lowercase HDF5 file stem of each embedding set.
 
 from __future__ import annotations
 
+import re
+
 from shared.embedding_names import random_init_stem
 
 #: Parameter count per pLM. ``random_1024`` is the untrained floor, hence 0.
@@ -38,16 +40,16 @@ EMBEDDING_FAMILY_MAP: dict[str, str] = {
     "prott5": "ProtT5",
     "prottucker": "ProtT5",
     "prostt5": "ProtT5",
-    "clean": "ESM-1",
-    "esm1b": "ESM-1",
-    "esm2_8m": "ESM-2",
-    "esm2_35m": "ESM-2",
-    "esm2_150m": "ESM-2",
-    "esm2_650m": "ESM-2",
-    "esm2_3b": "ESM-2",
-    "esmc_300m": "ESM-C",
-    "esmc_600m": "ESM-C",
-    "esm3_open": "ESM-3",
+    "clean": "ESM1",
+    "esm1b": "ESM1",
+    "esm2_8m": "ESM2",
+    "esm2_35m": "ESM2",
+    "esm2_150m": "ESM2",
+    "esm2_650m": "ESM2",
+    "esm2_3b": "ESM2",
+    "esmc_300m": "ESMC",
+    "esmc_600m": "ESMC",
+    "esm3_open": "ESM3",
     "ankh_base": "Ankh",
     "ankh_large": "Ankh",
     "random_1024": "Random",
@@ -56,10 +58,10 @@ EMBEDDING_FAMILY_MAP: dict[str, str] = {
 #: One colour per family — the paper's visual key.
 EMBEDDING_FAMILY_COLOR_MAP: dict[str, str] = {
     "ProtT5": "#ff1493",
-    "ESM-1": "#4daf4a",
-    "ESM-2": "#ff7f00",
-    "ESM-C": "#1f77b4",
-    "ESM-3": "#984ea3",
+    "ESM1": "#4daf4a",
+    "ESM2": "#ff7f00",
+    "ESMC": "#1f77b4",
+    "ESM3": "#984ea3",
     "Ankh": "#ffd700",
     "Random": "#808080",
     # Untrained architectures (R1.9) are a *different* control from the i.i.d.
@@ -67,21 +69,23 @@ EMBEDDING_FAMILY_COLOR_MAP: dict[str, str] = {
     "Untrained": "#b0b0b0",
 }
 
-#: Axis labels, spelled exactly as in the manuscript text (ESM-2 8M, ESM-C 300M, ProtT5,
-#: Ankh-base). They are single-line; a cell or tick one panel wide takes ``narrow_label``.
+#: Axis labels, spelled exactly as in the manuscript text (ESM2 8M, ESMC 300M, ProtT5,
+#: Ankh base): no hyphen in the ESM names, as in the ESM C manuscript (Candido et al. 2026),
+#: and Ankh's size word after a space, as in the Ankh paper. They are single-line; a cell or
+#: tick one panel wide takes ``narrow_label``.
 EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
-    "ankh_base": "Ankh-base",
-    "ankh_large": "Ankh-large",
+    "ankh_base": "Ankh base",
+    "ankh_large": "Ankh large",
     "clean": "CLEAN",
-    "esm1b": "ESM-1b",
-    "esm2_8m": "ESM-2 8M",
-    "esm2_35m": "ESM-2 35M",
-    "esm2_150m": "ESM-2 150M",
-    "esm2_650m": "ESM-2 650M",
-    "esm2_3b": "ESM-2 3B",
-    "esm3_open": "ESM-3",
-    "esmc_300m": "ESM-C 300M",
-    "esmc_600m": "ESM-C 600M",
+    "esm1b": "ESM1b",
+    "esm2_8m": "ESM2 8M",
+    "esm2_35m": "ESM2 35M",
+    "esm2_150m": "ESM2 150M",
+    "esm2_650m": "ESM2 650M",
+    "esm2_3b": "ESM2 3B",
+    "esm3_open": "ESM3",
+    "esmc_300m": "ESMC 300M",
+    "esmc_600m": "ESMC 600M",
     "prostt5": "ProstT5",
     "prott5": "ProtT5",
     "prottucker": "ProtTucker",
@@ -92,8 +96,9 @@ EMBEDDING_DISPLAY_NAMES: dict[str, str] = {
 def narrow_label(name: str) -> str:
     """Break a model label onto two lines for a cell or tick that is one panel wide.
 
-    The break falls at the first space ("ESM-2" / "8M"), else at the hyphen of a name longer
-    than five characters ("Ankh-" / "base": the hyphen stays at the end of its line), else,
+    The break falls at the first space ("ESM2" / "8M", "Ankh" / "base"), else at the hyphen of
+    a name longer than five characters (the hyphen stays at the end of its line), else
+    before the version of a name like "ESM1b" ("ESM" / "1b"), else,
     for a name longer than six, where a capital follows a lowercase letter ("Prot" /
     "Tucker"). Anything shorter stays whole.
     """
@@ -105,6 +110,11 @@ def narrow_label(name: str) -> str:
     if len(name) > 5 and "-" in name[1:-1]:
         i = name.index("-", 1)
         return name[: i + 1] + "\n" + name[i + 1 :]
+    # "ESM1b" next to "CLEAN" reads as one word at tick size; break before the version
+    # ("ESM" / "1b") when at least two characters follow it. "ESM3" and "ProtT5" stay whole.
+    m = re.match(r"([A-Za-z]{2,})(\d\w+)$", name)
+    if len(name) >= 5 and m:
+        return m.group(1) + "\n" + m.group(2)
     if len(name) > 6:
         for i in range(1, len(name)):
             if name[i].isupper() and name[i - 1].islower():

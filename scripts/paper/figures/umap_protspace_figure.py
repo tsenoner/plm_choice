@@ -35,7 +35,7 @@ from sklearn.model_selection import cross_val_score  # noqa: E402
 from sklearn.neighbors import KNeighborsClassifier  # noqa: E402
 
 DELIM = b"---PARQUET_DELIMITER---"
-PANELS = (("prott5", "ProtT5"), ("esmc_600m", "ESM C-600M"), ("random_1024", "Random (Gaussian control)"))
+PANELS = (("prott5", "ProtT5"), ("esmc_600m", "ESMC 600M"), ("random_1024", "Random (Gaussian control)"))
 ORDER = ("Bacteria", "Eukaryota", "Archaea")
 
 
