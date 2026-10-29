@@ -1,0 +1,7 @@
+# New2024 proteins whose sequence had a public record (UniParc cross-reference) before July 2023,
+# the newest training data of any model; source: new2024_uniparc_history.tsv (2026-10-16).
+P0DXB7      # RefSeq XP_017784833, 2016-08-25
+P0DXB8      # RefSeq XP_019878052, 2017-01-19
+A0AAU7N2U1  # RefSeq XP_033912941, 2020-05-02
+P0DO84      # ENA UQZ09626, 2022-09-06
+P0DXG0      # ENA UQZ09635, 2022-09-06
