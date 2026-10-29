@@ -9,10 +9,10 @@ Target names used everywhere: `fident` = PIDE, the fractional sequence identity 
 two AlphaFold DB v4 models (0–1). A missing value means the search reported no reliable alignment for that
 measure.
 
-## Embeddings: `embeddings_<model>.h5` (15 files)
+## Embeddings
 
-One HDF5 dataset per protein, named by accession, holding the mean over per-residue final-layer
-representations.
+Fifteen files, `embeddings_<model>.h5`, one per model. Each holds one HDF5 dataset per protein, named by its
+accession: the mean over per-residue final-layer representations.
 
 | file | model | dim | dtype | stored shape | proteins |
 |---|---|---:|---|---|---:|
@@ -35,9 +35,9 @@ representations.
 Flatten with `.ravel()` and cast to float32 before computing distances. The evaluation cohort is the
 526,871 accessions present in all 15 files (the proteins of at most 1022 residues).
 
-## `pairs_splits.tar`
+## Pair tables
 
-`swissprot_pairs/sets/{train,val,test}.parquet`, one row per protein pair, each unordered pair once.
+`pairs_splits.tar` unpacks to `swissprot_pairs/sets/{train,val,test}.parquet`, one row per protein pair, each unordered pair once.
 
 | column | type | meaning |
 |---|---|---|
@@ -50,14 +50,14 @@ Rows: train 59,587,201; validation 8,196,507; test 8,066,264 (75,849,972 in all)
 pair; the paper's cohort filter (both proteins in all 15 embedding files) removes 940,833 when they are
 loaded.
 
-## `pairs_counts.tar`
+## Pair counts
 
-`pair_table_counts/swissprot_pairs.json`: pairs per split and how many carry each target (`per_split`,
+`pairs_counts.tar` unpacks to `pair_table_counts/swissprot_pairs.json`: pairs per split and how many carry each target (`per_split`,
 `total`).
 
-## `pairs_identical_mask.tar`
+## Identical-sequence pairs
 
-`identical_pairs/`: pairs whose two proteins have identical sequences (325,019 of 75,849,972). Identical
+`pairs_identical_mask.tar` unpacks to `identical_pairs/`: pairs whose two proteins have identical sequences (325,019 of 75,849,972). Identical
 inputs give identical embeddings, so these pairs are excluded from the distance distributions.
 
 | file | contents |
@@ -66,9 +66,9 @@ inputs give identical embeddings, so these pairs are excluded from the distance 
 | `{train,val,test}_identical_keyed.parquet` | `query`, `target` of the identical pairs only |
 | `identical_pairs.json` | counts per split and in total |
 
-## `pairs_random.tar`
+## Random pairs
 
-`random_pairs/`:
+`pairs_random.tar` unpacks to `random_pairs/`:
 
 | file | contents |
 |---|---|
@@ -76,13 +76,13 @@ inputs give identical embeddings, so these pairs are excluded from the distance 
 | `summary.json` | sampling parameters and convergence checks |
 | `convergence.csv` | Spearman ρ between selected models and distance quartiles as the sample grows |
 
-## Probe grids: `probes_native.tar`, `probes_pca128.tar`, `probes_untrained.tar`
+## Probe grids
 
-Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `probes_native` (native embeddings),
-`probes_pca128` (128-dimensional PCA projections) or `probes_untrained` (untrained networks, arms named
-`random_init_<model>_seed0`); `<read-out>` = `fnn` (trained probe) or `euclidean` (raw distance, nothing
-fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for `probes_untrained`), so
-90 cells per grid (66).
+Three archives, each unpacking to a folder of the same name: `probes_native.tar` (native embeddings),
+`probes_pca128.tar` (128-dimensional PCA projections) and `probes_untrained.tar` (untrained networks, arms
+named `random_init_<model>_seed0`). Inside, the layout is `<grid>/<read-out>/<target>/<arm>/`, with
+`<read-out>` = `fnn` (trained probe) or `euclidean` (raw distance, nothing fitted) and `<target>` =
+`fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for `probes_untrained`), so 90 cells per grid (66).
 
 | file in a cell | contents |
 |---|---|
@@ -96,9 +96,9 @@ fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for
 The paper's score is the Spearman ρ in `*_metrics.txt`; for the `euclidean` read-out, its magnitude
 (distance falls as similarity rises).
 
-## `analysis_functional_annotation.tar`
+## Functional annotation transfer
 
-`functional_annotation/`: leave-one-out 1-nearest-neighbour annotation transfer (goPredSim protocol) for
+`analysis_functional_annotation.tar` unpacks to `functional_annotation/`: leave-one-out 1-nearest-neighbour annotation transfer (goPredSim protocol) for
 15 pretrained embedding sets, 11 untrained controls and two MMseqs2 homology baselines.
 
 | file | contents |
@@ -133,9 +133,9 @@ E-value or by identity. The EC score in the
 paper is `exact` (all four EC fields agree), the GO-MF score `f1` (protein-centric F1 of the ancestor-closed
 term sets, root excluded).
 
-## `analysis_experimental_tm.tar`
+## Experimental-structure TM-scores
 
-`experimental_tm/`: test pairs where both proteins have an experimental PDB chain (one representative chain
+`analysis_experimental_tm.tar` unpacks to `experimental_tm/`: test pairs where both proteins have an experimental PDB chain (one representative chain
 per protein from residue-level SIFTS, resolution ≤ 3.0 Å), aligned Cα-only with US-align.
 
 | file | contents |
@@ -147,9 +147,9 @@ per protein from residue-level SIFTS, resolution ≤ 3.0 Å), aligned Cα-only w
 
 The three `exptm_*` files share the pair-table format, so the probes score on them unchanged.
 
-## `analysis_distance_histograms.tar`
+## Distance histograms
 
-`distance_histograms/random_pairs/` (Figure 2: the 5,000,000 random pairs) and
+`analysis_distance_histograms.tar` unpacks to `distance_histograms/random_pairs/` (Figure 2: the 5,000,000 random pairs) and
 `distance_histograms/aligner_pairs/` (Table S4 and the Supplement's aligner-found distributions: the
 75,849,972 aligner-found pairs, identical sequences excluded), one pair of files per model:
 
@@ -161,9 +161,9 @@ The three `exptm_*` files share the pair-table format, so the probes score on th
 Every normalization in the paper (min–max, division by a percentile or the median) is an affine map of
 these raw-scale histograms. The JSON field `source` names the pairs the distances were computed on.
 
-## `testset_new2024.tar`
+## New2024 test set
 
-`new2024/`: a test set of proteins new since the models were trained (from UniRef50 clusters new in
+`testset_new2024.tar` unpacks to `new2024/`: a test set of proteins new since the models were trained (from UniRef50 clusters new in
 release 2025_01 with no member in any 2024_01 cluster; structures predicted with ColabFold).
 
 | file | contents |
