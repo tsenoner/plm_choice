@@ -45,7 +45,9 @@ ARCHIVES = {
     "probes_randinit_full100.tar": ("probes_untrained.tar", {"randinit_full100": "probes_untrained"}),
     "functional_annotation.tar": ("analysis_functional_annotation.tar", {}),
     "distance_histograms.tar": ("analysis_distance_histograms.tar", {}),
+    "new2024.tar": ("testset_new2024.tar", {}),
 }
+EXCLUSION_LIST = REPO / "docs/zenodo/new2024_exclude_public_before_training.txt"
 
 # renames below the top level (applied to member paths and to paths inside manifests)
 SUB_RENAMES = [
@@ -220,7 +222,8 @@ def rewrite_freeze(raw: bytes, which: str) -> bytes:
     d = json.loads(raw)
     d["set_name"] = {"ec": "ec_cohort", "go": "go_mf_cohort"}[which]
     if "filter" in d:
-        d["filter"] = d["filter"].replace("not in embedding exclusion freeze", "in the 526,871-protein cohort")
+        d["filter"] = (d["filter"].replace("not in embedding exclusion freeze", "in the 526,871-protein cohort")
+                       .replace(" (== CONTAINS on GoEvidenceType)", ""))
     src = d.get("sources")
     if isinstance(src, dict):
         new_src = {}
@@ -311,6 +314,12 @@ def transform(old: str, new: str, raw: bytes, ctx: dict) -> bytes | None:
         return rewrite_histogram(raw, new)
     if base in ("swissprot_pairs.json", "identical_pairs.json"):
         return rewrite_small_json(raw, new)
+    if base == EXCLUSION_LIST.name:          # the published header, without the work file it cited
+        out = EXCLUSION_LIST.read_bytes()
+        ids = lambda b: [ln.split()[0] for ln in b.decode().splitlines() if ln and not ln.startswith("#")]  # noqa: E731
+        if ids(out) != ids(raw):
+            fail(f"{new}: the repo's exclusion list names other accessions than the staged one")
+        return out
     return None
 
 
@@ -336,9 +345,13 @@ def scrub(src: Path, dst: Path, top: dict[str, str]) -> dict:
         for ti in tin:
             stats["in"] += 1
             new = rename_member(ti.name, top)
-            if PurePosixPath(new).name == "wandb_run_id.txt":
-                stats["dropped"] += 1
+            parts = PurePosixPath(new).parts
+            if parts[-1] == "wandb_run_id.txt" or (
+                    ti.isdir() and len(parts) == 5 and parts[1] == "euclidean" and parts[4] == "checkpoints"):
+                stats["dropped"] += 1        # offline-log ids; the raw-distance cells' empty checkpoints/
                 continue
+            if parts[1:2] == ("euclidean",) and "checkpoints" in parts[4:5] and not ti.isdir():
+                fail(f"{new}: a file under a raw-distance cell's checkpoints/")
             if blocked(new):
                 fail(f"member name still carries {blocked(new)}: {new}")
             if ti.isdir():
