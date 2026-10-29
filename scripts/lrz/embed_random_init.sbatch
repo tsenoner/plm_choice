@@ -62,8 +62,8 @@ set -euo pipefail
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
 export DATA_DIR="${DATA_DIR:-$DSS/plm_choice_data/data}"
 
-# Under sprot_pre2024_SUBSET, because that is the cohort the probe trains on —
-# every published cell used it (11.3M pairs); the full splits are 10x larger, and
+# Under sprot_pre2024_SUBSET, so the untrained arm gets the probe budget of the
+# pretrained cells it is compared with (11.3M pairs); the full splits are 10x larger, and
 # giving the untrained arm 10x the probe budget biases the comparison toward it,
 # understating the very quantity being claimed.
 #

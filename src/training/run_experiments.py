@@ -8,9 +8,9 @@ It also optionally evaluates the results after each training run.
 Usage:
 python run_experiments.py --data_dir data/processed/sprot_pre2024_subset --evaluate_after_train --model_types fnn linear euclidean --target_params fident alntmscore hfsp --wandb_project my-project
 
---data_dir is required and has no default: sprot_pre2024_subset is the cohort every
-published cell was trained on (~11.3M train pairs); sprot_pre2024 is 10x larger and
-appears in no published result.
+--data_dir is required and has no default: it selects the cohort, which is the probe
+budget -- sprot_pre2024_subset (a 10% row sample, ~11.3M train pairs) or sprot_pre2024
+(10x larger).
 """
 
 import argparse
@@ -274,8 +274,8 @@ if __name__ == "__main__":
         help=(
             "Directory containing 'sets' and 'embeddings' subdirectories. REQUIRED — "
             "there is deliberately no default, because this argument IS the probe budget. "
-            "sprot_pre2024_subset trains on 11.3M pairs (the cohort every published cell "
-            "used; 4,668 optimizer steps/epoch); sprot_pre2024 on 113M (46,656 steps/epoch). "
+            "sprot_pre2024_subset (a 10%% row sample) trains on 11.3M pairs (4,668 optimizer "
+            "steps/epoch); sprot_pre2024 on 113M (46,656 steps/epoch). "
             "It also selects the test split the bootstrap SEs are computed over (1.57M vs "
             "15.7M rows, ~3.2x narrower CIs), which affects even the training-free euclidean "
             "arm. Results land in models/<basename>/, so a mismatched cohort collides with "

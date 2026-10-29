@@ -1,16 +1,22 @@
 #!/bin/bash
-# Probe grid on the post-rebuild 10% splits: one array task = one (target, embedding arm),
-# each training the fnn probe and scoring it plus the training-free euclidean baseline.
+# Probe grid: one array task = one (target, embedding arm), each training the fnn probe and
+# scoring it plus the training-free euclidean baseline.
 #
 #     cd ~/plm_choice && mkdir -p logs
-#     # pretrained arms (15 x 3 targets = 45 tasks)
+#     # main grid: pretrained arms, every pair, patience 10 (15 x 3 targets = 45 tasks)
+#     DATASET=full100_p10 EXPECT_ARMS=15 PATIENCE=10 \
+#         sbatch --time=2-00:00:00 --mem=256G --array=0-44%10 scripts/lrz/probe_grid.sbatch
+#     # untrained random-init arms, same protocol (11 x 3 = 33 tasks)
+#     DATASET=randinit_full100 EXPECT_ARMS=11 PATIENCE=10 \
+#         sbatch --time=2-00:00:00 --mem=256G --array=0-32%10 scripts/lrz/probe_grid.sbatch
+#     # reduced protocol for the protocol sensitivity check: 10% of the pairs, patience 5
+#     # (the PATIENCE default); the untrained arms fit on the MIG slices
 #     DATASET=sprot_pre2024_e1_sub10 EXPECT_ARMS=15 \
 #         sbatch --array=0-44%10 scripts/lrz/probe_grid.sbatch
-#     # untrained random-init arms on the MIG slices (11 x 3 = 33 tasks)
 #     DATASET=sprot_pre2024_e1_sub10_randinit EXPECT_ARMS=11 \
 #         sbatch -p lrz-dgx-a100-40x8-mig --qos=mig --gres=gpu:3g.20gb:1 \
 #         --array=0-32%10 scripts/lrz/probe_grid.sbatch
-#     # probe capacity (R2.5) / linear read-out (R1.8) on the final protocol: a DATASET alias
+#     # probe capacity (R2.5) / linear read-out (R1.8) on the main protocol: a DATASET alias
 #     # per variant (scripts/lrz/make_probe_alias.sh), PIDE only = indices 0..EXPECT_ARMS-1
 #     DATASET=full100_p10_h256 EXPECT_ARMS=6 PATIENCE=10 HIDDEN=256 MODELS=fnn \
 #         sbatch --time=2-00:00:00 --mem=128G --array=0-5 scripts/lrz/probe_grid.sbatch
@@ -18,22 +24,23 @@
 #         sbatch --time=2-00:00:00 --mem=128G --array=0-14 scripts/lrz/probe_grid.sbatch
 #
 # ---------------------------------------------------------------------------
-# WHAT THIS REPRODUCES. The published protocol, on corrected data: fnn, hidden 64, lr 1e-4,
-# batch 1024, early-stopping patience 5, max 100 epochs, seed 42, validation once per
-# epoch (all 55 published subset logs record val_check_interval 1.0; run_experiments.py's
-# 0.2 default would add +88% validation overhead and change when early stopping fires).
-# The splits are a 10% positional sample (seed 42) of the post-E1 splits -- HFSP fixed,
-# pairs deduplicated -- drawn by scripts/create_subset_datasets.py into a NEW cohort dir,
-# so no completion marker or last.ckpt from a pre-fix run can be picked up (run_experiments
-# would skip or resume those silently). sha256 of train/val/test:
-#     c4a54110... / 7db7e727... / 25164587...
+# THE PROTOCOL, on corrected data: fnn, hidden 64, lr 1e-4, batch 1024, max 100 epochs,
+# seed 42, validation once per epoch (all 55 published logs record val_check_interval 1.0;
+# run_experiments.py's 0.2 default would add +88% validation overhead and change when early
+# stopping fires). The pair set and the early-stopping patience set the two protocols apart:
+#   * main (full100_p10): every pair of the post-E1 splits (sprot_pre2024_e1/sets -- HFSP
+#     fixed, pairs deduplicated), patience 10;
+#   * reduced (sprot_pre2024_e1_sub10; the Supplement's protocol sensitivity check): a 10%
+#     positional sample (seed 42) of those splits, patience 5. The sample was drawn by
+#     scripts/create_subset_datasets.py into a NEW cohort dir, so no completion marker or
+#     last.ckpt from a pre-fix run can be picked up (run_experiments would skip or resume
+#     those silently). sha256 of its train/val/test:
+#         c4a54110... / 7db7e727... / 25164587...
 # The <=1022 cohort filter is applied at load time by shared/datasets.py.
 #
-# TWO DELIBERATE DEPARTURES, both to be stated in Methods (M-11):
+# ONE DELIBERATE DEPARTURE, to be stated in Methods (M-11):
 #   * CUDA. train.py sets float32 matmul precision "medium" when CUDA is present; every
 #     published run used full fp32 on Apple MPS. Accepted 2026-09-17.
-#   * One seed (42) and 10% of pairs, as the approximation for the first draft; the 100%
-#     retrain follows.
 #
 # WHY THE EMBEDDING IS STAGED TO NODE-LOCAL DISK. The loader reads one HDF5 dataset per
 # protein per pair. On GPFS that metadata-heavy access pattern measured ~20x slower than
@@ -59,16 +66,17 @@ set -euo pipefail
 unset VIRTUAL_ENV
 
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
-DATASET="${DATASET:?set DATASET, e.g. sprot_pre2024_e1_sub10}"
+DATASET="${DATASET:?set DATASET, e.g. full100_p10}"
 EXPECT_ARMS="${EXPECT_ARMS:?set EXPECT_ARMS (the embedding count the dataset must hold)}"
 SRC="$DSS/plm_choice_data/data/processed/$DATASET"
 PARAMS=(fident alntmscore hfsp)
-# Early stopping: 5 is the published protocol. Raise it to re-test a cell that stopped
-# suspiciously early -- three alntmscore cells peaked at epochs 2-4 while their neighbours
-# trained for 20-47, which is the signature of an early plateau rather than a converged fit.
+# Early stopping: the default 5 is the reduced protocol; the main grid runs PATIENCE=10. A
+# higher patience also re-tests a cell that stopped suspiciously early -- three alntmscore
+# cells peaked at epochs 2-4 while their neighbours trained for 20-47, which is the signature
+# of an early plateau rather than a converged fit.
 PATIENCE="${PATIENCE:-5}"
 # Probe-capacity check (R2.5, plan C12): the fnn's first layer is Linear(n -> HIDDEN), 64 in
-# the published protocol. A non-default HIDDEN must run under its own DATASET alias (a dir
+# both protocols. A non-default HIDDEN must run under its own DATASET alias (a dir
 # of symlinks, like full100_p10), because the cell's path is models/$DATASET/$model/... and
 # would otherwise land on -- or resume from -- the hidden-64 cell.
 HIDDEN="${HIDDEN:-64}"

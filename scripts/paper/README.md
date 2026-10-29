@@ -56,8 +56,8 @@ Each answers one reviewer point or plan task; the outputs are in the private rep
 | `rescore_test_predictions.py` | re-scores saved test predictions of a probe grid on subsets of the test pairs |
 | `exptm_final_grid.py` | whether Figure 1B's TM-score ranking holds on experimental structures (R2.2) |
 | `exptm_and_training_summary.py` | two D14 checks from `probe_metrics.csv` alone |
-| `d14_open_collect.py` | the D14 open-decision runs against the final grid (R1.8 read-outs, R2.5 head width) |
-| `spearman_facts.py` | re-derives the text's claims in Spearman ρ on the final grid (D14) |
+| `d14_open_collect.py` | the D14 open-decision runs against the main grid (R1.8 read-outs, R2.5 head width) |
+| `spearman_facts.py` | re-derives the text's claims in Spearman ρ on the main grid (D14) |
 | `new2024_summary.py` | New2024 generalisation per model, with protein-level confidence intervals (C9) |
 | `new2024_training_homologs.py` | New2024 proteins with a close homolog among the training proteins |
 | `new2024_uniparc_history.py` | New2024 proteins with a public sequence record before UniProt 2024_01 |

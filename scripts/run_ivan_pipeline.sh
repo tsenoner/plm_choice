@@ -49,7 +49,7 @@ set -euo pipefail
 #   sprot_pre2024_subset  11,318,625 /  1,610,529 /  1,571,924   (uniform 10% row
 #                         sample at seed 42 — scripts/create_subset_datasets.py)
 #
-# The probe trains on the SUBSET: every published cell used it. See
+# Which cohort a probe trains on is chosen per run (run_experiments.py --data_dir). See
 # scripts/lrz/embed_random_init.sbatch and docs/SPECIFICATION.md ("Cohorts").
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

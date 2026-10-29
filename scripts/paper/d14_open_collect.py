@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tabulate the D14 open-decision runs against the final grid (R1.8 linear read-outs, R2.5 head width).
+"""Tabulate the D14 open-decision runs against the main grid (R1.8 linear read-outs, R2.5 head width).
 
     # pull the small outputs from LRZ first (metrics files, ridge JSONs; no checkpoints)
     R=<manuscript>/paper_inputs/d14_open_2026-10-17/raw
@@ -18,7 +18,7 @@ empty, so the script can be re-run as they finish.
 
 Writes, under d14_open_2026-10-17/:
   linear_probe/linear_probe_rho.csv     target x arm: euclidean, ridge |a-b|, ridge (a-b)^2,
-                                        linear_distance (SGD, final protocol), fnn; ranks; gap closed
+                                        linear_distance (SGD, main protocol), fnn; ranks; gap closed
   linear_probe/rank_agreement.csv       per target, Spearman/Kendall between read-out rankings
   probe_capacity/capacity_rho.csv       arm x hidden size (16/64/256) rho, delta vs 64, best epoch
   probe_capacity/capacity_summary.json  rank agreement, delta vs embedding size

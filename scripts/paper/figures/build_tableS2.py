@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Rebuild Table S2 (tbls:performance) VALUES from the 2026-09-18 probe grid.
+"""Rebuild Table S2 (tbls:performance) VALUES from one probe grid.
 
-Reads probe_metrics.csv, keeps dataset=sprot_pre2024_e1_sub10, native Euclidean +
+Reads probe_metrics.csv, keeps one dataset (PROBE_DATASET, below), native Euclidean +
 FNN, metric = |Spearman rho| (Pearson R2 until 2026-10-09; the paper now uses one score).  Emits the same pandoc grid table the manuscript already
 carries, so the only thing that moves is the numbers and the best/second marking.
 
@@ -39,8 +39,10 @@ def _need(var: str) -> str:
 ARTEFACTS = _need("PAPER_ARTEFACTS")
 MANUSCRIPT = _need("MANUSCRIPT_DIR")
 
-# Both overridable, because the grid this table reports changed protocol on 2026-10-02
-# (10% of pairs / patience 5 -> 100% / patience 10) and the old values stay reproducible.
+# Both overridable. The defaults read the reduced-protocol grid (sprot_pre2024_e1_sub10:
+# 10% of pairs, patience 5); Table S2 in the paper is the main grid (100% of pairs,
+# patience 10):
+#     PROBE_METRICS=$PAPER_ARTEFACTS/probe_2026-10-08/probe_metrics.csv PROBE_DATASET=full100_p10
 METRICS = Path(os.environ.get("PROBE_METRICS") or Path(ARTEFACTS, "probe_e1_2026-09-18/probe_metrics.csv"))
 SUPP = Path(
     MANUSCRIPT,

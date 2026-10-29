@@ -6,9 +6,9 @@
 #     sbatch --array=0-14%8 scripts/lrz/ridge_distances_full.sbatch
 #
 # ---------------------------------------------------------------------------
-# WHY THE FULL SET. The first rebuild used the 10% training sample (5,958,720 pairs) so the
-# figure and the retrained probe table would describe the same data. That sample is already
-# dense enough that the density curve IS the population curve — but the quartiles quoted in
+# WHY THE FULL SET. ridge_distances.sbatch covers the 10% training sample (5,958,720 pairs,
+# the reduced-protocol probes' training pairs). That sample is already dense enough that
+# the density curve IS the population curve — but the quartiles quoted in
 # the manuscript should come from the whole pair set, and having both lets us say so rather
 # than assume it. Both results are kept: the subset under ridge_2026-09-18/, this one under
 # $DSS/ridge_full/.

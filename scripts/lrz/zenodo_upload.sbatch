@@ -100,9 +100,9 @@ build_tar identical_sequence_mask.tar "$DSS"                         ridge_ident
 # have deposited a partial grid that looks complete. The test is the metrics file count:
 # 2 read-outs x 3 targets x 15 arms = 90 cells, one metrics file each. (The array has 45
 # tasks, because each task runs both read-outs for its cell.) Set EXPECT_METRICS=0 to override.
-# pca_cohort, not pca100_p10: that grid was discarded on 2026-09-24 for having been trained
-# off the shared cohort, and its replacement is cut to the cohort under the new name. A name
-# that matches nothing is skipped silently below, so this list has to track the rename.
+# pca_cohort is the PCA grid, its arms cut to the shared protein cohort. Each name here must
+# match a directory under models/: a name that matches nothing is skipped below with a
+# one-line notice, so a renamed grid would quietly drop out of the deposit.
 # randinit_full100 is the untrained control at the same protocol; the paper reports it, so it
 # is deposited with the other two.
 for d in full100_p10 pca_cohort randinit_full100; do

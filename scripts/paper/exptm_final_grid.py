@@ -4,9 +4,9 @@
     uv run python scripts/paper/exptm_final_grid.py --metrics <probe_metrics.csv> --out <dir>
 
 Reviewer R2.2 (task D14, ledger M-47). exptm_and_training_summary.py answered this from the
-84 exptm_* cells, which are the 10%-of-pairs / patience-5 probes, so the answer could not go in
-the paper (it never mixes grids, M-26). scripts/lrz/probe_eval_external.sbatch with
-SRC_DATASET=full100_p10 scored Figure 1B's probes (ESM-2 3B included) on the same three
+84 exptm_* cells, which are the reduced-protocol probes (10% of pairs, patience 5), so the
+answer could not go in the paper (it never mixes grids, M-26).
+scripts/lrz/probe_eval_external.sbatch with SRC_DATASET=full100_p10 scored Figure 1B's probes (ESM-2 3B included) on the same three
 experimental-TM pair sets, without retraining, into exptm_{afdbtarget,matched,wholechain}_full100_p10:
 
     afdbtarget   the training target itself (Foldseek alntmscore on AlphaFold models), on the
@@ -47,7 +47,7 @@ from exptm_and_training_summary import (  # noqa: E402
 FIG1 = "full100_p10"
 SETS = ("afdbtarget", "matched", "wholechain")
 EXPTM = {s: f"exptm_{s}_{FIG1}" for s in SETS}
-OLD = {s: f"exptm_{s}" for s in SETS}  # the 10%/patience-5 probes on the same pairs
+OLD = {s: f"exptm_{s}" for s in SETS}  # reduced-protocol (10%/patience-5) probes, same pairs
 
 
 def main() -> int:
@@ -109,7 +109,7 @@ def main() -> int:
                        (EXPTM["afdbtarget"], EXPTM["wholechain"], "same pairs; AFDB -> experimental target (longer)"),
                        (EXPTM["matched"], EXPTM["wholechain"], "same pairs; normalisation only")]
         if ro == "fnn":
-            comparisons += [(OLD[s], EXPTM[s], f"grid change on {s}: 10%/p5 -> 100%/p10 probes")
+            comparisons += [(OLD[s], EXPTM[s], f"protocol on {s}: 10%/p5 -> 100%/p10 probes")
                             for s in SETS if OLD[s] in score]
         for a_ds, b_ds, what in comparisons:
             for set_name, arms in (("foundation_12", FOUNDATION), ("all_14", PLMS)):

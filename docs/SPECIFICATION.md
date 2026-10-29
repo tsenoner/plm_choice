@@ -101,11 +101,10 @@ seed 42 (`scripts/create_subset_datasets.py`).
 | `sprot_pre2024` (full) | 113,186,256 | 16,105,295 | 15,719,249 |
 | `sprot_pre2024_subset` | 11,318,625 | 1,610,529 | 1,571,924 |
 
-**The probe trains on the SUBSET. Every published cell used it** — all 96 rows of
-`out/sprot_pre2024_subset/parsed_metrics_all.csv`. `run_experiments.py --data_dir` is
-therefore **required and has no default**: it *is* the probe budget (46,656 vs 4,668
-optimizer steps per epoch), and it also selects the test split the bootstrap SEs are
-computed over, so full- and subset-cohort numbers have CIs differing by ~3.2x and **must
+**Which cohort a probe trains on is a choice, never a default.**
+`run_experiments.py --data_dir` is therefore **required and has no default**: it *is* the
+probe budget (46,656 vs 4,668 optimizer steps per epoch), and it also selects the test split
+the bootstrap SEs are computed over, so full- and subset-cohort numbers have CIs differing by ~3.2x and **must
 not be placed in the same table**. This bites even the training-free `euclidean` arm, which
 no "training budget" argument would reach.
 

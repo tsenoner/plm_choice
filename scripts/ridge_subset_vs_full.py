@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Does the 10% subset give the same ridge statistics as the full cohort?
 
-The probes were retrained on a 10% sample of the corrected pairs, so the manuscript may
-want to quote quartiles from the same data the probe table describes.  That is only
-allowed if the two agree, and "they agree" is a measurement, not an assumption.  This
+The reduced-protocol probes train on a 10% sample of the corrected pairs, so quartiles
+from that sample describe the same data as those probes.  Quoting them for the full cohort
+is only allowed if the two agree, and "they agree" is a measurement, not an assumption.  This
 puts the two side by side per arm and reports the largest relative disagreement.
 
 Everything compared here is scale-free or raw, never the normalised axis: the raw

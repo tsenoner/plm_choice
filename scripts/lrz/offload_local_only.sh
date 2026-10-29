@@ -68,7 +68,7 @@ could be freed; each path was md5-verified on both sides before any local deleti
 
 | path | why it was local-only |
 |---|---|
-| `models/` | 15 GB. The ORIGINAL submission probes (`sprot_pre2024_subset`, `_subset_pca`, `_subset_run1`, `sprot_pre2024`, `sprot_train`, `train_sub`). LRZ's own model dirs are a *disjoint* set. Training sets no `deterministic=True`, so a retrain is equivalent-but-not-identical. Superseded by `full100_p10` / `pca_cohort` as of 2026-10-02, but kept because deleting them makes the submitted numbers unreproducible. |
+| `models/` | 15 GB. The probes trained on the Mac, before the pair-table correction (`sprot_pre2024_subset`, `_subset_pca`, `_subset_run1`, `sprot_pre2024`, `sprot_train`, `train_sub`). LRZ's own model dirs are a *disjoint* set. Training sets no `deterministic=True`, so a retrain is equivalent-but-not-identical; kept so that their numbers stay reproducible. |
 | `data/backup/` | 23 CSVs dated 2024-12-27 to 2025-07-17, pre-parquet era, **zero code references** anywhere in `src/`, `scripts/` or `tests/`. |
 | `data/interm/sprot_pre2024/` | 533 local-only files (foldcomp, foldseek, mmseqs, data_split_*). 4 further files were already on LRZ and are copied here too so this tree stands alone. |
 

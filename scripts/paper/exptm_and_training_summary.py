@@ -15,9 +15,9 @@ experimental PDB chain at both ends (scripts/lrz/probe_eval_external.sbatch):
                        normalisation closest to alntmscore's alignment-span one
     exptm_wholechain   US-align TM-score normalised by the LONGER chain, min(TM1, TM2)
 
-Those probes are NOT the paper's. Every exptm checkpoint name equals the
-sprot_pre2024_e1_sub10 checkpoint of the same arm (10% of pairs, patience 5); this script
-checks that rather than assuming it. So afdbtarget-vs-experimental is a same-probe comparison
+Those probes are NOT Figure 1B's. Every exptm checkpoint name equals the
+sprot_pre2024_e1_sub10 checkpoint of the same arm (the reduced protocol: 10% of pairs,
+patience 5); this script checks that rather than assuming it. So afdbtarget-vs-experimental is a same-probe comparison
 (only the target changes), while experimental-vs-Figure-1B (full100_p10: 100% of pairs,
 patience 10) also changes the probe. The Euclidean read-out trains nothing, so for it only the
 pairs and the target change.
@@ -215,7 +215,8 @@ def training_table(m: pd.DataFrame, datasets: list[str]) -> pd.DataFrame:
     assert (f["steps_per_epoch"] % 1 == 0).all(), "a checkpoint step is not a whole number of epochs"
     ref = (m[(m["model_type"] == "fnn") & (m["dataset"] == FIG1)]
            .assign(spe=lambda x: x["step"] / (x["epoch"] + 1)).groupby("target")["spe"].agg(lambda s: s.mode()[0]))
-    # The same arm in the 10%/patience-5 grid it replaced, to show how far retraining moved it.
+    # The same arm under the reduced protocol (10% of pairs, patience 5), to show how far the
+    # protocol moves it.
     prev = {FIG1: SUB10, "randinit_full100": "sprot_pre2024_e1_sub10_randinit"}
     sub = m[m["model_type"] == "fnn"].set_index(["dataset", "target", "arm"])["Spearman"]
     rows = []
@@ -255,8 +256,8 @@ Score = Spearman rho, higher is better (-rho for the Euclidean read-out: the pap
 |---|---|
 | `exptm_ranking.csv` | read-out x arm: rho on Figure 1B (`full100_p10`), on the 10%/p5 grid's full test, and on the experimental pairs under the three targets; SEs, Pearson R2, ranks among the 13 / 11 models in common, AFDB-to-experimental drop, the exptm checkpoint |
 | `exptm_rank_agreement.csv` | rank agreement (Spearman, Kendall) between two conditions over the 12 foundation models or all 14 (ESM-2 3B has no exptm cell, so 11 / 13 in common), top-3 of each; `cross_grid` marks FNN comparisons that change the probe |
-| `training_summary.csv` | FNN cell of `full100_p10` / `randinit_full100`: best epoch, step, steps/epoch, train-pair bounds, val MSE (3 dp, checkpoint name), test MSE (full precision), inferred epochs trained, the same arm's rho in the 10%/p5 grid it replaced |
-| `d14_exptm_training.json` | grid identification, inferred pair counts, patience check, grid-change deltas, FNN vs Euclidean on exptm, flagged cells, where the train loss lives |
+| `training_summary.csv` | FNN cell of `full100_p10` / `randinit_full100`: best epoch, step, steps/epoch, train-pair bounds, val MSE (3 dp, checkpoint name), test MSE (full precision), inferred epochs trained, the same arm's rho under the reduced protocol (10%/p5) |
+| `d14_exptm_training.json` | grid identification, inferred pair counts, patience check, 100%/p10-vs-10%/p5 deltas, FNN vs Euclidean on exptm, flagged cells, where the train loss lives |
 
 Read before quoting:
 
@@ -302,7 +303,7 @@ def main() -> int:
     facts["grid_change_abs_delta_rho_100p10_vs_10p5"] = {
         f"{mt}/{t}": {"median": round(float(s.median()), 4), "max": round(float(s.max()), 4),
                       "argmax": s.droplevel([0, 1]).idxmax(), "n_arms": int(s.size)} for (mt, t), s in d}
-    # Against what the grid change moves a cell by: the gaps between neighbouring models in Figure 1.
+    # Against what the protocol moves a cell by: the gaps between neighbouring models in Figure 1.
     fig = m[(m["dataset"] == FIG1) & (m["model_type"] == "fnn") & m["arm"].isin(FOUNDATION)]
     facts["fig1_fnn_adjacent_rank_gap_12_foundation"] = {
         t: {"median": round(float(np.median(-np.diff(np.sort(g["Spearman"].to_numpy())[::-1]))), 4),

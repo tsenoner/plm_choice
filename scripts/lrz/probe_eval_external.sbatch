@@ -35,6 +35,8 @@
 set -euo pipefail
 unset VIRTUAL_ENV
 
+# The trained grid to score. The default is the reduced-protocol grid (10% of the pairs,
+# patience 5); SRC_DATASET=full100_p10 scores the main grid (every pair, patience 10).
 SRC_DATASET="${SRC_DATASET:-sprot_pre2024_e1_sub10}"
 SETS="${SETS:?set SETS to the directory holding the external test parquet}"
 TEST="${TEST:?set TEST to the test parquet basename, without .parquet}"

@@ -12,7 +12,7 @@ is that estimator, fitted exactly rather than by SGD, on the same pairs as the p
 * **Pairs.** Train, validation and test splits are read through
   ``shared.datasets._load_and_filter_data`` -- the loader the FNN and Euclidean cells use -- so
   null targets and proteins outside the committed cohort freeze are dropped exactly as there.
-  All training pairs are used (the final protocol), not a subsample.
+  All training pairs are used (the main protocol), not a subsample.
 * **Features.** ``abs``: |a-b| (the reviewer's wording). ``sq``: (a-b)^2, which is the model
   ``LinearDistancePredictor`` (``src/training/models.py``) trains by SGD: a learned per-dimension
   weighting of the squared Euclidean distance. With equal negative weights it ranks pairs as

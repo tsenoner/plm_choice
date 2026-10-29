@@ -1,6 +1,6 @@
 #!/bin/bash
 # Closed-form ridge on |a-b| and (a-b)^2 (R1.8), one array task per embedding arm, all three
-# targets, on the final grid's pairs (all training pairs). See scripts/paper/ridge_diff_probe.py.
+# targets, on the main grid's pairs (all training pairs). See scripts/paper/ridge_diff_probe.py.
 #
 #     cd ~/plm_choice && mkdir -p logs
 #     sbatch --array=0-14 <checkout>/scripts/lrz/ridge_diff_probe.sbatch

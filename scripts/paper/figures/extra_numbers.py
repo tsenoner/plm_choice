@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The four extra manuscript numbers, recomputed from the REFRESHED probe grid.
+"""Four extra numbers for the manuscript text, recomputed from a probe grid's metrics.
 
-Each of these was computed while the ESM-2 3B alntmscore cell was still missing, so
-each averaged over one arm too few. Nothing here is hard-coded from the old run.
+The defaults read the reduced-protocol grids (PRE and RAND below: 10% of pairs, patience 5).
+Each number was first computed while the ESM-2 3B alntmscore cell was still missing, so
+each averaged over one arm too few. Nothing here is hard-coded from that run.
 
 1. Euclidean pre-training gain: mean |rho| pretrained - mean |rho| untrained twin.
 2. FNN pre-training gain, same construction.

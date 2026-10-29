@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Re-derive, in Spearman rho on the final probe grid, a set of text claims (task D14).
+"""Re-derive, in Spearman rho on the main probe grid, a set of text claims (task D14).
 
     PAPER_ARTEFACTS=<manuscript>/paper_inputs MANUSCRIPT_DIR=<manuscript>/bib_2026 \
         uv run python scripts/paper/spearman_facts.py --out <paper_inputs>/d14_2026-10-16
 
-Why: a set of proposed text edits (task D14) was written against a version that still
-reported Pearson R2 on the 10%-of-pairs / patience-5 grid. They claim that the two
+Why: a set of proposed text edits (task D14) was written against Pearson R2 on the
+reduced-protocol grid (10% of pairs, patience 5). They claim that the two
 task-specific models (CLEAN = contrastive head on ESM-1b, ProtTucker = contrastive head
 on ProtT5) lead the raw-distance ranking, that their probes add little over their raw
-distances, and that the PIDE and HFSP probes saturate. The paper now reports one score,
-Spearman rho (for the Euclidean read-out its magnitude), from the 100%-of-pairs /
-patience-10 grid. Each claim has to be measured again on that grid before any of it can
-go into the manuscript, and the Results sentences that quote rho ranges are re-checked
+distances, and that the PIDE and HFSP probes saturate. The paper reports one score,
+Spearman rho (for the Euclidean read-out its magnitude), from the main grid (100% of
+pairs, patience 10). Each claim has to be measured on that grid before any of it can
+go into the manuscript, and the Results sentences that quote rho ranges are checked
 against the same numbers.
 
 What it measures, from probe_metrics.csv (dataset full100_p10, random_1024 excluded from

@@ -109,7 +109,8 @@ python src/training/run_experiments.py \
 ```
 
 `--data_dir` is required and has no default — it selects the cohort, which *is* the probe
-budget. `sprot_pre2024_subset` is what every published cell used.
+budget: `sprot_pre2024_subset` (a 10% row sample, ~11.3M train pairs) or `sprot_pre2024`
+(~113M).
 
 ### 2. Data Preparation Pipeline
 

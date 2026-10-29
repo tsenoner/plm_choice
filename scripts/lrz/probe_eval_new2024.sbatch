@@ -1,5 +1,5 @@
 #!/bin/bash
-# Score the retrained probes on the New2024 set (R1.1: proteins added to Swiss-Prot AFTER the
+# Score the trained probes on the New2024 set (R1.1: proteins added to Swiss-Prot AFTER the
 # models' training cut-offs), without retraining anything.
 #
 #     cd ~/plm_choice && mkdir -p logs && sbatch scripts/lrz/probe_eval_new2024.sbatch
@@ -41,9 +41,9 @@ unset VIRTUAL_ENV
 
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
 NEW="$DSS/plm_choice_data/data/processed/2024_new_e1"
-# Which trained grid to score, and where its New2024 mirror goes. Overridable because the paper
-# moved protocol on 2026-10-02 (10% of pairs, patience 5 -> 100%, patience 10); the old default
-# stays so the submitted numbers remain reproducible.
+# Which trained grid to score, and where its New2024 mirror goes. The defaults score the
+# reduced-protocol grid (10% of the pairs, patience 5); the main grid (every pair, patience 10)
+# is scored with
 #     SRC_DATASET=full100_p10 DST_DATASET=new2024_full100_p10 sbatch scripts/lrz/probe_eval_new2024.sbatch
 SRC_DATASET="${SRC_DATASET:-sprot_pre2024_e1_sub10}"
 DST_DATASET="${DST_DATASET:-new2024_e1}"
