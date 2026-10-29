@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "If you use this dataset, please cite it as below."
+type: dataset
+title: "Which pLM to choose? Embeddings, protein pairs and analysis data"
+version: 2.0.0
+date-released: 2026-10-29
+doi: 10.5281/zenodo.22935411
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.17469267
+    description: "Concept DOI: all versions, resolves to the newest"
+  - type: doi
+    value: 10.1101/2025.10.30.685515
+    description: "Preprint"
+license: CC-BY-4.0
+url: "https://doi.org/10.5281/zenodo.17469267"
+repository-code: "https://github.com/tsenoner/plm_choice"
+keywords:
+  - protein language models
+  - protein embeddings
+  - sequence similarity
+  - structural similarity
+  - HFSP
+  - annotation transfer
+  - benchmark
+authors:
+  - family-names: Senoner
+    given-names: Tobias
+    affiliation: "Technical University of Munich (TUM)"
+    orcid: "https://orcid.org/0000-0002-7900-5896"
+  - family-names: Koludarov
+    given-names: Ivan
+    affiliation: "Technical University of Munich (TUM)"
+    orcid: "https://orcid.org/0000-0002-9073-4758"
+  - family-names: Günther
+    given-names: Joshua
+    affiliation: "Technical University of Munich (TUM)"
+    orcid: "https://orcid.org/0009-0000-3475-479X"
+  - family-names: Shehu
+    given-names: Amarda
+    affiliation: "George Mason University"
+    orcid: "https://orcid.org/0000-0001-5230-4610"
+  - family-names: Rost
+    given-names: Burkhard
+    affiliation: "Technical University of Munich (TUM)"
+    orcid: "https://orcid.org/0000-0003-0179-8424"
+  - family-names: Bromberg
+    given-names: Yana
+    affiliation: "Emory University; TUM Institute for Advanced Study"
+    orcid: "https://orcid.org/0000-0002-8351-0844"

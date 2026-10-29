@@ -1,0 +1,15 @@
+<p>Data for the manuscript <em>Which pLM to choose?</em> (preprint: <a href="https://doi.org/10.1101/2025.10.30.685515">doi:10.1101/2025.10.30.685515</a>; code: <a href="https://github.com/tsenoner/plm_choice">github.com/tsenoner/plm_choice</a>).</p>
+<p>The study compares 14 protein language models (pLMs) and a random Gaussian control on 75,849,972 Swiss-Prot protein pairs, each scored for sequence identity (PIDE), HFSP and structural similarity (TM-score). It separates the signal already in raw embedding distances from the signal a supervised probe extracts, and compares embeddings with an MMseqs2 homology search for transferring EC numbers and GO molecular-function terms.</p>
+<p>This record holds:</p>
+<ul>
+<li>per-protein embeddings of 540,881 Swiss-Prot 2024_01 proteins for all 15 embedding sets (<code>*.h5</code>);</li>
+<li>the deduplicated pair set with its training, validation and test splits, pair counts and an identical-sequence mask;</li>
+<li>the probe grids (trained probes and raw-distance scores for 3 targets) on native embeddings, 128-dimensional PCA projections and 11 untrained networks;</li>
+<li>the EC and GO-MF cohorts with their annotation-transfer results and the MMseqs2 homology baseline;</li>
+<li>test pairs rescored from experimental PDB structures;</li>
+<li>per-model distance histograms, and 5,000,000 random pairs with their distances under every model;</li>
+<li>the New2024 test set of proteins new in UniRef50 2025_01.</li>
+</ul>
+<p>Start with <code>README.md</code>; every file format is in <code>DATA_DICTIONARY.md</code>.</p>
+<p><strong>Version 2</strong> replaces the embeddings with the ones behind the revised results, deduplicates the pair set, retrains the probes on all training pairs, and adds the functional, experimental-structure, distance-distribution, random-pair and New2024 data. Version 1's <code>supplementary_data.zip</code> is superseded and not carried over; it remains in version 1.</p>
+<p>Cite all versions with the concept DOI <a href="https://doi.org/10.5281/zenodo.17469267">10.5281/zenodo.17469267</a>.</p>

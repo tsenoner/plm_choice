@@ -1,0 +1,30 @@
+{
+  "upload_type": "dataset",
+  "title": "Which pLM to choose? Embeddings, protein pairs and analysis data",
+  "version": "2.0.0",
+  "publication_date": "2026-10-29",
+  "access_right": "open",
+  "license": "cc-by-4.0",
+  "language": "eng",
+  "creators": [
+    {"name": "Senoner, Tobias", "affiliation": "Technical University of Munich (TUM)", "orcid": "0000-0002-7900-5896"},
+    {"name": "Koludarov, Ivan", "affiliation": "Technical University of Munich (TUM)", "orcid": "0000-0002-9073-4758"},
+    {"name": "Günther, Joshua", "affiliation": "Technical University of Munich (TUM)", "orcid": "0009-0000-3475-479X"},
+    {"name": "Shehu, Amarda", "affiliation": "George Mason University", "orcid": "0000-0001-5230-4610"},
+    {"name": "Rost, Burkhard", "affiliation": "Technical University of Munich (TUM)", "orcid": "0000-0003-0179-8424"},
+    {"name": "Bromberg, Yana", "affiliation": "Emory University; TUM Institute for Advanced Study", "orcid": "0000-0002-8351-0844"}
+  ],
+  "keywords": [
+    "protein language models",
+    "protein embeddings",
+    "sequence similarity",
+    "structural similarity",
+    "HFSP",
+    "annotation transfer",
+    "benchmark"
+  ],
+  "related_identifiers": [
+    {"relation": "isSupplementTo", "identifier": "10.1101/2025.10.30.685515", "scheme": "doi", "resource_type": "publication-preprint"},
+    {"relation": "isCompiledBy", "identifier": "https://github.com/tsenoner/plm_choice", "scheme": "url", "resource_type": "software"}
+  ]
+}
