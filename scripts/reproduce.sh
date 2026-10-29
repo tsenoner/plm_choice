@@ -82,7 +82,7 @@ cat <<'EOF'
 
      uv run plm data merge   --help          # build the pair table
      uv run plm data split   --help          # train/val/test parquet (record sha256)
-     uv run plm train sweep  --csv_dir <splits> --model_types euclidean fnn \
+     uv run plm train sweep  --data_dir <dataset dir> --model_types euclidean fnn \
                              --evaluate_after_train
      uv run plm figures summary --results_dir models/<dataset> --output out/plots
 

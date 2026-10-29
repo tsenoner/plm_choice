@@ -73,7 +73,7 @@ build_tar () {   # build_tar <name> <parent-dir> <child> [exclude ...]
     local ex=()
     for e in "$@"; do ex+=(--exclude="$e"); done
     echo "  building $name${*:+ (excluding: $*)}"
-    tar -C "$parent" "${ex[@]}" -cf "$STAGE/$name.part" "$child"
+    tar -C "$parent" "${ex[@]}" --owner=0 --group=0 --numeric-owner -cf "$STAGE/$name.part" "$child"
     mv "$STAGE/$name.part" "$STAGE/$name"
 }
 

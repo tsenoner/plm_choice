@@ -37,7 +37,7 @@ Flatten with `.ravel()` and cast to float32 before computing distances. The eval
 
 ## `pairs_splits.tar`
 
-`sprot_pre2024_e1/sets/{train,val,test}.parquet`, one row per protein pair, each unordered pair once.
+`swissprot_pairs/sets/{train,val,test}.parquet`, one row per protein pair, each unordered pair once.
 
 | column | type | meaning |
 |---|---|---|
@@ -52,12 +52,12 @@ loaded.
 
 ## `pairs_counts.tar`
 
-`pair_table_counts/sprot_pre2024_e1.json`: pairs per split and how many carry each target (`per_split`,
+`pair_table_counts/swissprot_pairs.json`: pairs per split and how many carry each target (`per_split`,
 `total`).
 
 ## `pairs_identical_mask.tar`
 
-`ridge_identical/`: pairs whose two proteins have identical sequences (325,019 of 75,849,972). Identical
+`identical_pairs/`: pairs whose two proteins have identical sequences (325,019 of 75,849,972). Identical
 inputs give identical embeddings, so these pairs are excluded from the distance distributions.
 
 | file | contents |
@@ -78,21 +78,20 @@ inputs give identical embeddings, so these pairs are excluded from the distance 
 
 ## Probe grids: `probes_native.tar`, `probes_pca128.tar`, `probes_untrained.tar`
 
-Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `full100_p10` (`probes_native.tar`: native
-embeddings), `pca_cohort` (`probes_pca128.tar`: 128-dimensional PCA projections) or `randinit_full100`
-(`probes_untrained.tar`: untrained networks, arms named
+Layout: `<grid>/<read-out>/<target>/<arm>/`, with `<grid>` = `probes_native` (native embeddings),
+`probes_pca128` (128-dimensional PCA projections) or `probes_untrained` (untrained networks, arms named
 `random_init_<model>_seed0`); `<read-out>` = `fnn` (trained probe) or `euclidean` (raw distance, nothing
-fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for `randinit_full100`), so
+fitted); `<target>` = `fident`, `hfsp` or `alntmscore`. 15 arms per grid (11 for `probes_untrained`), so
 90 cells per grid (66).
 
 | file in a cell | contents |
 |---|---|
-| `hparams.yaml` | run settings (paths in it point to the cluster's scratch space) |
-| `checkpoints/best-epoch=…-val_loss=….ckpt` | PyTorch Lightning checkpoint of the best epoch (`fnn` only) |
+| `hparams.yaml` | run settings; `embedding_file` and `data_dir` are relative to the folder the archives are unpacked in (see the README). The PCA projections and untrained-network embeddings that the `probes_pca128` and `probes_untrained` cells name are not deposited |
+| `checkpoints/best-epoch=…-step=…-val_loss=….ckpt` | PyTorch Lightning checkpoint of the best epoch (`fnn` only) |
 | `evaluation_results/*_metrics.txt` | test-set MSE, RMSE, MAE, R², Pearson r, Spearman ρ, standard errors and 95% CIs |
 | `evaluation_results/*_predictions_targets.npz` | `predictions`, `targets` (float32), one value per scored test pair |
 | `evaluation_results/*_results.png` | predicted against true values |
-| `training_complete.txt`, `wandb_run_id.txt` | completion marker; id of the (not included) training log |
+| `training_complete.txt` | completion marker and the best checkpoint's name |
 
 The paper's score is the Spearman ρ in `*_metrics.txt`; for the `euclidean` read-out, its magnitude
 (distance falls as similarity rises).
@@ -104,17 +103,17 @@ The paper's score is the Spearman ρ in `*_metrics.txt`; for the `euclidean` rea
 
 | file | contents |
 |---|---|
-| `ec_labels_v2.tsv` | `Entry`, `EC number`: experimental (ECO:0000269) EC numbers of Swiss-Prot proteins |
-| `ec_strat_v2_freeze.json` | the EC cohort: `ids` (6,902 accessions), `seed`, the stratification (CATH superfamily × EC class × length quartile, at most 25 per cell) |
+| `ec_labels.tsv` | `Entry`, `EC number`: experimental (ECO:0000269) EC numbers of Swiss-Prot proteins |
+| `ec_cohort_freeze.json` | the EC cohort: `ids` (6,902 accessions), `seed`, the stratification (CATH superfamily × EC class × length quartile, at most 25 per cell) |
 | `go_mf_labels.tsv` | `protein_id`, `GO_term`: experimental GO molecular-function terms |
 | `go_mf_cohort_freeze.json` | the GO-MF cohort: `ids` (20,073 accessions), `seed`, stratification, cap |
 | `go-basic.obo` | the Gene Ontology release used to propagate terms |
 | `union.fasta`, `union_ids.txt` | sequences and accessions of the 23,336 proteins in either cohort |
 | `union_allvsall.m8` | MMseqs2 all-against-all search of the union, tab-separated, no header: `query`, `target`, `fident`, `evalue`, `alnlen`, `qcov`, `tcov` (self hits removed) |
 | `union_allvsall.summary.json` | command, MMseqs2 version, hit counts |
-| `ec_v2_transfer/`, `go_mf_transfer/` | the transfer runs (below) |
-| `go_mf_transfer_noPB/` | GO-MF with "protein binding" dropped, a sensitivity run |
-| `ec_tau_b_v2_euclidean.csv`, `go_mf_transfer/tau_b.csv` | Kendall τ-b over all cohort pairs, per arm: embedding distance against EC hierarchical distance (EC) or against 1 − Wang best-match average (GO-MF) |
+| `ec_transfer/`, `go_mf_transfer/` | the transfer runs (below) |
+| `go_mf_transfer_no_protein_binding/` | GO-MF with "protein binding" dropped, a sensitivity run |
+| `ec_tau_b_euclidean.csv`, `go_mf_transfer/tau_b.csv` | Kendall τ-b over all cohort pairs, per arm: embedding distance against EC hierarchical distance (EC) or against 1 − Wang best-match average (GO-MF) |
 
 Each transfer run directory holds:
 
@@ -124,7 +123,7 @@ Each transfer run directory holds:
 | `paired_differences.csv` | per-query paired differences between two arms (`arm_a`, `arm_b`, `mean_diff`, `ci_lo`, `ci_hi`, `excludes_zero`) |
 | `per_query.parquet` | one row per arm × distance × variant × query: `neighbour_id`, `neighbour_distance`, tie flags, and the scores (EC: `score_exact`, `score_share3`, `score_share2`, `score_class`; GO-MF: `score_f1`, `score_wang_bma`) |
 | `per_query_baseline.parquet` | per query: eligible neighbours, the chance and oracle score, subset membership |
-| `manifest.json` | inputs with sha256, parameters, code commit and library versions |
+| `manifest.json` | inputs with sha256 (named as in this folder; the per-model embedding slices under `embedding_slices/` are cut from the deposited embedding files and not included), parameters, code commit and library versions |
 
 Variants restrict the eligible neighbours: `all`; `fident_lt_0.3` (only neighbours below 30% identity to the
 query); `no_hit_evalue_0.001` (only neighbours MMseqs2 does not find at E ≤ 10⁻³). Subsets: `all_queries`,
@@ -160,8 +159,7 @@ The three `exptm_*` files share the pair-table format, so the probes score on th
 | `<model>.npz` | `hist`, `edges`: 50,000-bin histogram of the Euclidean distance; `hist_log10`, `edges_log10`: 5,000 bins of log10 distance; `subsample`: 500,000 distances drawn at random (float32); `quantile_levels`, `quantile_values` |
 
 Every normalization in the paper (min–max, division by a percentile or the median) is an affine map of
-these raw-scale histograms. The JSON field `source` records where the distances were read on the
-authors' machines.
+these raw-scale histograms. The JSON field `source` names the pairs the distances were computed on.
 
 ## `testset_new2024.tar`
 

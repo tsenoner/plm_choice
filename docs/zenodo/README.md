@@ -23,20 +23,34 @@ Zenodo shows files in one flat list, so the name's prefix says what kind of file
 |---|---:|---|---|
 | `README.md`, `DATA_DICTIONARY.md`, `CITATION.cff` | | | this description, the file formats, citation metadata |
 | `embeddings_<model>.h5` (15 files) | 32.7 GB | | one embedding per protein for each of the 14 pLMs and the random Gaussian control; 540,881 Swiss-Prot proteins (526,871 for ESM1b and CLEAN) |
-| `pairs_splits.tar` | 1.0 GB | `sprot_pre2024_e1/sets/` | the deduplicated pair set: training, validation and test pairs with PIDE, HFSP and TM-score |
+| `pairs_splits.tar` | 1.0 GB | `swissprot_pairs/sets/` | the deduplicated pair set: training, validation and test pairs with PIDE, HFSP and TM-score |
 | `pairs_counts.tar` | 10 kB | `pair_table_counts/` | pair counts per split and target |
-| `pairs_identical_mask.tar` | 2.7 MB | `ridge_identical/` | which pairs join two identical sequences |
+| `pairs_identical_mask.tar` | 2.7 MB | `identical_pairs/` | which pairs join two identical sequences |
 | `pairs_random.tar` | 601 MB | `random_pairs/` | 5,000,000 uniformly drawn protein pairs with their embedding distances under every model |
-| `probes_native.tar` | 3.1 GB | `full100_p10/` | the probe grid: trained probes and raw-distance scores, 15 embedding sets × 3 targets |
-| `probes_pca128.tar` | 3.1 GB | `pca_cohort/` | the same grid on 128-dimensional PCA projections |
-| `probes_untrained.tar` | 2.3 GB | `randinit_full100/` | the same grid on 11 untrained (random-initialisation) networks |
+| `probes_native.tar` | 3.1 GB | `probes_native/` | the probe grid: trained probes and raw-distance scores, 15 embedding sets × 3 targets |
+| `probes_pca128.tar` | 3.1 GB | `probes_pca128/` | the same grid on 128-dimensional PCA projections |
+| `probes_untrained.tar` | 2.3 GB | `probes_untrained/` | the same grid on 11 untrained (random-initialisation) networks |
 | `analysis_functional_annotation.tar` | 202 MB | `functional_annotation/` | EC and GO-MF cohorts, 1-nearest-neighbour annotation-transfer results, the MMseqs2 homology baseline |
 | `analysis_experimental_tm.tar` | 0.8 MB | `experimental_tm/` | test pairs rescored from experimental PDB structures with US-align |
 | `analysis_distance_histograms.tar` | 59 MB | `distance_histograms/` | per-model distance distributions over random pairs and over aligner-found pairs |
 | `testset_new2024.tar` | 74 MB | `new2024/` | the New2024 test set: pairs among proteins new in UniRef50 2025_01, the 5 excluded proteins, embeddings |
 
-Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`. The pair and probe
-archives keep the folder names the code reads.
+Total about 43 GB. The `.tar` archives are uncompressed; unpack with `tar -xf <file>`.
+
+## Where to put the files
+
+Unpack everything into one folder and move the embeddings, without their prefix, next to the pair tables:
+
+```bash
+for f in *.tar; do tar -xf "$f"; done
+mkdir -p swissprot_pairs/embeddings
+for f in embeddings_*.h5; do mv "$f" "swissprot_pairs/embeddings/${f#embeddings_}"; done
+```
+
+`swissprot_pairs/` then has the layout the code reads (`sets/{train,val,test}.parquet`,
+`embeddings/<model>.h5`; for example `src/training/run_experiments.py --data_dir swissprot_pairs`), and
+the probe cells' `hparams.yaml` point into it, so `src/evaluation/evaluate.py --run_dir
+probes_native/fnn/fident/esm2_8m` re-scores a deposited probe from this folder.
 
 ## Data in brief
 
@@ -61,22 +75,15 @@ archives keep the folder names the code reads.
 ```python
 import h5py, numpy as np, pandas as pd
 
-pairs = pd.read_parquet("sprot_pre2024_e1/sets/test.parquet")       # from pairs_splits.tar
+pairs = pd.read_parquet("swissprot_pairs/sets/test.parquet")
 row = pairs.iloc[0]
-with h5py.File("embeddings_esm2_650m.h5") as h:
+with h5py.File("swissprot_pairs/embeddings/esm2_650m.h5") as h:
     a = np.asarray(h[row["query"]], dtype=np.float32).ravel()
     b = np.asarray(h[row["target"]], dtype=np.float32).ravel()
 print(np.linalg.norm(a - b), row[["fident", "hfsp", "alntmscore"]].to_dict())
 ```
 
 `.ravel()` matters for ProtT5 and ProtTucker, which store each vector with shape (1, d).
-
-The code in the repository reads embeddings as `<model>.h5` from one directory. Drop the prefix after
-downloading:
-
-```bash
-for f in embeddings_*.h5; do mv "$f" "${f#embeddings_}"; done
-```
 
 ## Versions
 

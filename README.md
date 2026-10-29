@@ -152,7 +152,7 @@ downloading.
 Two caveats worth stating plainly:
 
 - **ESM3-open is not MIT.** Despite the name, the `esm3-sm-open-v1` weights are under
-  EvolutionaryScale's Cambrian **Non-Commercial** License. The deposited `esm3_open.h5`
+  EvolutionaryScale's Cambrian **Non-Commercial** License. The deposited `embeddings_esm3_open.h5`
   holds derived embeddings rather than the checkpoint, but the non-commercial terms are
   EvolutionaryScale's and stand regardless of this repository's MIT licence. Pull the
   checkpoint itself from gated HuggingFace; do not redistribute it.
