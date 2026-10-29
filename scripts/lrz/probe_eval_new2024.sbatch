@@ -2,13 +2,15 @@
 # Score the trained probes on the New2024 set (R1.1: proteins added to Swiss-Prot AFTER the
 # models' training cut-offs), without retraining anything.
 #
-#     cd ~/plm_choice && mkdir -p logs && sbatch scripts/lrz/probe_eval_new2024.sbatch
+#     cd ~/plm_choice && mkdir -p logs
+#     sbatch scripts/lrz/probe_eval_new2024.sbatch                                     # main grid
+#     SRC_DATASET=sprot_pre2024_e1_sub10 sbatch scripts/lrz/probe_eval_new2024.sbatch  # reduced
 #
 # ---------------------------------------------------------------------------
 # WHY A COPY OF THE CELL RATHER THAN RE-POINTING IT. evaluate.py resolves the embedding file
 # and the data dir from the trained cell's wandb config; editing that in place would leave the
 # cell describing New2024 instead of the cohort it was trained and tested on. Instead each cell
-# is mirrored into models/new2024_e1/... with only the best checkpoint plus a hparams.yaml
+# is mirrored into models/$DST_DATASET/... with only the best checkpoint plus a hparams.yaml
 # naming the New2024 paths -- there is no wandb dir there, so evaluate.py's documented fallback
 # to hparams.yaml is what gets used, and the original cell is never touched.
 #
@@ -41,12 +43,18 @@ unset VIRTUAL_ENV
 
 DSS=/dss/dssfs05/lwp-dss-0003/pr63ci/pr63ci-dss-0003/ge45ted2
 NEW="$DSS/plm_choice_data/data/processed/2024_new_e1"
-# Which trained grid to score, and where its New2024 mirror goes. The defaults score the
-# reduced-protocol grid (10% of the pairs, patience 5); the main grid (every pair, patience 10)
-# is scored with
-#     SRC_DATASET=full100_p10 DST_DATASET=new2024_full100_p10 sbatch scripts/lrz/probe_eval_new2024.sbatch
-SRC_DATASET="${SRC_DATASET:-sprot_pre2024_e1_sub10}"
-DST_DATASET="${DST_DATASET:-new2024_e1}"
+# Which trained grid to score, and where its New2024 mirror goes. The default scores the main
+# grid (every pair, patience 10) into new2024_full100_p10; the reduced protocol (10% of the
+# pairs, patience 5) is scored into new2024_e1 with
+#     SRC_DATASET=sprot_pre2024_e1_sub10 sbatch scripts/lrz/probe_eval_new2024.sbatch
+# Any other SRC_DATASET needs DST_DATASET as well.
+SRC_DATASET="${SRC_DATASET:-full100_p10}"
+case "$SRC_DATASET" in
+    full100_p10) d=new2024_full100_p10 ;;
+    sprot_pre2024_e1_sub10) d=new2024_e1 ;;
+    *) d= ;;
+esac
+DST_DATASET="${DST_DATASET:-${d:?set DST_DATASET for SRC_DATASET=$SRC_DATASET}}"
 TEST="$NEW/sets/new2024.parquet"
 
 cd "$HOME/plm_choice"
@@ -85,7 +93,9 @@ seed: 42
 dataset: $DST_DATASET
 trained_from: $src
 EOF
-      # evaluate.py catches its own exceptions and exits 0, so assert on the artifact.
+      # evaluate.py catches its own exceptions and exits 0, so assert on the artifact. Remove
+      # the cell's existing New2024 metrics first, so a failed evaluation cannot pass on them.
+      rm -f "$dst"/evaluation_results/test_new2024_*_metrics.txt
       $PY src/evaluation/evaluate.py --run_dir "$dst" --test_file "$TEST" \
           --n_bootstrap 1000 --force_recompute || true
       if ls "$dst"/evaluation_results/test_new2024_*_metrics.txt >/dev/null 2>&1; then

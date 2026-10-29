@@ -19,7 +19,7 @@ REPO="${PLM_CHOICE_REPO:-$WT}"
 RES="${RIDGE_RESULTS:?set RIDGE_RESULTS to a results directory outside the repo}"
 PY="${PLM_CHOICE_PYTHON:-$REPO/.venv/bin/python}"
 PAIRS="${RIDGE_PAIRS:-$REPO/data/processed/sprot_pre2024_e1_sub10/sets/train.parquet}"
-RANKING="${RIDGE_RANKING:-$REPO/out/sprot_pre2024_subset/plm_ranking_by_spearman.csv}"
+RANKING="${RIDGE_RANKING:-}"  # optional ranking CSV; figure_ranked/ is drawn only when set
 
 mkdir -p "$RES/new_data" "$RES/figure"
 
@@ -76,12 +76,16 @@ PYTHONPATH=src "$PY" src/visualization/pairwise_embedding_comparison.py \
   --visualizations distribution_normalized_ridge dip_test \
   --force_recompute 2>&1 | tee "$RES/figure/regen.log"
 
-mkdir -p "$RES/figure_ranked"
-PYTHONPATH=src "$PY" src/visualization/pairwise_embedding_comparison.py \
-  --data_path "$MERGED" \
-  --output_dir "$RES/figure_ranked" \
-  --visualizations distribution_normalized_ridge \
-  --ranking_csv "$RANKING" \
-  --force_recompute 2>&1 | tee "$RES/figure_ranked/regen.log"
+if [ -n "$RANKING" ]; then
+  mkdir -p "$RES/figure_ranked"
+  PYTHONPATH=src "$PY" src/visualization/pairwise_embedding_comparison.py \
+    --data_path "$MERGED" \
+    --output_dir "$RES/figure_ranked" \
+    --visualizations distribution_normalized_ridge \
+    --ranking_csv "$RANKING" \
+    --force_recompute 2>&1 | tee "$RES/figure_ranked/regen.log"
+else
+  echo "RIDGE_RANKING not set: skipped figure_ranked/"
+fi
 
 echo "DONE"

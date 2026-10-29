@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Rebuild Table S2 (tbls:performance) VALUES from one probe grid.
 
+The defaults rebuild the paper's Table S2: the main grid (full100_p10: every pair,
+patience 10) plus the linear read-out. The reduced-protocol table (10% of pairs,
+patience 5) is
+    PROBE_DATASET=sprot_pre2024_e1_sub10 LINEAR_CSV=
+Needs PAPER_ARTEFACTS, MANUSCRIPT_DIR and TABLE_OUT (the output file) in the environment.
+
 Reads probe_metrics.csv, keeps one dataset (PROBE_DATASET, below), native Euclidean +
-FNN, metric = |Spearman rho| (Pearson R2 until 2026-10-09; the paper now uses one score).  Emits the same pandoc grid table the manuscript already
+FNN, metric = |Spearman rho|. Emits the same pandoc grid table the manuscript already
 carries, so the only thing that moves is the numbers and the best/second marking.
 
 Best/second are per (target, read-out column), with the random Gaussian control
@@ -12,9 +18,11 @@ trained probe stays "--".
 Also parses the CURRENT table out of 90.supplementary.md (read-only) and reports a
 cell-by-cell diff, so the change count quoted to the user is measured, not guessed.
 
-LINEAR_CSV (optional) adds a third read-out column, "Linear", between the two: the
-closed-form ridge regression on |a-b| (R1.8), read from the ``ridge_abs`` column of
-``d14_open_collect.py``'s linear_probe_rho.csv. Its best/second marking follows the same rule.
+LINEAR_CSV adds a third read-out column, "Linear", between the two: the closed-form
+ridge regression on |a-b| (R1.8), read from the ``ridge_abs`` column of
+``d14_open_collect.py``'s linear_probe_rho.csv. Its best/second marking follows the same
+rule. That file covers the main grid only, so it is the default for full100_p10 and for
+no other dataset; an empty LINEAR_CSV= drops the column.
 """
 
 from __future__ import annotations
@@ -39,25 +47,18 @@ def _need(var: str) -> str:
 ARTEFACTS = _need("PAPER_ARTEFACTS")
 MANUSCRIPT = _need("MANUSCRIPT_DIR")
 
-# Both overridable. The defaults read the reduced-protocol grid (sprot_pre2024_e1_sub10:
-# 10% of pairs, patience 5); Table S2 in the paper is the main grid (100% of pairs,
-# patience 10):
-#     PROBE_METRICS=$PAPER_ARTEFACTS/probe_2026-10-08/probe_metrics.csv PROBE_DATASET=full100_p10
-METRICS = Path(os.environ.get("PROBE_METRICS") or Path(ARTEFACTS, "probe_e1_2026-09-18/probe_metrics.csv"))
+# Both overridable. The defaults rebuild the paper's Table S2 (main grid, full100_p10:
+# every pair, patience 10, plus the linear read-out). The reduced-protocol table
+# (10% of pairs, patience 5) is
+#     PROBE_DATASET=sprot_pre2024_e1_sub10 LINEAR_CSV=
+METRICS = Path(os.environ.get("PROBE_METRICS") or Path(ARTEFACTS, "probe_2026-10-08/probe_metrics.csv"))
 SUPP = Path(
     MANUSCRIPT,
     "sections/90.supplementary.md"
 )
-OUT = Path(os.environ.get("TABLE_OUT") or Path(ARTEFACTS, "final_figures_2026-09-21/tableS2.md"))
-# The previously GENERATED table. The manuscript diff below reads 90.supplementary.md,
-# which is being hand-edited right now, so it is a moving target; this file is the
-# stable reference for "what did the metrics refresh actually move".
-PREV = Path(
-    ARTEFACTS,
-    "final_figures_2026-09-20/tableS2.md"
-)
+OUT = Path(_need("TABLE_OUT"))
 
-DATASET = os.environ.get("PROBE_DATASET", "sprot_pre2024_e1_sub10")
+DATASET = os.environ.get("PROBE_DATASET", "full100_p10")
 
 # Display label -> arm key in probe_metrics.csv. Order is the table's row order.
 ROWS: list[tuple[str, str]] = [
@@ -84,7 +85,13 @@ BLOCKS: list[tuple[str, str]] = [
     ("TM-score", "alntmscore"),
     ("HFSP", "hfsp"),
 ]
-LINEAR_CSV = os.environ.get("LINEAR_CSV")
+# The linear read-out was fitted on the main grid only; no table mixes protocols.
+LINEAR_CSV = os.environ.get(
+    "LINEAR_CSV",
+    str(Path(ARTEFACTS, "d14_open_2026-10-17/linear_probe/linear_probe_rho.csv"))
+    if DATASET == "full100_p10"
+    else "",
+)
 COLS: list[tuple[str, str]] = [("Euclidean", "euclidean"), ("FNN", "fnn")]
 if LINEAR_CSV:
     COLS.insert(1, ("Linear", "linear"))
@@ -171,7 +178,7 @@ def row(param: str, emb: str, *vals: str) -> str:
 
 def render(cells: dict[tuple[str, str, str], str]) -> str:
     lines = [rule("-", False)]
-    lines.append(row("Parameter", "Embedding", *(lbl for lbl, _ in COLS)))
+    lines.append(row("Target", "Embedding", *(lbl for lbl, _ in COLS)))
     lines.append(rule("=", True))
     for bi, (blabel, target) in enumerate(BLOCKS):
         if bi:
@@ -234,11 +241,6 @@ def parse_current() -> dict[tuple[str, str, str], str]:
     return parse_grid(text[start:end])
 
 
-def parse_prev() -> dict[tuple[str, str, str], str]:
-    """Table S2 as the previous run generated it."""
-    return parse_grid(PREV.read_text())
-
-
 def strip_marks(s: str) -> str:
     return re.sub(r"[*\[\]]|\{\.underline\}", "", s).strip()
 
@@ -279,8 +281,6 @@ def main() -> None:
     print(f"cells total                : {len(new)}")
     print(f"dash cells remaining       : {len(dashes_left)} -> {dashes_left}")
 
-    if PREV.is_file():
-        diff(new, parse_prev(), "PREVIOUS GENERATED TABLE (2026-09-20)")
     diff(new, parse_current(), "MANUSCRIPT 90.supplementary.md (live, being edited)")
 
     # best/second marking per (target, read-out), read back off the rendered cells

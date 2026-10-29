@@ -47,7 +47,7 @@ from exptm_and_training_summary import (  # noqa: E402
 FIG1 = "full100_p10"
 SETS = ("afdbtarget", "matched", "wholechain")
 EXPTM = {s: f"exptm_{s}_{FIG1}" for s in SETS}
-OLD = {s: f"exptm_{s}" for s in SETS}  # reduced-protocol (10%/patience-5) probes, same pairs
+REDUCED = {s: f"exptm_{s}" for s in SETS}  # reduced-protocol (10%/patience-5) probes, same pairs
 
 
 def main() -> int:
@@ -77,7 +77,7 @@ def main() -> int:
 
     # --- pair counts, recovered from the random arm's p-values (the metrics carry no n) ---------
     facts["n_pairs_inferred"] = {}
-    for ds in (*EXPTM.values(), *OLD.values()):
+    for ds in (*EXPTM.values(), *REDUCED.values()):
         r = tm[(tm["dataset"] == ds) & (tm["arm"] == "random_1024")]
         ns = [n_from_p(x.Spearman, x.Spearman_p_value) for x in r.itertuples() if 0 < x.Spearman_p_value < 1]
         ns += [n_from_p(x.Pearson, x.Pearson_p_value) for x in r.itertuples() if 0 < x.Pearson_p_value < 1]
@@ -98,7 +98,7 @@ def main() -> int:
                 row[f"rho_{s}"] = score[ds].get(a, np.nan)
                 row[f"se_{s}"] = se[ds].get(a, np.nan)
                 row[f"rank_{s}_of14"] = rk[ds].get(a)
-                row[f"rho_{s}_10pct_p5_probes"] = score.get(OLD[s], {}).get(a, np.nan)
+                row[f"rho_{s}_10pct_p5_probes"] = score.get(REDUCED[s], {}).get(a, np.nan)
             row["delta_matched_minus_afdbtarget"] = row["rho_matched"] - row["rho_afdbtarget"]
             row["delta_wholechain_minus_afdbtarget"] = row["rho_wholechain"] - row["rho_afdbtarget"]
             rows.append(row)
@@ -109,8 +109,8 @@ def main() -> int:
                        (EXPTM["afdbtarget"], EXPTM["wholechain"], "same pairs; AFDB -> experimental target (longer)"),
                        (EXPTM["matched"], EXPTM["wholechain"], "same pairs; normalisation only")]
         if ro == "fnn":
-            comparisons += [(OLD[s], EXPTM[s], f"protocol on {s}: 10%/p5 -> 100%/p10 probes")
-                            for s in SETS if OLD[s] in score]
+            comparisons += [(REDUCED[s], EXPTM[s], f"protocol on {s}: 10%/p5 -> 100%/p10 probes")
+                            for s in SETS if REDUCED[s] in score]
         for a_ds, b_ds, what in comparisons:
             for set_name, arms in (("foundation_12", FOUNDATION), ("all_14", PLMS)):
                 agree.append({"read_out": ro, "a": a_ds, "b": b_ds, "model_set": set_name, "what": what,

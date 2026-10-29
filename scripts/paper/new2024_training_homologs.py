@@ -5,7 +5,7 @@
         --pairs data/processed/2024_new_e1/sets/test.parquet \
         --fasta data/interm/2024_new/newly_discovered_dissimilar_proteins_2024.fasta \
         --sprot data/raw/sprot_2024/sprot.fasta \
-        --splits data/processed/sprot_pre2024_e1_sub10/sets \
+        --splits data/processed/sprot_pre2024_e1/sets \
         --out <paper_inputs>/d14_2026-10-16
 
 Why: the paper calls New2024 "dissimilar to the probes' training proteins" and quotes how many

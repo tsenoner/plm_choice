@@ -110,8 +110,22 @@ else
     printf '  cohort    %s WARNING(S) -- an arm is off the shared cohort; do NOT collect\n' "$warn"
 fi
 if [ -n "$bad" ]; then
+    # The patience this array trained at, from train.py's "Early stopping patience: N epochs"
+    # line. A cell that was already complete trains nothing and prints none, so take the
+    # first log that has it.
+    pat=""
+    for f in "$P"/logs/probe-grid-"$JOB"_*.out; do
+        [ -e "$f" ] || continue
+        pat="$(head -c 2000000 "$f" 2>/dev/null | grep -m1 -o 'Early stopping patience: [0-9]*' | grep -o '[0-9]*$')"
+        [ -n "$pat" ] && break
+    done
     printf '  resubmit  --array=%s\n' "$bad"
-    printf '            (they resume from last.ckpt; PATIENCE=10 must match)\n'
+    if [ -n "$pat" ]; then
+        printf '            (they resume from last.ckpt; resubmit with PATIENCE=%s, as in the logs)\n' "$pat"
+    else
+        printf '            (they resume from last.ckpt; resubmit with the PATIENCE the grid was\n'
+        printf '            trained at -- "Early stopping patience:" in its logs)\n'
+    fi
 else
     printf '  resubmit  nothing\n'
 fi

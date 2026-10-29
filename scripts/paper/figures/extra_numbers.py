@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Four extra numbers for the manuscript text, recomputed from a probe grid's metrics.
 
-The defaults read the reduced-protocol grids (PRE and RAND below: 10% of pairs, patience 5).
-Each number was first computed while the ESM-2 3B alntmscore cell was still missing, so
-each averaged over one arm too few. Nothing here is hard-coded from that run.
+The defaults read the main grid (PRE and RAND below: full100_p10 and its untrained twin
+randinit_full100, every pair, patience 10), the grid the paper reports. The reduced
+protocol (10% of pairs, patience 5) is
+    PROBE_DATASET=sprot_pre2024_e1_sub10 PROBE_RANDINIT=sprot_pre2024_e1_sub10_randinit
+Nothing is hard-coded from a run: every number is recomputed from the metrics file, the
+first argument or $PAPER_ARTEFACTS/probe_2026-10-08/probe_metrics.csv.
 
 1. Euclidean pre-training gain: mean |rho| pretrained - mean |rho| untrained twin.
 2. FNN pre-training gain, same construction.
@@ -36,15 +39,15 @@ MANUSCRIPT = _need("MANUSCRIPT_DIR")
 
 METRICS = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(
     ARTEFACTS,
-    "probe_e1_2026-09-18/probe_metrics.csv"
+    "probe_2026-10-08/probe_metrics.csv"
 )
 PUBLISHED = Path(
     MANUSCRIPT,
     "archive/original_submission_2025/xother_data/plm_ranking_by_spearman.csv"
 )
 
-PRE = "sprot_pre2024_e1_sub10"
-RAND = "sprot_pre2024_e1_sub10_randinit"
+PRE = os.environ.get("PROBE_DATASET", "full100_p10")  # pretrained arms
+RAND = os.environ.get("PROBE_RANDINIT", "randinit_full100")  # their untrained twins
 CONTROL = "random_1024"  # i.i.d. Gaussian control, never a ranking candidate
 
 # The randinit arms spell ProtT5 "prot_t5"; the pretrained arms spell it "prott5".

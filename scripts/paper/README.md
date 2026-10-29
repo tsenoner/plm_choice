@@ -14,10 +14,10 @@ written against are environment variables, and an unset one fails by name.
 
 | script | produces |
 |---|---|
-| `run_fig01_2026-09-21.sh` | Figure 1, from the probe metrics — the invocation, and where the PNG was installed |
+| `run_fig01.sh` | Figure 1, drawn from the main grid's probe metrics (`full100_p10`); with `MANUSCRIPT_DIR` set it also installs the PNG |
 | `run_2026-09-21.sh` | Figures 2 and S5 (ridge), Figure 3 inputs, and the divisor-stability number the axis choice rests on |
 | `run_ridge.sh`, `run_fingerprint.sh` | the earlier ridge and fingerprint passes, kept because they name the inputs each figure used |
-| `build_tableS2.py` | Table S2. Verified 2026-09-21: regenerates the installed table, 93/93 lines |
+| `build_tableS2.py` | Table S2, written to `$TABLE_OUT`. The defaults rebuild the installed table (main grid plus the linear read-out); `PROBE_DATASET=sprot_pre2024_e1_sub10 LINEAR_CSV=` gives the reduced-protocol table. Checked: the default run reproduces the installed table line for line (93 lines, 135 cells) |
 | `extra_numbers.py` | the pre-training gains and the other derived numbers quoted in Results |
 | `compare_fig02.py`, `compare_fig03.py` | random-pairs vs aligner-found population comparison (the 0.43 against 0.77) |
 | `redraw_fig03_diverging.py` | Figure 3's diverging colour scale |

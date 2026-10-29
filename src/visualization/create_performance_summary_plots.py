@@ -231,7 +231,8 @@ def load_metrics_csv(csv_path: Path, dataset: str | None = None) -> pd.DataFrame
 
     Args:
         csv_path: Path to probe_metrics.csv
-        dataset: Keep only this ``dataset`` value (e.g. ``sprot_pre2024_e1_sub10``).
+        dataset: Keep only this ``dataset`` value (e.g. ``full100_p10`` for
+            Figure 1, ``pca_cohort`` for Figure S3).
             Required in practice — the file also holds the post-cutoff and
             random-init grids, which are different populations and must not be mixed
             into one panel.
@@ -826,7 +827,7 @@ def main():
         "--dataset",
         type=str,
         default=None,
-        help="With --metrics_csv: keep only this dataset (e.g. sprot_pre2024_e1_sub10). "
+        help="With --metrics_csv: keep only this dataset (e.g. full100_p10). "
         "The file also carries the post-cutoff and random-init grids, which are "
         "different populations and must not be pooled into one panel.",
     )

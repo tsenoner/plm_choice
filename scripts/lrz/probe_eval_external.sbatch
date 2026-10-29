@@ -1,9 +1,11 @@
 #!/bin/bash
 # Score already-trained probe cells on an EXTERNAL test set, without retraining anything.
 #
+#   SRC_DATASET=full100_p10 \
 #   SETS=$DSS/plm_choice_data/data/processed/exp_tm/sets TEST=exptm_matched \
 #   EMB=$DSS/plm_choice_data/data/processed/sprot_pre2024/embeddings_cohort2k \
-#   DST=exptm_matched TARGETS=alntmscore sbatch scripts/lrz/probe_eval_external.sbatch
+#   DST=exptm_matched_full100_p10 TARGETS=alntmscore \
+#   sbatch scripts/lrz/probe_eval_external.sbatch
 #
 # ---------------------------------------------------------------------------
 # WHY THIS EXISTS — the fairness question. The probes are trained on Foldseek's
@@ -35,9 +37,10 @@
 set -euo pipefail
 unset VIRTUAL_ENV
 
-# The trained grid to score. The default is the reduced-protocol grid (10% of the pairs,
-# patience 5); SRC_DATASET=full100_p10 scores the main grid (every pair, patience 10).
-SRC_DATASET="${SRC_DATASET:-sprot_pre2024_e1_sub10}"
+# The trained grid to score: full100_p10 is the main grid (every pair, patience 10),
+# sprot_pre2024_e1_sub10 the reduced protocol (10% of the pairs, patience 5). Each grid needs
+# its own DST; the main grid's mirrors are named exptm_*_full100_p10.
+SRC_DATASET="${SRC_DATASET:?set SRC_DATASET, e.g. full100_p10 (main grid) or sprot_pre2024_e1_sub10 (reduced protocol)}"
 SETS="${SETS:?set SETS to the directory holding the external test parquet}"
 TEST="${TEST:?set TEST to the test parquet basename, without .parquet}"
 EMB="${EMB:?set EMB to the embeddings directory the cells were trained on}"
@@ -74,6 +77,9 @@ seed: 42
 dataset: $DST
 trained_from: $src
 EOF
+      # Remove the cell's existing metrics for this TEST first, so a failed evaluation cannot
+      # pass the check below on them.
+      rm -f "$dst"/evaluation_results/test_${TEST}_*_metrics.txt
       $PY src/evaluation/evaluate.py --run_dir "$dst" --test_file "$TESTFILE" \
           --n_bootstrap 1000 --force_recompute || true
       if ls "$dst"/evaluation_results/test_${TEST}_*_metrics.txt >/dev/null 2>&1; then

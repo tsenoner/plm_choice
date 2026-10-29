@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--thin", type=float, nargs="*", default=[0.5, 0.25],
                     help="extra random thinnings of the input, to show how concentration moves with sampling")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--tag", required=True, help="prefix of the pair-list files, e.g. test_sub10")
+    ap.add_argument("--tag", required=True, help="prefix of the pair-list files, e.g. test_full")
     ap.add_argument("--out-counts", required=True, type=Path)
     ap.add_argument("--out-caps", required=True, type=Path)
     ap.add_argument("--n-proteins-full", type=int,

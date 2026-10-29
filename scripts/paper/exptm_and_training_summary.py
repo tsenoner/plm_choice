@@ -62,8 +62,9 @@ PLMS = [a for a in DISPLAY if a != "random_1024"]                               
 EXPTM = ("exptm_afdbtarget", "exptm_matched", "exptm_wholechain")
 FIG1 = "full100_p10"            # Figure 1B / Table S2 grid
 SUB10 = "sprot_pre2024_e1_sub10"  # the grid the exptm probes were trained in
-# From the launch records: probe_grid.sbatch PATIENCE defaults to 5 (sub10); full100_p10 and
-# randinit_full100 were launched with PATIENCE=10 (NEXT.md); `patience10` re-ran 5 sub10 cells.
+# From the launch records: the sprot_pre2024_e1_sub10 grids ran at patience 5; full100_p10
+# and randinit_full100 at PATIENCE=10; `patience10` holds 5 cells of the 10% splits trained
+# at patience 10.
 PATIENCE = {SUB10: 5, FIG1: 10, "randinit_full100": 10, "patience10": 10}
 MAX_EPOCHS = 100
 CKPT = re.compile(r"epoch=(\d+)-step=(\d+)-val_loss=([\d.]+)")
@@ -217,7 +218,7 @@ def training_table(m: pd.DataFrame, datasets: list[str]) -> pd.DataFrame:
            .assign(spe=lambda x: x["step"] / (x["epoch"] + 1)).groupby("target")["spe"].agg(lambda s: s.mode()[0]))
     # The same arm under the reduced protocol (10% of pairs, patience 5), to show how far the
     # protocol moves it.
-    prev = {FIG1: SUB10, "randinit_full100": "sprot_pre2024_e1_sub10_randinit"}
+    reduced = {FIG1: SUB10, "randinit_full100": "sprot_pre2024_e1_sub10_randinit"}
     sub = m[m["model_type"] == "fnn"].set_index(["dataset", "target", "arm"])["Spearman"]
     rows = []
     for r in f.sort_values(["dataset", "target", "arm"]).itertuples():
@@ -225,7 +226,7 @@ def training_table(m: pd.DataFrame, datasets: list[str]) -> pd.DataFrame:
         ep, spe = int(r.epoch), int(r.steps_per_epoch)
         ran = min(ep + 1 + pat, MAX_EPOCHS)
         twin = re.sub(r"^random_init_(.*)_seed\d+$", r"\1", r.arm).replace("prot_t5", "prott5")
-        s10 = sub.get((prev.get(r.dataset), r.target, r.arm), np.nan)
+        s10 = sub.get((reduced.get(r.dataset), r.target, r.arm), np.nan)
         rows.append({
             "dataset": r.dataset, "target": r.target, "arm": r.arm,
             "model": DISPLAY.get(twin, twin) + (" (untrained)" if r.arm.startswith("random_init") else ""),
@@ -300,7 +301,7 @@ def main() -> int:
     g = m[(m["dataset"].isin([FIG1, SUB10])) & (m["arm"].isin(PLMS))]
     g = g.pivot_table(index=["model_type", "target", "arm"], columns="dataset", values="Spearman")
     d = (g[FIG1] - g[SUB10]).abs().groupby(level=["model_type", "target"])
-    facts["grid_change_abs_delta_rho_100p10_vs_10p5"] = {
+    facts["protocol_abs_delta_rho_100p10_vs_10p5"] = {
         f"{mt}/{t}": {"median": round(float(s.median()), 4), "max": round(float(s.max()), 4),
                       "argmax": s.droplevel([0, 1]).idxmax(), "n_arms": int(s.size)} for (mt, t), s in d}
     # Against what the protocol moves a cell by: the gaps between neighbouring models in Figure 1.

@@ -3,25 +3,27 @@
 # scoring it plus the training-free euclidean baseline.
 #
 #     cd ~/plm_choice && mkdir -p logs
-#     # main grid: pretrained arms, every pair, patience 10 (15 x 3 targets = 45 tasks)
-#     DATASET=full100_p10 EXPECT_ARMS=15 PATIENCE=10 \
-#         sbatch --time=2-00:00:00 --mem=256G --array=0-44%10 scripts/lrz/probe_grid.sbatch
-#     # untrained random-init arms, same protocol (11 x 3 = 33 tasks)
-#     DATASET=randinit_full100 EXPECT_ARMS=11 PATIENCE=10 \
-#         sbatch --time=2-00:00:00 --mem=256G --array=0-32%10 scripts/lrz/probe_grid.sbatch
-#     # reduced protocol for the protocol sensitivity check: 10% of the pairs, patience 5
-#     # (the PATIENCE default); the untrained arms fit on the MIG slices
-#     DATASET=sprot_pre2024_e1_sub10 EXPECT_ARMS=15 \
+#     # main grid: pretrained arms, every pair, patience 10 (15 x 3 targets = 45 tasks). The
+#     # PATIENCE, --mem and --time defaults are set for it: full-data TM-score cells peak at
+#     # ~75 GiB and can run past 24 h.
+#     DATASET=full100_p10 EXPECT_ARMS=15 \
 #         sbatch --array=0-44%10 scripts/lrz/probe_grid.sbatch
-#     DATASET=sprot_pre2024_e1_sub10_randinit EXPECT_ARMS=11 \
+#     # untrained random-init arms, same protocol (11 x 3 = 33 tasks)
+#     DATASET=randinit_full100 EXPECT_ARMS=11 \
+#         sbatch --array=0-32%10 scripts/lrz/probe_grid.sbatch
+#     # reduced protocol for the protocol sensitivity check: 10% of the pairs, patience 5,
+#     # which fits in 64G and 12 h; the untrained arms fit on the MIG slices
+#     DATASET=sprot_pre2024_e1_sub10 EXPECT_ARMS=15 PATIENCE=5 \
+#         sbatch --mem=64G --time=12:00:00 --array=0-44%10 scripts/lrz/probe_grid.sbatch
+#     DATASET=sprot_pre2024_e1_sub10_randinit EXPECT_ARMS=11 PATIENCE=5 \
 #         sbatch -p lrz-dgx-a100-40x8-mig --qos=mig --gres=gpu:3g.20gb:1 \
-#         --array=0-32%10 scripts/lrz/probe_grid.sbatch
+#         --mem=64G --time=12:00:00 --array=0-32%10 scripts/lrz/probe_grid.sbatch
 #     # probe capacity (R2.5) / linear read-out (R1.8) on the main protocol: a DATASET alias
 #     # per variant (scripts/lrz/make_probe_alias.sh), PIDE only = indices 0..EXPECT_ARMS-1
-#     DATASET=full100_p10_h256 EXPECT_ARMS=6 PATIENCE=10 HIDDEN=256 MODELS=fnn \
-#         sbatch --time=2-00:00:00 --mem=128G --array=0-5 scripts/lrz/probe_grid.sbatch
-#     DATASET=full100_p10_lindist EXPECT_ARMS=15 PATIENCE=10 MODELS=linear_distance \
-#         sbatch --time=2-00:00:00 --mem=128G --array=0-14 scripts/lrz/probe_grid.sbatch
+#     DATASET=full100_p10_h256 EXPECT_ARMS=6 HIDDEN=256 MODELS=fnn \
+#         sbatch --mem=128G --array=0-5 scripts/lrz/probe_grid.sbatch
+#     DATASET=full100_p10_lindist EXPECT_ARMS=15 MODELS=linear_distance \
+#         sbatch --mem=128G --array=0-14 scripts/lrz/probe_grid.sbatch
 #
 # ---------------------------------------------------------------------------
 # THE PROTOCOL, on corrected data: fnn, hidden 64, lr 1e-4, batch 1024, max 100 epochs,
@@ -56,9 +58,9 @@
 #SBATCH -p lrz-hgx-a100-80x4,lrz-hgx-h100-94x4,lrz-dgx-a100-80x8,lrz-v100x2,lrz-dgx-1-v100x8
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1                 # MANDATORY: without it the job sits PD forever
-#SBATCH --time=12:00:00              # MANDATORY: default is 1h, QOS caps at 2 days
+#SBATCH --time=2-00:00:00            # MANDATORY: default is 1h, QOS caps at 2 days
 #SBATCH --cpus-per-task=12           # 10 DataLoader workers + main process
-#SBATCH --mem=64G
+#SBATCH --mem=256G
 #SBATCH -o logs/%x-%A_%a.out
 #SBATCH -e logs/%x-%A_%a.err
 
@@ -70,11 +72,11 @@ DATASET="${DATASET:?set DATASET, e.g. full100_p10}"
 EXPECT_ARMS="${EXPECT_ARMS:?set EXPECT_ARMS (the embedding count the dataset must hold)}"
 SRC="$DSS/plm_choice_data/data/processed/$DATASET"
 PARAMS=(fident alntmscore hfsp)
-# Early stopping: the default 5 is the reduced protocol; the main grid runs PATIENCE=10. A
-# higher patience also re-tests a cell that stopped suspiciously early -- three alntmscore
-# cells peaked at epochs 2-4 while their neighbours trained for 20-47, which is the signature
-# of an early plateau rather than a converged fit.
-PATIENCE="${PATIENCE:-5}"
+# Early stopping: the default 10 is the main grid; the reduced protocol runs PATIENCE=5. At
+# patience 5 three alntmscore cells peaked at epochs 2-4 while their neighbours trained for
+# 20-47, which is the signature of an early plateau rather than a converged fit; patience 10
+# gives such cells room to move past it.
+PATIENCE="${PATIENCE:-10}"
 # Probe-capacity check (R2.5, plan C12): the fnn's first layer is Linear(n -> HIDDEN), 64 in
 # both protocols. A non-default HIDDEN must run under its own DATASET alias (a dir
 # of symlinks, like full100_p10), because the cell's path is models/$DATASET/$model/... and
