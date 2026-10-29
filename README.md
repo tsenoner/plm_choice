@@ -98,7 +98,7 @@ models/<dataset>/<model_type>/<target>/<embedding>/<timestamp>/
 ## Tests
 
 ```bash
-uv run pytest -q -m "not slow"   # ~1100 tests, about 75 s
+uv run pytest -q -m "not slow"   # ~1,430 tests, about 75 s
 uv run pytest -q -m slow         # statistical coverage simulations (minutes)
 ```
 
@@ -128,9 +128,12 @@ src/
 └── plm_choice/         the `plm` CLI (wraps the above; contains no analysis logic)
 scripts/                analysis helpers; wrapped by the CLI, but only when
                         running from a clone (they are not shipped in the wheel)
-tests/                  ~1100 tests
+tests/                  ~1,430 tests
 freeze/                 frozen canonical-set manifests (small, version-controlled)
-docs/                   specification and analysis notes
+docs/                   specification and analysis notes (index: docs/README.md)
+manuscript/             NOT part of this repo: the private manuscript repo, cloned here;
+                        scripts/paper/ reads manuscript/paper_inputs/ and writes
+                        manuscript/bib_2026/figures/
 ```
 
 `data/`, `models/`, `out/` and `notebooks/` are deliberately untracked — they hold bulk

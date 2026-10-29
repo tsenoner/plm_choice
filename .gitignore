@@ -32,10 +32,10 @@ tests/test_outputs/
 scripts/tmp/
 scripts/backup/
 
-# Internal working docs — kept local; origin is PUBLIC.
-# resubmission_plan.html holds reviewer strategy, journal/APC decisions and
-# co-author coordination notes. A copy lives outside the repo at
-# ~/Documents/projects/_plm_choice_internal_backup/.
+# Internal working docs — never committed here; origin is PUBLIC.
+# NEXT.md, manuscript_changes.md and resubmission_plan.html are symlinks into the PRIVATE
+# manuscript repo (manuscript/planning/), which versions them; lrz_setup.md is local only
+# (a dated snapshot is in manuscript/planning/history/).
 /docs/NEXT.md
 /docs/resubmission_plan.html
 /docs/talks/
@@ -71,3 +71,7 @@ scripts/backup/
 
 # Playwright MCP scratch (browser automation leaves this behind)
 .playwright-mcp/
+
+# Worktrees made by the Claude app. Never nest a worktree of the private manuscript repo inside
+# one (at manuscript/): removing the outer worktree deletes the inner one, untracked files included.
+/.claude/worktrees/
