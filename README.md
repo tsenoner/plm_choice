@@ -151,11 +151,13 @@ downloading.
 
 Two caveats worth stating plainly:
 
-- **ESM3-open is not MIT.** Despite the name, the `esm3-sm-open-v1` weights are under
-  EvolutionaryScale's Cambrian **Non-Commercial** License. The deposited `embeddings_esm3_open.h5`
-  holds derived embeddings rather than the checkpoint, but the non-commercial terms are
-  EvolutionaryScale's and stand regardless of this repository's MIT licence. Pull the
-  checkpoint itself from gated HuggingFace; do not redistribute it.
+- **ESM3 open and ESM C: licences changed in 2026.** EvolutionaryScale released the
+  `esm3-sm-open-v1` and `esmc-600m-2024-12` weights under non-commercial licences and
+  `esmc-300m-2024-12` under its Cambrian Open licence. Since June 2026, Biohub, which
+  EvolutionaryScale joined, publishes the same weights and code under the MIT licence
+  ([github.com/biohub/esm](https://github.com/biohub/esm),
+  [huggingface.co/biohub](https://huggingface.co/biohub)). Check the current terms there
+  before you reuse the weights; this repository's own MIT licence does not cover them.
 - **ProstT5 is not in the deposit.** It is excluded from the reported figures (see
   `src/visualization/pairwise_embedding_comparison.py`), so the deposit covers the 14
   pLMs the manuscript reports plus the random baseline.
