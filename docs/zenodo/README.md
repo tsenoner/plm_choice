@@ -52,8 +52,8 @@ archives keep the folder names the code reads.
   models (TM-score), filtered for reliability and deduplicated: each protein pair appears once. 75,074,822
   pairs carry a TM-score and 36,349,349 carry PIDE and HFSP.
 - **Probes.** A feed-forward network (FNN) that compresses each of the two embeddings to 64 dimensions with
-  one shared layer and concatenates them, trained on 100% of the training pairs with early stopping
-  (patience 10) and scored by Spearman ρ on the test split. Each grid also holds the
+  one shared layer and concatenates them, trained on all training pairs with early stopping and scored
+  by Spearman ρ on the test split. Each grid also holds the
   raw-distance read-out (Euclidean distance, no fitted parameters) for the same cells.
 
 ## Quick start
@@ -78,18 +78,11 @@ downloading:
 for f in embeddings_*.h5; do mv "$f" "${f#embeddings_}"; done
 ```
 
-## Changes from version 1 (2025)
+## Versions
 
-- The embedding files are replaced by the ones behind the revised results; they cover a different set of
-  proteins (for example, the ESM2 3B file grew from 4.6 to 5.7 GB). They are now named
-  `embeddings_<model>.h5` (version 1: `<model>.h5`).
-- The pair set is deduplicated: 75.8 million pairs, each once (version 1: 113 million rows).
-- The probes are retrained on all training pairs instead of a 10% sample, with patience 10 instead of 5,
-  and come with a PCA grid and an untrained-network control.
-- Added: the identical-sequence mask, functional annotation transfer, experimental-structure TM-scores,
-  distance histograms, the random pairs and the New2024 test set.
-- Removed: `supplementary_data.zip`, version 1's pair sets, probes and figures, all superseded here. It
-  remains in version 1, [10.5281/zenodo.17469268](https://doi.org/10.5281/zenodo.17469268).
+Version 2 accompanies the revised manuscript. It updates the embeddings, pair tables and probes and adds
+the analysis data above. Version 1 (2025) remains available at
+[10.5281/zenodo.17469268](https://doi.org/10.5281/zenodo.17469268).
 
 ## Licence
 
