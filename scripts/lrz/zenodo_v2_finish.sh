@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Finish version 2 of the Zenodo record: give the files their published names
-# (docs/zenodo/file_names.tsv), upload the documentation from docs/zenodo/, remove the 2025
+# Finish version 2 of the Zenodo record: check the files carry their published names
+# (zenodo_v2_rename.sbatch), upload the documentation from docs/zenodo/, remove the 2025
 # supplementary_data.zip the new version inherited, and write the metadata from
 # docs/zenodo/metadata.json. Small API calls only, so it runs on the login node:
 #
@@ -33,21 +33,21 @@ STATE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"
 BUCKET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["links"]["bucket"])' "$WORK/dep.json")"
 
 # 0. Published names. Files are built and uploaded under their working names (the ones
-#    zenodo_upload.sbatch and zenodo_stage_v2.sh stage, so their .done markers stay valid) and
-#    renamed here by docs/zenodo/file_names.tsv. A rename keeps the stored bytes; a file
-#    already under its published name is left alone, so a re-run changes nothing.
+#    zenodo_upload.sbatch and zenodo_stage_v2.sh stage) and given their published names by
+#    zenodo_v2_rename.sbatch (docs/zenodo/file_names.tsv). The docs describe the published
+#    names, so stop here while any working name is left.
 api "$API/deposit/depositions/$DEPOSIT_ID/files" > "$WORK/files.json"
-grep -v '^#' "$DOCS/file_names.tsv" | while IFS=$'\t' read -r old new; do
-    fid="$(python3 -c '
+LEFT="$(python3 -c '
 import json, sys
-print(next((f["id"] for f in json.load(open(sys.argv[1])) if f["filename"] == sys.argv[2]), ""))
-' "$WORK/files.json" "$old")"
-    [ -n "$fid" ] || continue
-    if [ -n "$DRY_RUN" ]; then echo "would rename $old -> $new"; continue; fi
-    api -X PUT -H "Content-Type: application/json" --data "{\"filename\": \"$new\"}" \
-        "$API/deposit/depositions/$DEPOSIT_ID/files/$fid" > /dev/null
-    echo "renamed $old -> $new"
-done
+have = {f["filename"] for f in json.load(open(sys.argv[1]))}
+old = [l.split("\t")[0] for l in open(sys.argv[2]) if l.strip() and not l.startswith("#")]
+print(" ".join(o for o in old if o in have))
+' "$WORK/files.json" "$DOCS/file_names.tsv")"
+if [ -n "$LEFT" ]; then
+    echo "still under working names:$LEFT"
+    echo "run first: sbatch scripts/lrz/zenodo_v2_rename.sbatch"
+    [ -n "$DRY_RUN" ] || exit 1
+fi
 
 # 1. Documentation: PUT to the bucket under the same name replaces the inherited 2025 file.
 for name in README.md DATA_DICTIONARY.md CITATION.cff; do

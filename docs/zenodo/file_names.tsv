@@ -1,5 +1,5 @@
 # Zenodo record, version 2: the name each file is built and uploaded under -> the name it is published under.
-# scripts/lrz/zenodo_v2_finish.sh renames the draft's files by this map. The prefix groups the flat file list.
+# scripts/lrz/zenodo_v2_rename.sbatch re-uploads each file under its published name (Zenodo cannot rename). The prefix groups the flat file list.
 ankh_base.h5	embeddings_ankh_base.h5
 ankh_large.h5	embeddings_ankh_large.h5
 clean.h5	embeddings_clean.h5
